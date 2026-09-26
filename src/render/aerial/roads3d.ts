@@ -107,6 +107,14 @@ function ribbons(world: World, mapSize: THREE.Vector2) {
       xs.push(wx(r.pts[i * 2]))
       zs.push(wz(r.pts[i * 2 + 1]))
     }
+    // 两端沿切向各多伸出一个半宽：接头、拐角处条带互相压住，不留楔形的缝
+    for (const [e, o] of [[0, 1], [n - 1, n - 2]]) {
+      const dx = xs[e] - xs[o]
+      const dz = zs[e] - zs[o]
+      const l = Math.hypot(dx, dz) || 1
+      xs[e] += (dx / l) * hw
+      zs[e] += (dz / l) * hw
+    }
     let dist = 0
     let prev: [number, number, number, number, number] | null = null
     for (let i = 0; i < n; i++) {

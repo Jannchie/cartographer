@@ -54,6 +54,8 @@ export function buildRoads(
   const roadCell = new Uint8Array(CW * CH)
   const astar = new AStar(CW, CH)
   const roads: Road[] = []
+  /** 陆路段（粗格序列），全部布完后统一在接头处断开、简化、平滑 */
+  const segs: Seg[] = []
 
   // —— 陆路：每个陆块内选边 ——
   const chosen: { a: number; b: number; major: boolean; cost: number }[] = []
@@ -117,7 +119,7 @@ export function buildRoads(
   chosen.sort((p, q) => Number(q.major) - Number(p.major) || Number(cities[q.a].capital || cities[q.b].capital) - Number(cities[p.a].capital || cities[p.b].capital) || p.cost - q.cost)
   for (const e of chosen) {
     const path = astar.path(g.land, cities[e.a].cell, cities[e.b].cell, roadCell, 0.4)
-    if (path) emit(roads, path, roadCell, g, e.major ? 'major' : 'minor')
+    if (path) emit(segs, path, roadCell, e.major ? 'major' : 'minor')
   }
 
   // —— 航线：陆块之间 ——
@@ -166,17 +168,21 @@ export function buildRoads(
       const rb = find(l.b)
       if (ra === rb) continue
       par.set(ra, rb)
-      roads.push({ kind: 'sea', pts: smooth(simplify(l.path.map((c) => cellXY(c, g)).flat(), 1.2 * r), 2) })
-      // 港口城市到上船处的一小段路
+      // 两端的上岸点：航线从岸上的码头出发，港口城市再修一小段路过去，三者首尾相接
+      const ends: number[] = []
       for (const [city, s] of [[l.pb, l.path[0]], [l.pa, l.path[l.path.length - 1]]]) {
-        const shore = nearest(g.land, CW, CH, s, 3)
-        if (shore < 0 || shore === cities[city].cell) continue
+        let shore = nearest(g.land, CW, CH, s, 3)
+        if (shore < 0) shore = cities[city].cell
+        ends.push(shore)
+        if (shore === cities[city].cell) continue
         const path = astar.path(g.land, cities[city].cell, shore, roadCell, 0.4)
-        if (path && path.length > 2) emit(roads, path, roadCell, g, 'minor')
+        if (path && path.length > 1) emit(segs, path, roadCell, 'minor')
       }
+      const cells = [ends[0], ...l.path, ends[1]]
+      roads.push({ kind: 'sea', pts: smooth(simplify(cells.map((c) => cellXY(c, g)).flat(), 1.2 * r), 2) })
     }
   }
-  return roads
+  return [...finish(segs, g), ...roads]
 }
 
 // ———————————————————————— 代价网格 ————————————————————————
@@ -506,13 +512,18 @@ function cellXY(c: number, g: Grid): [number, number] {
   return [x * g.r + (g.r - 1) / 2, y * g.r + (g.r - 1) / 2]
 }
 
-/** 只输出新修的段落（已有道路上的部分不重复画），首尾各多带一格接上原有道路 */
-function emit(roads: Road[], path: number[], roadCell: Uint8Array, g: Grid, kind: Road['kind']) {
+interface Seg {
+  kind: Road['kind']
+  cells: number[]
+}
+
+/** 只记下新修的段落（已有道路上的部分不重复画），首尾各多带一格，正好落在原有道路上 */
+function emit(segs: Seg[], path: number[], roadCell: Uint8Array, kind: Road['kind']) {
   let start = -1
   const flush = (end: number) => {
     const a = Math.max(0, start - 1)
     const b = Math.min(path.length - 1, end + 1)
-    if (b - a >= 1) roads.push({ kind, pts: smooth(simplify(path.slice(a, b + 1).map((c) => cellXY(c, g)).flat(), 0.7 * g.r), 2) })
+    if (b - a >= 1) segs.push({ kind, cells: path.slice(a, b + 1) })
     start = -1
   }
   for (let k = 0; k < path.length; k++) {
@@ -522,6 +533,29 @@ function emit(roads: Road[], path: number[], roadCell: Uint8Array, g: Grid, kind
   }
   if (start >= 0) flush(path.length - 1)
   for (const c of path) roadCell[c] = 1
+}
+
+/**
+ * 输出：每段路的首尾格都是"锚点"（城市或接头）。经过锚点的路在锚点处断开，
+ * 这样简化与平滑都保住锚点，支路的端点与干道严丝合缝地交在同一点上。
+ */
+function finish(segs: Seg[], g: Grid): Road[] {
+  const anchor = new Set<number>()
+  for (const s of segs) {
+    anchor.add(s.cells[0])
+    anchor.add(s.cells[s.cells.length - 1])
+  }
+  const out: Road[] = []
+  for (const s of segs) {
+    let from = 0
+    for (let k = 1; k < s.cells.length; k++) {
+      if (k < s.cells.length - 1 && !anchor.has(s.cells[k])) continue
+      const piece = s.cells.slice(from, k + 1)
+      out.push({ kind: s.kind, pts: smooth(simplify(piece.map((c) => cellXY(c, g)).flat(), 0.7 * g.r), 2) })
+      from = k
+    }
+  }
+  return out
 }
 
 /** Ramer–Douglas–Peucker（交替存储的 x, y） */
