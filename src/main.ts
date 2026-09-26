@@ -14,10 +14,12 @@ const params: WorldParams = { ...DEFAULT_PARAMS, ...readHash() }
 const view3d: View3DOptions = { exaggeration: 28, trees: false, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true }
 const atlasOpts = { labels: true, contours: true, graticule: true }
 let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
-const atlasCache = new Map<string, HTMLCanvasElement>()
+/** 每种风格缓存一份 SVG 源码（预览与导出共用） */
+const atlasCache = new Map<string, { svg: string; width: number; height: number }>()
 let world: World | null = null
 let rivers: SmoothRiver[] = []
-let atlasCanvas: HTMLCanvasElement | null = null
+/** 当前预览的纸图尺寸（像素，与导出一致） */
+let atlasCanvas: { width: number; height: number } | null = null
 let mode: '3d' | '2d' = '3d'
 
 const scene = new Scene3D($('#view3d'), view3d)
@@ -303,20 +305,27 @@ async function refreshAtlas() {
   let c = atlasCache.get(style)
   if (!c) {
     loading.classList.remove('hidden')
-    $('#load-stage').textContent = `绘制${THEMES.find((t) => t.id === style)!.name}`
+    $('#load-stage').textContent = `矢量绘制${THEMES.find((t) => t.id === style)!.name}`
     $('#load-bar').style.width = '100%'
     await ensureFonts(w, style)
     await new Promise((r) => setTimeout(r, 20))
     if (job !== atlasJob || w !== world) return
-    c = renderAtlas(w, rivers, style, atlasOpts, 2)
+    const { renderAtlasSvg } = await import('./render/atlas/svg/vector')
+    const measurer = document.createElement('canvas').getContext('2d')!
+    const svg = renderAtlasSvg(w, rivers, style, atlasOpts, measurer, 2)
+    const m = svg.match(/width="(\d+)" height="(\d+)"/)!
+    c = { svg, width: +m[1], height: +m[2] }
     atlasCache.set(style, c)
     loading.classList.add('hidden')
   }
+  if (job !== atlasJob) return
   const keepView = atlasCanvas !== null && atlasCanvas.width === c.width && atlasCanvas.height === c.height
-  atlasCanvas = c
+  atlasCanvas = { width: c.width, height: c.height }
+  // 直接内联 SVG：缩放时浏览器按矢量重新栅格化，任意放大都清晰
   const wrap = $('#map-wrap')
-  wrap.innerHTML = ''
-  wrap.appendChild(atlasCanvas)
+  wrap.innerHTML = c.svg
+  const el = wrap.querySelector('svg')!
+  el.style.display = 'block'
   if (!keepView) fitMap()
 }
 
@@ -337,8 +346,18 @@ function showStats(w: World) {
 
 // —— 2D 平移缩放 ——
 const map = { x: 0, y: 0, k: 1 }
+// 交互期间让浏览器把 SVG 当位图缩放（流畅），停下后再按矢量重绘（清晰）
+let settleTimer = 0
+let mapRaf = 0
 function applyMap() {
-  $('#map-wrap').style.transform = `translate(${map.x}px, ${map.y}px) scale(${map.k})`
+  cancelAnimationFrame(mapRaf)
+  mapRaf = requestAnimationFrame(() => {
+    const wrap = $('#map-wrap')
+    wrap.style.willChange = 'transform'
+    wrap.style.transform = `translate(${map.x}px, ${map.y}px) scale(${map.k})`
+    clearTimeout(settleTimer)
+    settleTimer = window.setTimeout(() => (wrap.style.willChange = 'auto'), 250)
+  })
 }
 function fitMap() {
   if (!atlasCanvas) return
@@ -376,7 +395,7 @@ function fitMap() {
       const cx = e.clientX - r.left
       const cy = e.clientY - r.top
       const f = Math.exp(-e.deltaY * 0.0015)
-      const nk = Math.min(6, Math.max(0.15, map.k * f))
+      const nk = Math.min(24, Math.max(0.15, map.k * f))
       map.x = cx - ((cx - map.x) * nk) / map.k
       map.y = cy - ((cy - map.y) * nk) / map.k
       map.k = nk
@@ -435,8 +454,9 @@ $('#export').addEventListener('click', async () => {
   let url: string
   if (mode === '3d') url = scene.snapshot()
   else {
-    if (!atlasCanvas) await refreshAtlas()
-    url = atlasCanvas!.toDataURL('image/png')
+    // 位图导出按需栅格化
+    await ensureFonts(world, atlasStyle)
+    url = renderAtlas(world, rivers, atlasStyle, atlasOpts, 2).toDataURL('image/png')
   }
   const a = document.createElement('a')
   a.href = url
@@ -469,9 +489,12 @@ $('#export-svg').addEventListener('click', async () => {
   await ensureFonts(w, atlasStyle)
   await new Promise((r) => setTimeout(r, 20))
   try {
-    const { renderAtlasSvg } = await import('./render/atlas/svg/vector')
-    const measurer = document.createElement('canvas').getContext('2d')!
-    const svg = renderAtlasSvg(w, rivers, atlasStyle, atlasOpts, measurer, 2)
+    let svg = atlasCache.get(atlasStyle)?.svg
+    if (!svg) {
+      const { renderAtlasSvg } = await import('./render/atlas/svg/vector')
+      const measurer = document.createElement('canvas').getContext('2d')!
+      svg = renderAtlasSvg(w, rivers, atlasStyle, atlasOpts, measurer, 2)
+    }
     const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
     const a = document.createElement('a')
     a.href = url

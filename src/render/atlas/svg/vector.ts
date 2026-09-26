@@ -4,7 +4,7 @@ import { ATLAS, atlasSea, ramp, type RGB } from '../../palette'
 import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
 import { drawOverlays, fieldsFor, marginOf } from '../index'
-import { HYPSO_STOPS, REALM_COLORS, themeById, type AtlasOpts, type StyleId, type Theme } from '../styles'
+import { HYPSO_STOPS, REALM_COLORS, themeById, type AtlasOpts, type StyleId } from '../styles'
 import { categoryBorders, contours, pathData } from './contour'
 import { SvgContext } from './recorder'
 
@@ -263,12 +263,45 @@ function topo(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
   L.line(F.land, 0, 'rgb(50,110,160)', 1.4, 0.95)
 }
 
-/** 纸张纹理与做旧（SVG 滤镜，缩放不失真） */
-function paperDefs(theme: Theme, k: number) {
-  const brown = theme.id === 'fantasy'
+/** 可平铺的噪声小图（周期性值噪声），返回 data URL */
+function noiseTile(size: number, cell: number, rgb: number[], alpha: number, seed: number): string {
+  const c = document.createElement('canvas')
+  c.width = c.height = size
+  const g = c.getContext('2d')!
+  const img = g.createImageData(size, size)
+  const P = Math.max(1, Math.round(size / cell))
+  const h = (x: number, y: number) => {
+    x = ((x % P) + P) % P
+    y = ((y % P) + P) % P
+    let n = Math.imul(x, 374761393) + Math.imul(y, 668265263) + seed * 1442695041
+    n = Math.imul(n ^ (n >>> 13), 1274126177)
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296
+  }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const gx = (x / size) * P
+      const gy = (y / size) * P
+      const x0 = Math.floor(gx)
+      const y0 = Math.floor(gy)
+      let fx = gx - x0
+      let fy = gy - y0
+      fx = fx * fx * (3 - 2 * fx)
+      fy = fy * fy * (3 - 2 * fy)
+      const v = (h(x0, y0) * (1 - fx) + h(x0 + 1, y0) * fx) * (1 - fy) + (h(x0, y0 + 1) * (1 - fx) + h(x0 + 1, y0 + 1) * fx) * fy
+      const o = (y * size + x) * 4
+      img.data[o] = rgb[0]
+      img.data[o + 1] = rgb[1]
+      img.data[o + 2] = rgb[2]
+      img.data[o + 3] = Math.max(0, v - 0.45) * 2 * alpha * 255
+    }
+  }
+  g.putImageData(img, 0, 0)
+  return c.toDataURL('image/png')
+}
+
+/** 纸张做旧（焦边渐变、水墨笔触滤镜） */
+function paperDefs(k: number) {
   return (
-    `<filter id="grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="${(0.9 / k).toFixed(3)}" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 0.35  0 0 0 0 0.3  0 0 0 0 0.24  0 0 0 -0.9 0.62"/></filter>` +
-    `<filter id="blot" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="${(0.006 / k).toFixed(4)}" numOctaves="3" seed="11"/><feColorMatrix values="0 0 0 0 ${brown ? 0.55 : 0.4}  0 0 0 0 ${brown ? 0.42 : 0.38}  0 0 0 0 ${brown ? 0.25 : 0.34}  0 0 0 -2.2 1.25"/></filter>` +
     `<filter id="brush" x="-2%" y="-2%" width="104%" height="104%"><feTurbulence type="fractalNoise" baseFrequency="${(0.35 / k).toFixed(3)}" numOctaves="2" seed="5"/><feDisplacementMap in="SourceGraphic" scale="${2.6 * k}"/></filter>` +
     `<radialGradient id="burn" cx="50%" cy="50%" r="72%"><stop offset="70%" stop-color="rgb(120,82,45)" stop-opacity="0"/><stop offset="100%" stop-color="rgb(120,82,45)" stop-opacity="0.6"/></radialGradient>`
   )
@@ -311,14 +344,22 @@ export function renderAtlasSvg(world: World, rivers: SmoothRiver[], id: StyleId,
   }
 
   const ctx = new SvgContext(measurer)
-  ctx.def(paperDefs(theme, k))
+  ctx.def(paperDefs(k))
   ctx.def(`<clipPath id="map"><rect x="0" y="0" width="${MW}" height="${MH}"/></clipPath>`)
   ctx.raw(`<rect width="${width}" height="${height}" fill="${rgb(theme.paper)}"/>`)
   ctx.raw(`<g transform="translate(${M} ${M})" clip-path="url(#map)">`)
   ctx.raw(`<g id="base">${L.parts.join('\n')}</g>`)
   // 纸张质感
-  ctx.raw(`<rect width="${MW}" height="${MH}" filter="url(#blot)" opacity="${theme.id === 'fantasy' ? 0.5 : 0.25}"/>`)
-  ctx.raw(`<rect width="${MW}" height="${MH}" filter="url(#grain)" opacity="${theme.id === 'fantasy' ? 0.35 : 0.2}"/>`)
+  // 纸纹：两张可平铺的小噪声图做图案（比整幅 feTurbulence 滤镜快得多，缩放交互不卡）
+  const brown = theme.id === 'fantasy'
+  const blot = noiseTile(128, 16, brown ? [140, 100, 60] : [120, 110, 95], 0.55, 11)
+  const grain = noiseTile(128, 1.5, [80, 70, 60], 0.35, 7)
+  ctx.def(
+    `<pattern id="blotP" width="${1024 * k}" height="${1024 * k}" patternUnits="userSpaceOnUse"><image href="${blot}" width="${1024 * k}" height="${1024 * k}" preserveAspectRatio="none"/></pattern>` +
+      `<pattern id="grainP" width="${128 * k}" height="${128 * k}" patternUnits="userSpaceOnUse"><image href="${grain}" width="${128 * k}" height="${128 * k}"/></pattern>`,
+  )
+  ctx.raw(`<rect width="${MW}" height="${MH}" fill="url(#blotP)" opacity="${brown ? 0.7 : 0.45}"/>`)
+  ctx.raw(`<rect width="${MW}" height="${MH}" fill="url(#grainP)" opacity="${brown ? 0.5 : 0.3}"/>`)
   if (theme.id === 'fantasy') ctx.raw(`<rect width="${MW}" height="${MH}" fill="url(#burn)"/>`)
   ctx.raw(`<g id="overlays">`)
   drawOverlays(ctx as unknown as CanvasRenderingContext2D, f, theme, rivers, opts)
