@@ -475,18 +475,6 @@ export class Scene3D {
     const rv = createRiverMesh(w, this.riverList, SX, this.SZ, this.riverMat)
     rv.mesh.userData.river = true
     this.group.add(rv.mesh)
-    // 桥：道路过河处（高度随垂直夸张变，跟河流一起重建）
-    for (const c of [...this.group.children]) if (c.userData.bridge) {
-      this.group.remove(c)
-      const m = c as THREE.Mesh
-      m.geometry.dispose()
-      ;(m.material as THREE.Material).dispose()
-    }
-    const bridges = buildBridges(w, this.riverList, SX, this.SZ, (x, z) => this.heightAt(x, z))
-    if (bridges) {
-      bridges.userData.bridge = true
-      this.group.add(bridges)
-    }
     this.carve?.dispose()
     this.carve = new RiverCarve(w.W, w.H, new THREE.Vector2(SX, this.SZ))
     this.carve.render(this.renderer, rv.carveGeometry)
@@ -496,6 +484,18 @@ export class Scene3D {
     this.patch?.bake.setCarve(ct.texture, ct.width, ct.height)
     this.waterMat!.uniforms.uCarve.value = ct.texture
     this.bake.bake(this.renderer, vs)
+    // 桥：道路过河处，高度读烘焙好的真实地表（随垂直夸张重建）
+    for (const c of [...this.group.children]) if (c.userData.bridge) {
+      this.group.remove(c)
+      const m = c as THREE.Mesh
+      m.geometry.dispose()
+      ;(m.material as THREE.Material).dispose()
+    }
+    const bridges = buildBridges(w, this.riverList, SX, this.SZ, this.bakedHeight())
+    if (bridges) {
+      bridges.userData.bridge = true
+      this.group.add(bridges)
+    }
     for (const u of [this.terrainU!, this.waterMat!.uniforms as unknown as TerrainUniforms]) {
       u.uBaked.value = this.bake.rt.texture
       u.uGSize.value.set(GW, GH)
@@ -560,6 +560,47 @@ export class Scene3D {
     this.post.reset()
     Object.assign(p, { cx, cz, S, vs })
     p.mesh.visible = true
+  }
+
+  /**
+   * 渲染地形的真实高度（世界单位）：读 GPU 烘焙纹理（含 B 样条、侵蚀位移与河谷下切）。
+   * 按 32×32 纹素分块按需读回并缓存，桥只集中在少数几处，读回量很小。
+   */
+  private bakedHeight() {
+    const bake = this.bake!
+    const { GW, GH } = bake
+    const vs = this.vScale
+    const T = 32
+    const tiles = new Map<number, { d: Float32Array; x0: number; y0: number; w: number }>()
+    const texel = (i: number, j: number) => {
+      i = Math.min(GW - 1, Math.max(0, i))
+      j = Math.min(GH - 1, Math.max(0, j))
+      const tx = Math.floor(i / T)
+      const ty = Math.floor(j / T)
+      const key = ty * 4096 + tx
+      let tile = tiles.get(key)
+      if (!tile) {
+        const x0 = tx * T
+        const y0 = ty * T
+        const w = Math.min(T, GW - x0)
+        const h = Math.min(T, GH - y0)
+        const d = new Float32Array(w * h * 4)
+        this.renderer.readRenderTargetPixels(bake.rt, x0, y0, w, h, d)
+        tile = { d, x0, y0, w }
+        tiles.set(key, tile)
+      }
+      return tile.d[((j - tile.y0) * tile.w + (i - tile.x0)) * 4]
+    }
+    return (x: number, z: number) => {
+      const fx = (x / SX + 0.5) * (GW - 1)
+      const fy = (z / this.SZ + 0.5) * (GH - 1)
+      const i = Math.floor(fx)
+      const j = Math.floor(fy)
+      const u = fx - i
+      const v = fy - j
+      const h = (texel(i, j) * (1 - u) + texel(i + 1, j) * u) * (1 - v) + (texel(i, j + 1) * (1 - u) + texel(i + 1, j + 1) * u) * v
+      return h * vs
+    }
   }
 
   heightAt(x: number, z: number): number {

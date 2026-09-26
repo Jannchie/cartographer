@@ -1,24 +1,28 @@
 import * as THREE from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import type { World } from '../../gen/types'
+import type { Road, World } from '../../gen/types'
 import { riverThreshold } from '../../gen/world'
 import type { SmoothRiver } from '../rivers'
 
+/** 桥面宽度（世界单位）：与 3D 道路遮罩里看得见的土路宽度一致 */
+const WIDTH: Record<Road['kind'], number> = { major: 0.06, minor: 0.044, sea: 0 }
+
 /**
- * 桥：道路（陆路）与 3D 河道的每个交点上放一座石桥——桥面顺着道路方向横跨河面，
- * 两侧矮护栏，两端桥台往下插进河岸，桥面比两岸略高。全部合成一张网格。
+ * 桥：道路（陆路）与 3D 河道的每个交点上架一座石桥。
+ * 桥身沿道路折线本身扫掠（弯道、斜交都顺着路走，两端与路面接得上）；
+ * 高度取烘焙后的真实地表：两端贴着路面，中段拱起、离河面留出一点余量。
+ * heightAt 返回渲染地形的真实高度（世界单位）。全部合成一张网格。
  */
 export function buildBridges(world: World, rivers: SmoothRiver[], SX: number, SZ: number, heightAt: (x: number, z: number) => number) {
   const { W, H } = world
   const thr = riverThreshold(W)
   const cell = SX / (W - 1)
-  // 道路与河流都换到"格"坐标：道路点就是格坐标；河流点比格坐标多半格（与 rivers3d 的 toX 一致）
+  // 道路点是格坐标；河流点比格坐标多半格（与 rivers3d 的 toX 一致）
   const toX = (gx: number) => (gx / (W - 1) - 0.5) * SX
   const toZ = (gy: number) => (gy / (H - 1) - 0.5) * SZ
 
   // 河道线段按 8 格的桶分组
   const B = 8
-  const bw = Math.ceil(W / B)
+  const bw = Math.ceil(W / B) + 1
   const buckets = new Map<number, number[]>()
   const segs: { ax: number; ay: number; bx: number; by: number; fl: number }[] = []
   for (const r of rivers) {
@@ -35,13 +39,22 @@ export function buildBridges(world: World, rivers: SmoothRiver[], SX: number, SZ
     }
   }
 
-  // 求交
-  const hits: { x: number; y: number; dx: number; dy: number; half: number; sin: number }[] = []
+  const parts: { pos: number[] } = { pos: [] }
+  const done: [number, number][] = []
   for (const road of world.roads ?? []) {
     if (road.kind === 'sea') continue
-    const p = road.pts
-    for (let i = 0; i + 3 < p.length; i += 2) {
-      const ax = p[i], ay = p[i + 1], bx = p[i + 2], by = p[i + 3]
+    // 道路折线换到世界坐标，并算出每个点的弧长
+    const n = road.pts.length / 2
+    const px: number[] = []
+    const pz: number[] = []
+    const arc: number[] = [0]
+    for (let i = 0; i < n; i++) {
+      px.push(toX(road.pts[i * 2]))
+      pz.push(toZ(road.pts[i * 2 + 1]))
+      if (i) arc.push(arc[i - 1] + Math.hypot(px[i] - px[i - 1], pz[i] - pz[i - 1]))
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const ax = road.pts[i * 2], ay = road.pts[i * 2 + 1], bx = road.pts[i * 2 + 2], by = road.pts[i * 2 + 3]
       const seen = new Set<number>()
       for (let y = Math.floor(Math.min(ay, by) / B); y <= Math.floor(Math.max(ay, by) / B); y++) {
         for (let x = Math.floor(Math.min(ax, bx) / B); x <= Math.floor(Math.max(ax, bx) / B); x++) {
@@ -49,85 +62,110 @@ export function buildBridges(world: World, rivers: SmoothRiver[], SX: number, SZ
             if (seen.has(id)) continue
             seen.add(id)
             const s = segs[id]
-            const hit = intersect(ax, ay, bx, by, s.ax, s.ay, s.bx, s.by)
-            if (!hit) continue
-            const rdx = bx - ax
-            const rdy = by - ay
-            const rl = Math.hypot(rdx, rdy) || 1
-            const sdx = s.bx - s.ax
-            const sdy = s.by - s.ay
-            const sl = Math.hypot(sdx, sdy) || 1
-            const sin = Math.abs((rdx * sdy - rdy * sdx) / (rl * sl))
-            // 河面半宽（世界单位），与 rivers3d 的水面一致
+            const t = intersect(ax, ay, bx, by, s.ax, s.ay, s.bx, s.by)
+            if (t === null) continue
+            const hx = ax + (bx - ax) * t
+            const hy = ay + (by - ay) * t
+            // 同一处（道路在接头处断开、重叠）只架一座
+            if (done.some(([x0, y0]) => Math.hypot(x0 - hx, y0 - hy) < 1.2)) continue
+            done.push([hx, hy])
+            if (heightAt(toX(hx), toZ(hy)) < 0) continue
+            // 河面半宽（世界单位，与 rivers3d 的水面一致）；斜交时沿路方向更长
             const f = Math.max(0, s.fl / thr)
             const half = cell * Math.min(0.55, 0.05 + 0.11 * Math.log2(1 + f)) * 1.3
-            hits.push({ x: hit[0], y: hit[1], dx: rdx / rl, dy: rdy / rl, half, sin })
+            const rdx = bx - ax, rdy = by - ay, sdx = s.bx - s.ax, sdy = s.by - s.ay
+            const sin = Math.abs(rdx * sdy - rdy * sdx) / ((Math.hypot(rdx, rdy) || 1) * (Math.hypot(sdx, sdy) || 1))
+            const e = Math.min(half * 2.2, half / Math.max(0.35, sin)) + 0.035
+            const s0 = arc[i] + (arc[i + 1] - arc[i]) * t
+            sweep(parts.pos, px, pz, arc, s0 - e, s0 + e, WIDTH[road.kind], heightAt)
           }
         }
       }
     }
   }
-
-  // 去重：同一处（道路分段在接头处重复求交）只留一座
-  const bridges: typeof hits = []
-  for (const h of hits) if (!bridges.some((b) => Math.hypot(b.x - h.x, b.y - h.y) < 1.2)) bridges.push(h)
-
-  const parts: THREE.BufferGeometry[] = []
-  const m = new THREE.Matrix4()
-  const q = new THREE.Quaternion()
-  const up = new THREE.Vector3(0, 1, 0)
-  const box = (w: number, h: number, d: number, x: number, y: number, z: number, yaw: number) => {
-    const g = new THREE.BoxGeometry(w, h, d)
-    q.setFromAxisAngle(up, yaw)
-    m.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(1, 1, 1))
-    g.applyMatrix4(m)
-    parts.push(g)
-  }
-  for (const b of bridges) {
-    const cx = toX(b.x)
-    const cz = toZ(b.y)
-    if (heightAt(cx, cz) < 0) continue
-    // 跨度：斜交时河面在道路方向上更长；两端各留一段搭在岸上
-    const span = Math.min(b.half * 4, (2 * b.half) / Math.max(0.35, b.sin)) + 0.05
-    const dx = b.dx * (SX / (W - 1))
-    const dz = b.dy * (SZ / (H - 1))
-    const dl = Math.hypot(dx, dz) || 1
-    const ux = dx / dl
-    const uz = dz / dl
-    const e = span / 2
-    const hA = heightAt(cx - ux * e, cz - uz * e)
-    const hB = heightAt(cx + ux * e, cz + uz * e)
-    const deck = Math.max(hA, hB, heightAt(cx, cz)) + 0.008
-    const yaw = Math.atan2(-uz, ux)
-    const width = 0.075
-    // 桥面
-    box(span, 0.009, width, cx, deck, cz, yaw)
-    // 护栏
-    for (const s of [-1, 1]) {
-      const ox = -uz * s * (width / 2 - 0.004)
-      const oz = ux * s * (width / 2 - 0.004)
-      box(span, 0.01, 0.007, cx + ox, deck + 0.009, cz + oz, yaw)
-    }
-    // 两端桥台：往下插进河岸，遮住桥面与地形之间的缝
-    for (const s of [-1, 1]) {
-      const ax = cx + ux * s * (e - 0.012)
-      const az = cz + uz * s * (e - 0.012)
-      const ground = Math.min(hA, hB) - 0.03
-      const hgt = deck - ground
-      box(0.024, hgt, width + 0.01, ax, ground + hgt / 2, az, yaw)
-    }
-  }
-  if (!parts.length) return null
-  const geo = mergeGeometries(parts)
-  for (const p of parts) p.dispose()
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: '#b8ab92', roughness: 0.85 }))
+  if (!parts.pos.length) return null
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(parts.pos, 3))
+  // 不共享顶点：棱角分明的石砌感
+  geo.computeVertexNormals()
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: '#d2c6ab', roughness: 0.85 }))
   mesh.castShadow = true
   mesh.receiveShadow = true
   return mesh
 }
 
-/** 线段 ab 与 cd 的交点 */
-function intersect(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): [number, number] | null {
+/** 桥身截面（u 横向、v 竖向，相对桥面）：两侧矮护栏 + 桥面 + 下方的拱腹厚度 */
+function profile(w: number): [number, number][] {
+  const h = w / 2
+  const rail = 0.004
+  const lip = 0.004
+  return [
+    [-h, -0.004],
+    [-h, rail],
+    [-h + lip, rail],
+    [-h + lip, 0],
+    [h - lip, 0],
+    [h - lip, rail],
+    [h, rail],
+    [h, -0.004],
+  ]
+}
+
+/** 沿折线弧长 [s0, s1] 扫掠桥身截面 */
+function sweep(out: number[], px: number[], pz: number[], arc: number[], s0: number, s1: number, width: number, heightAt: (x: number, z: number) => number) {
+  const total = arc[arc.length - 1]
+  s0 = Math.max(0, s0)
+  s1 = Math.min(total, s1)
+  if (s1 - s0 < 0.02) return
+  // 在弧长上取样
+  const at = (s: number) => {
+    let k = 0
+    while (k < arc.length - 2 && arc[k + 1] < s) k++
+    const seg = arc[k + 1] - arc[k] || 1
+    const t = Math.min(1, Math.max(0, (s - arc[k]) / seg))
+    const x = px[k] + (px[k + 1] - px[k]) * t
+    const z = pz[k] + (pz[k + 1] - pz[k]) * t
+    const tl = Math.hypot(px[k + 1] - px[k], pz[k + 1] - pz[k]) || 1
+    return { x, z, tx: (px[k + 1] - px[k]) / tl, tz: (pz[k + 1] - pz[k]) / tl }
+  }
+  const N = Math.max(8, Math.ceil((s1 - s0) / 0.012))
+  const pts = Array.from({ length: N + 1 }, (_, k) => at(s0 + ((s1 - s0) * k) / N))
+  const ground = pts.map((p) => heightAt(p.x, p.z))
+  // 桥面高度：两端贴着路面（真实地表），中段按正弦拱起，且任何一点都高出下方地表 / 河面
+  // 拱只比路面高一点点：远看是路的延续，近看才看出桥身
+  const lift = 0.0015
+  const rise = Math.min(0.006, (s1 - s0) * 0.05) + 0.002
+  const deck = pts.map((_, k) => {
+    const t = k / N
+    const base = ground[0] + (ground[N] - ground[0]) * t + lift
+    const arch = Math.sin(Math.PI * t)
+    return Math.max(base + rise * arch, ground[k] + lift + 0.005 * arch)
+  })
+  const prof = profile(width)
+  const ring = (k: number) => {
+    const p = pts[k]
+    // 横向单位向量（道路方向在水平面内转 90°）
+    const nx = -p.tz
+    const nz = p.tx
+    return prof.map(([u, v]) => [p.x + nx * u, deck[k] + v, p.z + nz * u] as const)
+  }
+  let prev = ring(0)
+  for (let k = 1; k <= N; k++) {
+    const cur = ring(k)
+    for (let j = 0; j < prof.length - 1; j++) {
+      const a = prev[j], b = prev[j + 1], c = cur[j], d = cur[j + 1]
+      // 绕序让法线朝外（截面沿 u→v 顺时针，沿道路方向挤出）
+      out.push(...a, ...b, ...c, ...b, ...d, ...c)
+    }
+    // 底面
+    const a = prev[prof.length - 1], b = prev[0], c = cur[prof.length - 1], d = cur[0]
+    out.push(...a, ...b, ...c, ...b, ...d, ...c)
+    prev = cur
+  }
+}
+
+/** 线段 ab 与 cd 的交点在 ab 上的参数 t（不相交为 null） */
+function intersect(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): number | null {
   const rx = bx - ax
   const ry = by - ay
   const sx = dx - cx
@@ -137,5 +175,5 @@ function intersect(ax: number, ay: number, bx: number, by: number, cx: number, c
   const t = ((cx - ax) * sy - (cy - ay) * sx) / den
   const u = ((cx - ax) * ry - (cy - ay) * rx) / den
   if (t < 0 || t > 1 || u < 0 || u > 1) return null
-  return [ax + rx * t, ay + ry * t]
+  return t
 }
