@@ -357,11 +357,15 @@ function extractRivers(hydro: HydroResult, elev: Float32Array, W: number, H: num
       }
     }
     if (own.length < 7) continue
-    // 独立入海/入湖、且大部分河段贴着已有河道并行 → 视觉上的"平行河"，丢弃
-    if (!joins) {
+    // 大部分河段贴着已有河道并行 → 视觉上的"平行河/梳齿支流"，丢弃
+    // （支流不计汇合口附近那一段，那里本来就挨着干流）
+    {
+      const upto = joins ? Math.max(0, own.length - (R + 3)) : own.length
       let near = 0
-      for (const c of own) if (occ[c]) near++
-      if (near / own.length > 0.35) continue
+      for (let k = 0; k < upto; k++) if (occ[own[k]]) near++
+      if (upto > 0 && near / upto > (joins ? 0.5 : 0.35)) continue
+    }
+    if (!joins) {
       // 又短又小的入海小溪
       if (own.length < 18 && p.mouthFlow < thr * 3) continue
     }

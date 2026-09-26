@@ -19,6 +19,8 @@ export interface TerrainUniforms {
   uBaked: { value: THREE.Texture | null }
   uGSize: { value: THREE.Vector2 }
   uBMapSize: { value: THREE.Vector2 }
+  uColorSize: { value: THREE.Vector2 }
+  uMaskSize: { value: THREE.Vector2 }
 }
 
 /** 顶点着色器：高度、坡度、侵蚀值都取自烘焙纹理（一次采样） */
@@ -78,6 +80,8 @@ export function createTerrainMaterial(
     uBaked: { value: null },
     uGSize: { value: new THREE.Vector2(1, 1) },
     uBMapSize: { value: mapSize },
+    uColorSize: { value: new THREE.Vector2((color.image as { width: number }).width, (color.image as { height: number }).height) },
+    uMaskSize: { value: new THREE.Vector2(hSize.x, hSize.y) },
   }
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms)
@@ -102,6 +106,15 @@ float gAO;
 float gLod1;
 float gLod2;
 vec4 gMask;
+uniform vec2 uColorSize;
+uniform vec2 uMaskSize;
+vec2 sharpUv(vec2 uv, vec2 size, vec2 warp) {
+  vec2 st = uv * size - 0.5 + warp;
+  vec2 i = floor(st);
+  vec2 f = fract(st);
+  f = smoothstep(0.22, 0.78, f);
+  return (i + f + 0.5) / size;
+}
 /** 树冠格：返回 (像素相对树心的偏移.xy, 距离) */
 vec3 crownCell(vec2 p) {
   vec2 i = floor(p), f = fract(p);
@@ -127,11 +140,17 @@ float crownShade(vec3 c, vec3 L, float r) {
       .replace(
         '#include <map_fragment>',
         `
-vec4 texel = texture2D(map, vMapUv);
-vec3 base = texel.rgb;
-gMask = texture2D(uMask, vMapUv);
-gAO = gMask.a;
 vec2 P = vWorld.xz;
+// 锐化扭曲采样：噪声推开采样点、再把纹素间的线性插值收窄，
+// 低分辨率的群系色与遮罩在任意放大倍率下都呈现清晰而不规则的自然边界
+vec2 wv = vec2(fbm3(P * 7.0), fbm3(P * 7.0 + 31.7)) - 0.5;
+vec2 gdx = dFdx(vMapUv);
+vec2 gdy = dFdy(vMapUv);
+// 连续的颜色只做扭曲（不锐化，避免把渐变变成台阶）；分类遮罩才锐化
+vec4 texel = textureGrad(map, vMapUv + wv * 1.8 / uColorSize, gdx, gdy);
+vec3 base = texel.rgb;
+gMask = textureGrad(uMask, sharpUv(vMapUv, uMaskSize, wv * 1.1), gdx, gdy);
+gAO = gMask.a;
 // LOD：像素覆盖的世界尺寸越大，高频细节越弱
 float fw = length(fwidth(P));
 gLod1 = 1.0 - smoothstep(0.02, 0.07, fw);
@@ -149,6 +168,14 @@ if (hKm > 0.0) {
   // 草地与灌丛的细斑驳（幅度小、频率高，远处淡出）
   float patchy = fbm3(P * 11.0);
   col *= 0.95 + 0.1 * mix(0.5, patchy, gLod1);
+  // 近景细节：草丛/灌丛的颗粒与细碎明暗，按屏幕导数逐级淡出，远处不闪烁
+  float g1 = fbm3(P * 42.0 + 3.1);
+  float g2 = vnoise(P * 150.0) * 0.6 + vnoise(P * 380.0) * 0.4;
+  float gLod3 = 1.0 - smoothstep(0.002, 0.008, fw);
+  col *= (0.93 + 0.14 * mix(0.5, g1, gLod2)) * (0.95 + 0.1 * mix(0.5, g2, gLod3));
+  // 草地里零星的深色灌丛点
+  float bush = smoothstep(0.72, 0.8, vnoise(P * 95.0 + 17.0)) * gLod2 * (1.0 - gMask.r) * (1.0 - gMask.b * 0.7);
+  col *= 1.0 - bush * 0.35;
   // 树冠
   float f = gMask.r;
   if (f > 0.01) {

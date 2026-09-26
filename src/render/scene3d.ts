@@ -6,6 +6,8 @@ import { createSky } from './aerial/sky'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
 import { TerrainBake } from './aerial/bake'
+import { createRiverMesh } from './aerial/rivers3d'
+import type { SmoothRiver } from './rivers'
 import { createWaterMaterial } from './water'
 
 export interface View3DOptions {
@@ -47,6 +49,8 @@ export class Scene3D {
   private terrainU: TerrainUniforms | null = null
   private clouds: VolumetricClouds | null = null
   private bake: TerrainBake | null = null
+  private riverMat: THREE.ShaderMaterial | null = null
+  private riverList: SmoothRiver[] = []
   private lastInteract = 0
   private frame = 0
   /** 性能读数（按 P 开关）：帧率、GPU 耗时（EXT_disjoint_timer_query_webgl2） */
@@ -130,7 +134,10 @@ export class Scene3D {
       if (pf?.ext && pf.pending.length < 3) {
         q = gl.createQuery()
         gl.beginQuery(pf.ext.TIME_ELAPSED_EXT, q!)
-      }      if (this.waterMat) this.waterMat.uniforms.uTime.value = this.clock.getElapsedTime()
+      }
+      const t = this.clock.getElapsedTime()
+      if (this.waterMat) this.waterMat.uniforms.uTime.value = t
+      if (this.riverMat) this.riverMat.uniforms.uTime.value = t
       this.renderFrame()
       if (pf) {
         if (q) {
@@ -264,6 +271,11 @@ export class Scene3D {
     }
     this.sky.mat.uniforms.uSun.value.copy(d)
     this.sky.mat.uniforms.uSunColor.value.copy(this.sun.color)
+    if (this.riverMat) {
+      this.riverMat.uniforms.uSunDir.value.copy(d)
+      this.riverMat.uniforms.uSunColor.value.copy(this.sun.color)
+      this.riverMat.uniforms.uLight.value = 0.45 + 0.55 * k
+    }
     // 天空随太阳高度变暗、偏暖
     this.sky.mat.uniforms.uTop.value.copy(SKY_TOP).multiplyScalar(0.35 + 0.65 * k)
     this.sky.mat.uniforms.uHorizon.value.copy(HAZE).lerp(new THREE.Color('#f0c59a'), warm * 0.45).multiplyScalar(0.45 + 0.55 * k)
@@ -291,7 +303,8 @@ export class Scene3D {
     }
   }
 
-  setWorld(world: World, color: HTMLCanvasElement, rough: HTMLCanvasElement) {
+  setWorld(world: World, color: HTMLCanvasElement, rough: HTMLCanvasElement, rivers: SmoothRiver[] = []) {
+    this.riverList = rivers
     this.world = world
     this.SZ = (SX * world.H) / world.W
     // 清理旧对象
@@ -400,6 +413,19 @@ export class Scene3D {
       u.uBaked.value = this.bake.rt.texture
       u.uGSize.value.set(GW, GH)
     }
+    // 河流几何（跟随烘焙地形）
+    for (const c of [...this.group.children]) if (c.userData.river) {
+      this.group.remove(c)
+      ;(c as THREE.Mesh).geometry.dispose()
+    }
+    this.riverMat?.dispose()
+    const rv = createRiverMesh(w, this.riverList, SX, this.SZ)
+    rv.mesh.userData.river = true
+    rv.mat.uniforms.uBaked.value = this.bake.rt.texture
+    rv.mat.uniforms.uGSize.value.set(GW, GH)
+    rv.mat.uniforms.uVScale.value = vs
+    this.riverMat = rv.mat
+    this.group.add(rv.mesh)
     this.renderer.shadowMap.needsUpdate = true
     this.water!.geometry.dispose()
     this.water!.geometry = this.waterGeometry(w, vs)

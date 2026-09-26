@@ -121,9 +121,8 @@ export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale 
   ctx.putImageData(img, 0, 0)
   rctx.putImageData(rimg, 0, 0)
 
-  // 河流：稍深的水色，粗糙度低 → 在阳光下会闪光
-  drawRivers(ctx, rivers, W, scale, 'rgba(38, 70, 78, 0.7)', 0.75, 4)
-  drawRivers(rctx, rivers, W, scale, 'rgb(120,120,120)', 0.75, 4)
+  // 河流：只留一道很淡的湿润河谷，河道本身由 3D 河流几何绘制
+  drawRivers(ctx, rivers, W, scale, 'rgba(40, 60, 45, 0.25)', 1.4, 2.5)
   return { color: canvas, roughness: rough }
 }
 

@@ -7,10 +7,13 @@ export interface SmoothRiver {
   fl: Float32Array
 }
 
-/** Chaikin 细分：把 D8 的折线变成自然的曲线，同时保留端点（汇流点不脱节） */
+/** Chaikin 细分 + 蜿蜒：把 D8 的折线变成自然的曲线，同时保留端点（汇流点不脱节） */
 export function smoothRivers(world: World): SmoothRiver[] {
   const out: SmoothRiver[] = []
-  for (const r of world.rivers) out.push(chaikin(r, 2))
+  for (const r of world.rivers) {
+    const c = chaikin(r, 3)
+    out.push(meander(Array.from(c.xs), Array.from(c.ys), Array.from(c.fl)))
+  }
   return out
 }
 
@@ -105,4 +108,40 @@ export function drawRivers(
     }
   }
   ctx.restore()
+}
+
+/** 按弧长等距重采样后沿法向加噪声摆动（两端收为零），打破网格留下的直线段 */
+function meander(xs: number[], ys: number[], fl: number[]): SmoothRiver {
+  const n = xs.length
+  const L = [0]
+  for (let i = 1; i < n; i++) L.push(L[i - 1] + Math.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]))
+  const total = L[n - 1]
+  if (total < 1) return { xs: Float32Array.from(xs), ys: Float32Array.from(ys), fl: Float32Array.from(fl) }
+  const step = 0.35
+  const m = Math.max(2, Math.ceil(total / step) + 1)
+  const ox: number[] = []
+  const oy: number[] = []
+  const of: number[] = []
+  let j = 0
+  const seed = xs[0] * 12.9898 + ys[0] * 78.233
+  for (let k = 0; k < m; k++) {
+    const s = (k / (m - 1)) * total
+    while (j < n - 2 && L[j + 1] < s) j++
+    const t = (s - L[j]) / Math.max(1e-6, L[j + 1] - L[j])
+    const x = xs[j] + (xs[j + 1] - xs[j]) * t
+    const y = ys[j] + (ys[j + 1] - ys[j]) * t
+    let tx = xs[j + 1] - xs[j]
+    let ty = ys[j + 1] - ys[j]
+    const tl = Math.hypot(tx, ty) || 1
+    tx /= tl
+    ty /= tl
+    // 两个频率的正弦叠加做平滑摆动；大河摆幅更大
+    const f = fl[j]
+    const amp = Math.min(0.9, 0.25 + 0.08 * Math.log2(1 + f)) * Math.min(1, s / 2, (total - s) / 2)
+    const w = Math.sin(s * 0.9 + seed) * 0.6 + Math.sin(s * 2.3 + seed * 1.7) * 0.4
+    ox.push(x - ty * w * amp)
+    oy.push(y + tx * w * amp)
+    of.push(f)
+  }
+  return { xs: Float32Array.from(ox), ys: Float32Array.from(oy), fl: Float32Array.from(of) }
 }

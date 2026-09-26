@@ -288,8 +288,15 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   await new Promise((r) => setTimeout(r, 16))
   world = m.world
   rivers = smoothRivers(world)
-  const tex = buildPhysicalTexture(world, rivers, 2)
-  scene.setWorld(world, tex.color, tex.roughness)
+  try {
+    const tex = buildPhysicalTexture(world, rivers, 2)
+    scene.setWorld(world, tex.color, tex.roughness, rivers)
+  } catch (err) {
+    console.error(err)
+    $('#load-stage').textContent = '绘制失败：' + (err instanceof Error ? err.message : String(err))
+    $<HTMLButtonElement>('#generate').disabled = false
+    return
+  }
   atlasCanvas = null
   atlasCache.clear()
   if (mode === '2d') await refreshAtlas()
