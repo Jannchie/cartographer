@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { World } from '../gen/types'
-import { buildMaterialMask } from './aerial/mask'
+import { buildDetailMask, buildMaterialMask } from './aerial/mask'
 import { createSky } from './aerial/sky'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
@@ -44,6 +44,7 @@ export class Scene3D {
   private heightTex: THREE.DataTexture | null = null
   private tempTex: THREE.DataTexture | null = null
   private maskTex: THREE.DataTexture | null = null
+  private mask2Tex: THREE.DataTexture | null = null
   private terrainU: TerrainUniforms | null = null
   private clouds: VolumetricClouds | null = null
   private bake: TerrainBake | null = null
@@ -340,8 +341,14 @@ export class Scene3D {
     mk.minFilter = THREE.LinearFilter
     mk.needsUpdate = true
     this.maskTex = mk
+    this.mask2Tex?.dispose()
+    const mk2 = new THREE.DataTexture(buildDetailMask(world), W, H, THREE.RGBAFormat, THREE.UnsignedByteType)
+    mk2.magFilter = THREE.LinearFilter
+    mk2.minFilter = THREE.LinearFilter
+    mk2.needsUpdate = true
+    this.mask2Tex = mk2
     const hSize = new THREE.Vector2(W, H)
-    const { mat, uniforms, depth } = createTerrainMaterial(colorTex, roughTex, mk, ht, hSize, new THREE.Vector2(SX, this.SZ), this.vScale)
+    const { mat, uniforms, depth } = createTerrainMaterial(colorTex, roughTex, mk, mk2, ht, hSize, new THREE.Vector2(SX, this.SZ), this.vScale)
     this.terrainU = uniforms
     this.terrain = new THREE.Mesh(new THREE.BufferGeometry(), mat)
     this.terrain.customDepthMaterial = depth

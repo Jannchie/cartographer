@@ -5,6 +5,7 @@ import { HEIGHT_GLSL } from './heightGLSL'
 
 export interface TerrainUniforms {
   uMask: { value: THREE.Texture }
+  uMask2: { value: THREE.Texture }
   uVScale: { value: number }
   uCloud: { value: THREE.Texture | null }
   uCloudRect: { value: THREE.Vector4 }
@@ -58,6 +59,7 @@ export function createTerrainMaterial(
   color: THREE.Texture,
   rough: THREE.Texture,
   mask: THREE.Texture,
+  mask2: THREE.Texture,
   height: THREE.Texture,
   hSize: THREE.Vector2,
   mapSize: THREE.Vector2,
@@ -66,6 +68,7 @@ export function createTerrainMaterial(
   const mat = new THREE.MeshStandardMaterial({ map: color, roughnessMap: rough, roughness: 1, metalness: 0 })
   const uniforms: TerrainUniforms = {
     uMask: { value: mask },
+    uMask2: { value: mask2 },
     uVScale: { value: vScale },
     uCloud: { value: null },
     uCloudRect: { value: new THREE.Vector4(-100, -100, 200, 200) },
@@ -92,6 +95,7 @@ export function createTerrainMaterial(
         `#include <common>
 varying vec3 vWorld;
 uniform sampler2D uMask;
+uniform sampler2D uMask2;
 uniform float uVScale;
 uniform sampler2D uCloud;
 uniform vec4 uCloudRect;
@@ -106,6 +110,8 @@ float gAO;
 float gLod1;
 float gLod2;
 vec4 gMask;
+vec4 gMask2;
+float gDune;
 uniform vec2 uColorSize;
 uniform vec2 uMaskSize;
 vec2 sharpUv(vec2 uv, vec2 size, vec2 warp) {
@@ -151,6 +157,8 @@ vec4 texel = textureGrad(map, vMapUv + wv * 1.8 / uColorSize, gdx, gdy);
 vec3 base = texel.rgb;
 gMask = textureGrad(uMask, sharpUv(vMapUv, uMaskSize, wv * 1.1), gdx, gdy);
 gAO = gMask.a;
+gMask2 = textureGrad(uMask2, sharpUv(vMapUv, uMaskSize, wv * 1.1), gdx, gdy);
+gDune = 0.0;
 // LOD：像素覆盖的世界尺寸越大，高频细节越弱
 float fw = length(fwidth(P));
 gLod1 = 1.0 - smoothstep(0.02, 0.07, fw);
@@ -173,9 +181,33 @@ if (hKm > 0.0) {
   float g2 = vnoise(P * 150.0) * 0.6 + vnoise(P * 380.0) * 0.4;
   float gLod3 = 1.0 - smoothstep(0.002, 0.008, fw);
   col *= (0.93 + 0.14 * mix(0.5, g1, gLod2)) * (0.95 + 0.1 * mix(0.5, g2, gLod3));
-  // 草地里零星的深色灌丛点
-  float bush = smoothstep(0.72, 0.8, vnoise(P * 95.0 + 17.0)) * gLod2 * (1.0 - gMask.r) * (1.0 - gMask.b * 0.7);
-  col *= 1.0 - bush * 0.35;
+  vec4 m2 = gMask2;
+  float nonF = (1.0 - gMask.r) * (1.0 - gMask.b * 0.6);
+  // 草地上大小不一的枯黄斑与深绿斑（扭曲噪声，形状自然）
+  float dry = smoothstep(0.52, 0.78, fbm3(P * 2.3 + wv * 3.0 + 13.0));
+  float lush = smoothstep(0.55, 0.8, fbm3(P * 3.7 - wv * 2.0 + 71.0));
+  col = mix(col, col * vec3(1.3, 1.12, 0.62), dry * nonF * (1.0 - m2.r) * 0.75);
+  col = mix(col, col * vec3(0.72, 0.9, 0.72), lush * nonF * 0.55);
+  // 中尺度的草甸斑驳：土壤水分的细碎差异
+  float mott = fbm3(P * 9.0 + wv * 2.5 + 29.0);
+  col *= mix(vec3(1.0), mix(0.86, 1.12, mott) * mix(vec3(1.0), vec3(1.06, 1.02, 0.9), mott), nonF * gLod1);
+  // 灌丛：成片分布的小灌木团，受光面亮、背光面暗
+  float shrubZone = smoothstep(0.45, 0.75, fbm3(P * 5.0 + 3.3)) * nonF;
+  if (shrubZone * gLod2 > 0.01) {
+    vec3 sc = crownCell(P * 110.0);
+    float inS = 1.0 - smoothstep(0.24, 0.3, sc.z);
+    float sd = crownShade(sc, normalize(uSun), 0.3);
+    col = mix(col, col * vec3(0.62, 0.72, 0.56) * (0.7 + 0.5 * sd), inS * shrubZone * gLod2 * 0.8);
+  }
+  // 河岸：沿河谷的茂密湿润植被
+  col = mix(col, col * vec3(0.72, 0.9, 0.7), m2.r * (1.0 - gMask.b * 0.5) * 0.65);
+  // 湿地：星罗棋布的小水塘
+  float pn = vnoise(P * 55.0 + 5.0) * 0.7 + vnoise(P * 140.0) * 0.3;
+  float pond = smoothstep(0.76, 0.79, pn) * smoothstep(0.5, 0.9, m2.b) * gLod1;
+  // 水塘：映出天光的灰蓝水面，外圈一道深绿的水生植被
+  float reed = smoothstep(0.7, 0.76, pn) * smoothstep(0.5, 0.9, m2.b) * gLod1;
+  col = mix(col, col * vec3(0.7, 0.85, 0.7), reed * 0.6);
+  col = mix(col, vec3(0.1, 0.15, 0.18), pond * 0.85);
   // 树冠
   float f = gMask.r;
   if (f > 0.01) {
@@ -186,7 +218,12 @@ if (hKm > 0.0) {
     float crown = mix(0.8, s1, gLod1 * 0.8) * mix(0.9, s2, gLod2 * 0.7);
     vec3 leaf = base * mix(vec3(0.74, 0.8, 0.72), vec3(1.14, 1.16, 1.02), clamp(crown * 0.95, 0.0, 1.0));
     leaf *= mix(vec3(0.95, 1.0, 0.92), vec3(1.05, 1.02, 0.85), fbm3(P * 3.1 + 7.0));
-    col = mix(col, leaf, f);
+    // 林相：浅黄绿的阔叶林斑块与深青的针叶林斑块交错
+    leaf *= mix(vec3(1.0), vec3(1.16, 1.12, 0.82), smoothstep(0.52, 0.76, fbm3(P * 4.5 + wv * 2.0 + 11.0)));
+    leaf *= mix(vec3(1.0), vec3(0.76, 0.86, 0.9), smoothstep(0.55, 0.8, fbm3(P * 3.7 - wv * 2.0 + 23.0)));
+    // 林间空地：密林里露出的草甸
+    float glade = 1.0 - smoothstep(0.2, 0.28, fbm3(P * 3.3 + wv * 2.5 + 50.0));
+    col = mix(col, leaf, f * (1.0 - glade * 0.85));
   }
   // 旱地：红褐与灰黄的土色斑，风成细纹
   float a = gMask.b;
@@ -194,6 +231,24 @@ if (hKm > 0.0) {
     float dune = sin(P.x * 45.0 + fbm3(P * 3.0) * 9.0) * 0.5 + 0.5;
     vec3 soil = base * mix(vec3(1.02, 0.96, 0.9), vec3(0.94, 0.9, 0.86), fbm3(P * 4.0)) * (0.95 + 0.08 * dune * gLod1);
     col = mix(col, soil, a * 0.8);
+    // 沙海：橙黄色的沙丘区（沙脊的明暗在法线阶段）
+    gDune = smoothstep(0.6, 0.9, a) * smoothstep(0.25, 0.55, gMask.g) * (1.0 - smoothstep(0.08, 0.2, slope)) * smoothstep(0.02, 0.1, hKm);
+    col = mix(col, pow(vec3(0.86, 0.67, 0.44), vec3(2.2)) * (0.92 + 0.12 * fbm3(P * 6.0)), gDune * 0.7);
+    // 砾漠：深色的荒漠漆斑与浅色的干河床网
+    float rocky = a * (1.0 - gDune);
+    float varn = smoothstep(0.5, 0.75, fbm3(P * 7.0 + wv * 4.0));
+    col = mix(col, col * vec3(0.7, 0.62, 0.56), varn * rocky * 0.5);
+    float wash = 1.0 - smoothstep(0.0, 0.05, abs(fbm3(P * 4.0 + wv * 6.0) - 0.5));
+    col = mix(col, col * vec3(1.2, 1.13, 1.02), wash * rocky * gLod1 * 0.55);
+  }
+  // 盐壳：白色结皮，龟裂成多边形，边缘是褐色泥滩
+  float sf = gMask2.a;
+  if (sf > 0.02) {
+    vec3 crust = pow(vec3(0.9, 0.88, 0.84), vec3(2.2)) * (0.9 + 0.1 * fbm3(P * 20.0));
+    float crack = max(1.0 - smoothstep(0.0, 0.035, abs(vnoise(P * 70.0) - 0.5)), 1.0 - smoothstep(0.0, 0.035, abs(vnoise(P * 70.0 * mat2(0.8, -0.6, 0.6, 0.8) + 9.0) - 0.5)));
+    crust *= 1.0 - crack * 0.3 * gLod2;
+    col = mix(col, col * vec3(0.8, 0.72, 0.62), smoothstep(0.05, 0.35, sf) * 0.6);
+    col = mix(col, crust, smoothstep(0.35, 0.75, sf));
   }
   // 沙滩与湿沙
   float s = gMask.g;
@@ -209,16 +264,21 @@ if (hKm > 0.0) {
   float cr = (1.0 - smoothstep(0.0, 0.08, abs(vnoise(vWorld.xz * 14.0 + vWorld.y * 6.0) - 0.5))) * gLod1;
   float strata = sin(vWorld.y * 70.0 + rn * 6.0) * 0.5 + 0.5;
   vec3 rock = mix(vec3(0.44, 0.41, 0.37), vec3(0.68, 0.64, 0.58), rn) * (0.82 + 0.25 * strata * gLod1) * (1.0 - cr * 0.35);
+  // 岩性：不同山体偏暖（砂岩、红层）或偏冷（花岗岩、板岩）
+  rock *= mix(vec3(1.08, 0.94, 0.82), vec3(0.9, 0.95, 1.03), fbm3(P * 0.7 + 40.0));
   // 陡坡上岩石与植被斑驳相间，只有近乎垂直的崖壁才整片裸露
   float rk = smoothstep(0.5, 0.82, slope + (fbm3(P * 8.0) - 0.5) * 0.35) * (1.0 - gMask.r * 0.4);
   // 雪上不画岩
   float snowy = smoothstep(0.75, 0.9, min(base.r, min(base.g, base.b)));
   col = mix(col, rock, rk * (1.0 - snowy) * 0.9);
+  // 碎石坡：冲沟里、陡崖脚下的浅色岩屑
+  float scree = smoothstep(0.22, 0.42, slope) * (1.0 - smoothstep(0.2, 0.5, vErosion)) * smoothstep(0.4, 1.2, hKm);
+  col = mix(col, rock * vec3(1.1, 1.06, 1.0) * (0.85 + 0.3 * mix(0.5, vnoise(P * 160.0), gLod2)), scree * (1.0 - snowy) * 0.5);
   // 风化：冲沟暗、刃脊亮，山地越陡越明显
   float mnt = smoothstep(0.12, 0.45, slope) * smoothstep(0.2, 1.2, hKm);
-  col *= mix(1.0, mix(0.7, 1.12, smoothstep(0.15, 0.85, vErosion)), mnt);
+  col *= mix(1.0, mix(0.78, 1.12, smoothstep(0.15, 0.85, vErosion)), mnt);
 }
-col *= mix(1.0, gAO, 0.85);
+col *= mix(1.0, gAO, 0.5);
 diffuseColor.rgb *= col;
 `,
       )
@@ -236,6 +296,21 @@ if (vWorld.y > 0.0 && uDetail > 0.0) {
     vec2 gW = -wN.xz / max(wN.y, 0.25);
     vec3 er = erosionNoise(Q, gW, 3, 9.0);
     dW += vec3(-er.y, 0.0, -er.z) * 0.0032 * mk * uDetail;
+  }
+  // 沙丘：迎风缓坡、背风陡坡的新月形沙脊，沙脊随区域风向弯曲
+  if (gDune > 0.01 && fw < 0.012) {
+    // 盛行风向全图一致（随位置变化的风向会让相位绕成同心环）
+    vec2 wd = vec2(0.85, 0.53);
+    vec2 wp = vec2(-wd.y, wd.x);
+    // 横向沙脊：大体垂直风向、沿脊线蜿蜒；脊高沿脊线起伏，断续处成新月形
+    float along = dot(Q, wp);
+    float u = dot(Q, wd) * 24.0 + (fbm3(Q * 1.6) - 0.5) * 3.0 + sin(along * 38.0 + fbm3(Q * 4.0) * 3.0) * 0.18;
+    float c = fract(u);
+    // 迎风缓坡、背风陡坡，脊顶圆滑
+    float dh = mix(1.0 / 0.72, -1.0 / 0.28, smoothstep(0.66, 0.78, c)) * smoothstep(0.0, 0.08, c);
+    float A = 0.003 * (0.35 + 0.65 * smoothstep(0.2, 0.8, vnoise(vec2(along * 20.0, floor(u) * 1.7))));
+    float dl = 1.0 - smoothstep(0.004, 0.012, fw);
+    dW -= vec3(wd.x, 0.0, wd.y) * A * 24.0 * dh * gDune * dl;
   }
   normal = normalize(normal + (viewMatrix * vec4(dW, 0.0)).xyz);
 }`,

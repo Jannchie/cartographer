@@ -1,5 +1,6 @@
 import { Biome, type World } from '../../gen/types'
 import { blur } from '../../gen/util'
+import { riverThreshold } from '../../gen/world'
 
 /**
  * 地表材质遮罩（RGBA8，每格一个像素，线性过滤后平滑过渡）：
@@ -118,4 +119,41 @@ function horizonAO(world: World, ex: number): Float32Array {
     }
   }
   return ao
+}
+
+/**
+ * 细节遮罩（RGBA8，每格一个像素）：
+ *   R 河岸湿润度（沿河谷的茂密植被带）  G 保留
+ *   B 湿地（沼泽里的小水塘）  A 盐壳（盐沼、干涸湖床）
+ */
+export function buildDetailMask(world: World): Uint8Array {
+  const { W, H, elevation: e, biome, flow, water } = world
+  const N = W * H
+  const wet = new Float32Array(N)
+  const salt = new Float32Array(N)
+  const marsh = new Float32Array(N)
+  const thr = riverThreshold(W)
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x
+      if (e[i] <= 0.004 || !Number.isNaN(water[i])) continue
+      const f = flow[i] / thr
+      if (f > 0.25) wet[i] = Math.min(1, 0.35 + 0.25 * Math.log2(1 + f))
+      if (biome[i] === Biome.Wetland) {
+        wet[i] = Math.max(wet[i], 0.8)
+        marsh[i] = 1
+      }
+      if (biome[i] === Biome.SaltFlat) salt[i] = 1
+    }
+  }
+  blur(wet, W, H, 2, 2)
+  blur(salt, W, H, 1, 1)
+  blur(marsh, W, H, 1, 1)
+  const out = new Uint8Array(N * 4)
+  for (let i = 0; i < N; i++) {
+    out[i * 4] = Math.round(Math.min(1, wet[i] * 1.4) * 255)
+    out[i * 4 + 2] = Math.round(Math.min(1, marsh[i]) * 255)
+    out[i * 4 + 3] = Math.round(Math.min(1, salt[i]) * 255)
+  }
+  return out
 }
