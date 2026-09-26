@@ -82,6 +82,8 @@ export const BIOME_NAMES: Record<number, string> = {
 export interface Label {
   kind: 'continent' | 'island' | 'ocean' | 'sea' | 'lake' | 'range' | 'city' | 'capital' | 'basin' | 'desert' | 'forest'
   name: string
+  /** 中文名 */
+  zh: string
   x: number
   y: number
   /** 文字旋转角（弧度） */
@@ -90,6 +92,21 @@ export interface Label {
   weight: number
   /** 沿轴向的跨度（格） */
   span: number
+}
+
+export interface Realm {
+  name: string
+  zh: string
+  /** 调色板序号 0~7（相邻国家不同） */
+  color: number
+  /** 国名标注位置（格） */
+  x: number
+  y: number
+  /** 都城在 labels 中的下标 */
+  capital: number
+  area: number
+  /** 标注点到国界/海岸的距离（格），用于决定国名字号 */
+  room: number
 }
 
 export interface River {
@@ -117,7 +134,11 @@ export interface World {
   coastDist: Float32Array
   rivers: River[]
   labels: Label[]
+  /** 每格所属国家，-1 为海洋 */
+  realm: Int16Array
+  realms: Realm[]
   worldName: string
+  worldNameZh: string
   /** 每格代表的公里数 */
   kmPerCell: number
   stats: { land: number; peak: number; trench: number; lakes: number; rivers: number; ms: number }

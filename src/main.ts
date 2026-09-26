@@ -1,6 +1,6 @@
 import { latitudeOf } from './gen/climate'
 import { BIOME_NAMES, DEFAULT_PARAMS, type World, type WorldParams } from './gen/types'
-import { ensureFonts, renderAtlas } from './render/atlas'
+import { THEMES, ensureFonts, renderAtlas, type StyleId } from './render/atlas'
 import { smoothRivers, type SmoothRiver } from './render/rivers'
 import { Scene3D, type View3DOptions } from './render/scene3d'
 import { buildPhysicalTexture } from './render/texture'
@@ -13,6 +13,8 @@ const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySele
 const params: WorldParams = { ...DEFAULT_PARAMS, ...readHash() }
 const view3d: View3DOptions = { exaggeration: 26, trees: true, labels: true, sunAzimuth: 225, sunElevation: 32 }
 const atlasOpts = { labels: true, contours: true, graticule: true }
+let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
+const atlasCache = new Map<string, HTMLCanvasElement>()
 let world: World | null = null
 let rivers: SmoothRiver[] = []
 let atlasCanvas: HTMLCanvasElement | null = null
@@ -182,12 +184,31 @@ toggles(sub3d, [
   { label: '地名', get: () => view3d.labels, set: (v) => scene.setOptions({ labels: (view3d.labels = v) }) },
 ])
 const sub2d = document.createElement('div')
-sub2d.innerHTML = `<div class="sub">制图</div>`
+sub2d.innerHTML = `<div class="sub">制图风格</div>`
 vc.appendChild(sub2d)
+{
+  const grid = document.createElement('div')
+  grid.className = 'styles'
+  for (const t of THEMES) {
+    const b = document.createElement('button')
+    b.className = 'style-card' + (t.id === atlasStyle ? ' on' : '')
+    b.dataset.id = t.id
+    b.innerHTML = `<i style="background:rgb(${t.paper.join(',')})"><b style="border-color:${t.ink}"></b></i><span>${t.name}</span><em>${t.desc}</em>`
+    b.addEventListener('click', () => {
+      atlasStyle = t.id
+      localStorageSet('atlasStyle', t.id)
+      for (const x of grid.querySelectorAll('button')) x.classList.toggle('on', x === b)
+      if (mode !== '2d') setMode('2d')
+      else refreshAtlas()
+    })
+    grid.appendChild(b)
+  }
+  sub2d.appendChild(grid)
+}
 toggles(sub2d, [
-  { label: '注记', get: () => atlasOpts.labels, set: (v) => ((atlasOpts.labels = v), refreshAtlas()) },
-  { label: '等高线', get: () => atlasOpts.contours, set: (v) => ((atlasOpts.contours = v), refreshAtlas()) },
-  { label: '经纬网', get: () => atlasOpts.graticule, set: (v) => ((atlasOpts.graticule = v), refreshAtlas()) },
+  { label: '注记', get: () => atlasOpts.labels, set: (v) => ((atlasOpts.labels = v), atlasCache.clear(), refreshAtlas()) },
+  { label: '等高线', get: () => atlasOpts.contours, set: (v) => ((atlasOpts.contours = v), atlasCache.clear(), refreshAtlas()) },
+  { label: '经纬网', get: () => atlasOpts.graticule, set: (v) => ((atlasOpts.graticule = v), atlasCache.clear(), refreshAtlas()) },
 ])
 
 function toggles(host: HTMLElement, list: { label: string; get: () => boolean; set: (v: boolean) => void }[]) {
@@ -223,7 +244,7 @@ function setMode(m: '3d' | '2d') {
   $('#view2d').classList.toggle('hidden', m !== '2d')
   scene.active = m === '3d'
   $('#hint').textContent = m === '3d' ? '拖动旋转 · 右键平移 · 滚轮缩放' : '拖动平移 · 滚轮缩放 · 双击复位'
-  if (m === '2d' && world && !atlasCanvas) refreshAtlas()
+  if (m === '2d' && world) refreshAtlas()
 }
 
 // —— 生成 ——
@@ -259,6 +280,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   const tex = buildPhysicalTexture(world, rivers, 2)
   scene.setWorld(world, tex.color, tex.roughness)
   atlasCanvas = null
+  atlasCache.clear()
   if (mode === '2d') await refreshAtlas()
   showStats(world)
   loading.classList.add('hidden')
@@ -266,14 +288,30 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
 }
 $('#generate').addEventListener('click', generate)
 
+let atlasJob = 0
 async function refreshAtlas() {
   if (!world) return
-  await ensureFonts()
-  atlasCanvas = renderAtlas(world, rivers, { ...atlasOpts, scale: 2 })
+  const w = world
+  const style = atlasStyle
+  const job = ++atlasJob
+  let c = atlasCache.get(style)
+  if (!c) {
+    loading.classList.remove('hidden')
+    $('#load-stage').textContent = `绘制${THEMES.find((t) => t.id === style)!.name}`
+    $('#load-bar').style.width = '100%'
+    await ensureFonts(w, style)
+    await new Promise((r) => setTimeout(r, 20))
+    if (job !== atlasJob || w !== world) return
+    c = renderAtlas(w, rivers, style, atlasOpts, 2)
+    atlasCache.set(style, c)
+    loading.classList.add('hidden')
+  }
+  const keepView = atlasCanvas !== null && atlasCanvas.width === c.width && atlasCanvas.height === c.height
+  atlasCanvas = c
   const wrap = $('#map-wrap')
   wrap.innerHTML = ''
   wrap.appendChild(atlasCanvas)
-  fitMap()
+  if (!keepView) fitMap()
 }
 
 function showStats(w: World) {
@@ -353,7 +391,7 @@ function probeAt(clientX: number, clientY: number) {
   if (mode === '3d') cell = scene.pick(clientX, clientY)
   else if (atlasCanvas) {
     const r = $('#view2d').getBoundingClientRect()
-    const M = Math.round(34 * 2)
+    const M = (atlasCanvas.width - world.W * 2) / 2
     const px = (clientX - r.left - map.x) / map.k - M
     const py = (clientY - r.top - map.y) / map.k - M
     const x = Math.floor(px / 2)
@@ -396,9 +434,24 @@ $('#export').addEventListener('click', async () => {
   }
   const a = document.createElement('a')
   a.href = url
-  a.download = `${world.worldName.toLowerCase()}-${params.seed}-${mode}.png`
+  a.download = `${world.worldName.toLowerCase()}-${params.seed}-${mode === '3d' ? '3d' : atlasStyle}.png`
   a.click()
 })
+
+function localStorageGet(k: string) {
+  try {
+    return localStorage.getItem(k)
+  } catch {
+    return null
+  }
+}
+function localStorageSet(k: string, v: string) {
+  try {
+    localStorage.setItem(k, v)
+  } catch {
+    // 隐私模式等场景不可用，忽略
+  }
+}
 
 // —— URL 同步：分享链接即可复现同一世界 ——
 function writeHash() {

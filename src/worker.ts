@@ -20,6 +20,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
       world.flow.buffer,
       world.biome.buffer,
       world.coastDist.buffer,
+      world.realm.buffer,
     ]
     post({ id, type: 'done', world }, transfer)
   } catch (e) {

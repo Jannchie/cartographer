@@ -2,6 +2,8 @@ import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } 
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
 import { Language } from './names'
+import { ZhNamer } from './names_zh'
+import { buildRealms } from './realms'
 import { RNG, hashString } from './rng'
 import { buildTerrain } from './terrain'
 import { Biome, type Label, type River, type World, type WorldParams } from './types'
@@ -159,7 +161,11 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
   // —— 地名与标注 ——
   progress('命名与标注', 0.95)
   const lang = new Language(rNames)
+  const zh = new ZhNamer(p.seed)
   const labels = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, lang, rPlace, terr.basins)
+  for (const l of labels) l.zh = zh.name(l.kind, l.name)
+  const { realm, realms } = buildRealms(elev, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W), lang, zh, rPlace.fork())
+  const worldName = lang.word()
 
   let land = 0
   let peak = -Infinity
@@ -183,7 +189,10 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
     coastDist,
     rivers,
     labels,
-    worldName: lang.word(),
+    realm,
+    realms,
+    worldName,
+    worldNameZh: zh.name('world', worldName),
     kmPerCell,
     stats: {
       land: land / N,
@@ -393,8 +402,7 @@ function makeLabels(
     const isCont = cells.length > N * 0.02
     const nm = lang.word()
     const { ang, major, minor } = pca(cells)
-    labels.push({
-      kind: isCont ? 'continent' : 'island',
+    labels.push({ zh: '', kind: isCont ? 'continent' : 'island',
       name: nm,
       x: best % W,
       y: Math.floor(best / W),
@@ -429,8 +437,7 @@ function makeLabels(
   chosenSea.forEach((s, k) => {
     const nm = lang.word()
     const big = k === 0 && s.d > 45
-    labels.push({
-      kind: big ? 'ocean' : 'sea',
+    labels.push({ zh: '', kind: big ? 'ocean' : 'sea',
       name: big ? `${nm} Ocean` : k % 2 ? `Sea of ${nm}` : `${nm} Sea`,
       x: s.x,
       y: s.y,
@@ -460,8 +467,7 @@ function makeLabels(
       }
     }
     const nm = lang.word()
-    labels.push({
-      kind: 'range',
+    labels.push({ zh: '', kind: 'range',
       name: rng.next() < 0.5 ? `${nm} Mountains` : `The ${nm}s`,
       x: best % W,
       y: Math.floor(best / W),
@@ -475,7 +481,7 @@ function makeLabels(
   for (const b of basins) {
     const i = Math.round(b.y) * W + Math.round(b.x)
     if (elev[i] <= 0) continue
-    labels.push({ kind: 'basin', name: `${lang.word()} Basin`, x: b.x, y: b.y, angle: 0, weight: b.r * 40, span: b.r * 1.5 })
+    labels.push({ zh: '', kind: 'basin', name: `${lang.word()} Basin`, x: b.x, y: b.y, angle: 0, weight: b.r * 40, span: b.r * 1.5 })
   }
 
   // —— 沙漠与大森林 ——
@@ -485,7 +491,7 @@ function makeLabels(
     if (cells.length < 700) break
     const { mx, my, major } = pca(cells)
     const c = nearestIn(cells, mx, my, W)
-    labels.push({ kind: 'desert', name: `${lang.word()} Desert`, x: c % W, y: Math.floor(c / W), angle: 0, weight: cells.length * 0.4, span: major })
+    labels.push({ zh: '', kind: 'desert', name: `${lang.word()} Desert`, x: c % W, y: Math.floor(c / W), angle: 0, weight: cells.length * 0.4, span: major })
   }
   const forests = components((i) => biome[i] === Biome.TropicalRainforest || biome[i] === Biome.TemperateRainforest || biome[i] === Biome.Taiga)
   forests.sort((a, b) => b.length - a.length)
@@ -494,8 +500,7 @@ function makeLabels(
     const { mx, my, major } = pca(cells)
     const c = nearestIn(cells, mx, my, W)
     const nm = lang.word()
-    labels.push({
-      kind: 'forest',
+    labels.push({ zh: '', kind: 'forest',
       name: rng.next() < 0.5 ? `${nm} Forest` : `${nm}wood`,
       x: c % W,
       y: Math.floor(c / W),
@@ -511,8 +516,7 @@ function makeLabels(
     const cells = Array.from(lk.cells)
     const { mx, my } = pca(cells)
     const c = nearestIn(cells, mx, my, W)
-    labels.push({
-      kind: 'lake',
+    labels.push({ zh: '', kind: 'lake',
       name: `${lk.endorheic ? 'Salt Lake' : 'Lake'} ${lang.word()}`,
       x: c % W,
       y: Math.floor(c / W),
@@ -570,7 +574,7 @@ function makeLabels(
     const capital = !capitalOf.has(lid) && lid >= 0 && lands[lid].length > 1500
     if (capital) capitalOf.add(lid)
     cities.push({ x, y, land: lid })
-    labels.push({ kind: capital ? 'capital' : 'city', name: lang.word(), x: x + 0.5, y: y + 0.5, angle: 0, weight: capital ? 5e5 : 3e3 + score[i] * 100, span: 0 })
+    labels.push({ zh: '', kind: capital ? 'capital' : 'city', name: lang.word(), x: x + 0.5, y: y + 0.5, angle: 0, weight: capital ? 5e5 : 3e3 + score[i] * 100, span: 0 })
     if (cities.length >= maxCities) break
   }
   return labels
