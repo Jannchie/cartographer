@@ -1,4 +1,5 @@
 import type { Label, World, WorldEdits } from '../gen/types'
+import { cjkFont, lang, placeName, t } from '../i18n'
 import { ELEV_RAMP, RAIN_RAMP, REGION_COLORS, TEMP_RAMP, floodLand, isolines, rampColor, type IsoGroup, type Ramp } from './layers'
 
 /**
@@ -410,7 +411,7 @@ export class EditorView {
       .map(([v, r, g, b]) => `rgb(${r},${g},${b}) ${(((v - lg.min) / (lg.max - lg.min)) * 100).toFixed(1)}%`)
       .join(',')
     this.legend.innerHTML =
-      `<div class="lg-title">${lg.title}</div><div class="lg-bar" style="background:linear-gradient(to right,${stops})"></div>` +
+      `<div class="lg-title">${t(lg.title)}</div><div class="lg-bar" style="background:linear-gradient(to right,${stops})"></div>` +
       `<div class="lg-ticks">${lg.ticks.map(([v, t]) => `<span style="left:${((v - lg.min) / (lg.max - lg.min)) * 100}%">${t}</span>`).join('')}</div>`
   }
 
@@ -468,8 +469,8 @@ export class EditorView {
         ctx.stroke()
       }
       if (this.showNames || sel || regionMode) {
-        ctx.font = `${st.font} 'Noto Serif SC', serif`
-        const text = l.zh || l.name
+        ctx.font = `${st.font} ${cjkFont(lang)}`
+        const text = placeName(l)
         const ty = st.dot ? sy - st.dot - 9 : sy
         ctx.lineWidth = 3
         ctx.strokeStyle = 'rgba(0,0,0,0.55)'
@@ -551,7 +552,7 @@ export class EditorView {
     this.edits.regions = reg
     const meta = (this.edits.regionMeta ??= [])
     const id = meta.length
-    meta.push({ name: 'Nova Terra', zh: '新大洲' })
+    meta.push({ name: 'Nova Terra', zh: '新大洲', ja: 'ノヴァ・テラ' })
     for (const j of floodLand(land, reg, w.W, w.H, i, -1)) reg[j] = id
     this.selectRegion(id)
     this.cb.onCommit('regions')
@@ -698,7 +699,7 @@ export class EditorView {
         const c = this.toCell(p.x, p.y)
         if (c.x < 0 || c.y < 0 || c.x >= w.W || c.y >= w.H) return
         this.cb.onBeforeEdit()
-        const l: Label = { kind: 'city', name: 'New Town', zh: '新地点', x: c.x, y: c.y, angle: 0, weight: 50, span: 0 }
+        const l: Label = { kind: 'city', name: 'New Town', zh: '新地点', ja: 'ニュータウン', x: c.x, y: c.y, angle: 0, weight: 50, span: 0 }
         w.labels.push(l)
         this.select(l)
         this.cb.onCommit('labels')

@@ -18,6 +18,7 @@ export interface ProjectDoc {
       regionMeta?: { name: string; zh: string }[]
       worldName?: string
       worldNameZh?: string
+      worldNameJa?: string
     }
   }
 }
@@ -49,6 +50,7 @@ export async function serializeProject(params: WorldParams, edits: WorldEdits): 
   e.regionMeta = edits.regionMeta
   e.worldName = edits.worldName
   e.worldNameZh = edits.worldNameZh
+  e.worldNameJa = edits.worldNameJa
   return JSON.stringify(doc)
 }
 
@@ -68,6 +70,7 @@ export async function parseProject(text: string): Promise<{ params: WorldParams;
   edits.regionMeta = e.regionMeta
   edits.worldName = e.worldName
   edits.worldNameZh = e.worldNameZh
+  edits.worldNameJa = e.worldNameJa
   return { params: doc.world.params, edits }
 }
 
@@ -101,6 +104,7 @@ export function resampleEdits(edits: WorldEdits, W0: number, H0: number, W: numb
     regionMeta: edits.regionMeta,
     worldName: edits.worldName,
     worldNameZh: edits.worldNameZh,
+    worldNameJa: edits.worldNameJa,
     terrainRev: (edits.terrainRev ?? 0) + 1,
   }
 }
@@ -120,6 +124,7 @@ export function snapshotEdits(e: WorldEdits): WorldEdits {
     regionMeta: e.regionMeta?.map((m) => ({ ...m })),
     worldName: e.worldName,
     worldNameZh: e.worldNameZh,
+    worldNameJa: e.worldNameJa,
     terrainRev: e.terrainRev,
   }
 }

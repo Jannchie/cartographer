@@ -8,6 +8,7 @@ import { PostPipeline } from './aerial/post'
 import { Diorama } from './aerial/diorama'
 import { TerrainBake } from './aerial/bake'
 import { RoadMask } from './aerial/roads3d'
+import { placeName, t, worldTitle } from '../i18n'
 import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
 import { createRiverWaterMaterial, createWaterMaterial } from './water'
@@ -426,12 +427,7 @@ export class Scene3D {
     this.water.renderOrder = 2
     this.group.add(this.water)
     this.post.comp.uniforms.uBox.value.set(-SX / 2, -this.SZ / 2, SX / 2, this.SZ / 2)
-    this.diorama.build({
-      SX,
-      SZ: this.SZ,
-      title: world.worldName,
-      subtitle: `${world.worldNameZh ?? ''}  ·  ${Math.round(world.W * world.kmPerCell).toLocaleString('en-US')} km  ·  seed ${world.params.seed}`,
-    })
+    this.buildNameplate()
 
     this.rebuildGeometry()
     this.updateSun()
@@ -689,6 +685,25 @@ export class Scene3D {
   }
 
   /** 地点被编辑后重建 3D 地名 */
+  /** 语言切换：地名与铭牌换成新语言 */
+  refreshLanguage() {
+    if (!this.world) return
+    this.buildLabels()
+    this.buildNameplate()
+    this.diorama.setBase(-4.8 * this.vScale - 1.2)
+    this.post.reset()
+  }
+
+  private buildNameplate() {
+    const w = this.world!
+    this.diorama.build({
+      SX,
+      SZ: this.SZ,
+      title: worldTitle(w),
+      subtitle: t('{km} 公里 · 种子 {seed}', { km: Math.round(w.W * w.kmPerCell).toLocaleString('en-US'), seed: w.params.seed }),
+    })
+  }
+
   refreshLabels() {
     if (this.world) this.buildLabels()
   }
@@ -703,7 +718,7 @@ export class Scene3D {
       if (l.kind === 'island' && l.weight < 800) continue
       const el = document.createElement('div')
       el.className = `l3 l3-${l.kind}`
-      el.textContent = l.name
+      el.textContent = placeName(l)
       const x = (l.x / (w.W - 1) - 0.5) * SX
       const z = (l.y / (w.H - 1) - 0.5) * this.SZ
       const pos = new THREE.Vector3(x, this.labelY(l.kind, x, z), z)

@@ -27,6 +27,11 @@
   --sans: 'Inter', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --mono: 'Berkeley Mono', 'JetBrains Mono', 'Sarasa Mono SC', 'Microsoft YaHei Mono', monospace;
 }
+/* 日文界面：汉字用日文字形 */
+:root:lang(ja) {
+  --serif: 'Cormorant Garamond', 'Noto Serif JP', 'Noto Serif SC', serif;
+}
+
 
 * {
   box-sizing: border-box;
@@ -634,6 +639,7 @@ footer.export .hidden {
   gap: 4px;
 }
 .file button {
+  white-space: nowrap;
   padding: 3px 8px;
   font-size: 11.5px;
   color: var(--muted);
@@ -934,4 +940,29 @@ body[data-module='home'] #home {
 }
 #go-home {
   cursor: pointer;
+}
+
+/* —— 语言切换 —— */
+/* 放在模块切换栏最右侧：两个模块都看得到 */
+.modules {
+  grid-template-columns: 1fr 1fr auto;
+}
+select.lang {
+  width: auto;
+  padding: 2px 4px;
+  border: none;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+select.lang:hover {
+  color: var(--text);
+}
+.home-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }

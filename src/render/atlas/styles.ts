@@ -16,9 +16,7 @@ export interface LabelTheme {
   region: string
   city: string
   halo: string
-  /** 使用中文名 */
-  zh: boolean
-  /** 竖排的注记类型 */
+  /** 竖排的注记类型（只在中文、日文下生效） */
   vertical: string[]
   /** 大写与字距 */
   caps: boolean
@@ -493,7 +491,6 @@ export const THEMES: Theme[] = [
       region: '#7a6246',
       city: '#2f2b27',
       halo: 'rgba(241, 234, 216, 0.72)',
-      zh: false,
       vertical: [],
       caps: true,
       city_marker: 'dot',
@@ -522,7 +519,6 @@ export const THEMES: Theme[] = [
       region: '#5a4430',
       city: '#2e2116',
       halo: 'rgba(236, 220, 181, 0.8)',
-      zh: false,
       vertical: [],
       caps: true,
       city_marker: 'castle',
@@ -552,7 +548,6 @@ export const THEMES: Theme[] = [
       region: '#555',
       city: '#1f1f1f',
       halo: 'rgba(244, 241, 232, 0.8)',
-      zh: false,
       vertical: [],
       caps: true,
       city_marker: 'dot',
@@ -581,7 +576,6 @@ export const THEMES: Theme[] = [
       region: '#f4efde',
       city: '#ffffff',
       halo: 'rgba(24, 32, 30, 0.7)',
-      zh: false,
       vertical: [],
       caps: true,
       city_marker: 'dot',
@@ -610,7 +604,6 @@ export const THEMES: Theme[] = [
       region: '#5a5040',
       city: '#2b2a27',
       halo: 'rgba(237, 230, 211, 0.8)',
-      zh: true,
       vertical: ['continent', 'ocean', 'range', 'realm'],
       caps: false,
       city_marker: 'square',
@@ -639,7 +632,6 @@ export const THEMES: Theme[] = [
       region: '#5e5e4a',
       city: '#1e1e1e',
       halo: 'rgba(251, 250, 246, 0.85)',
-      zh: false,
       vertical: [],
       caps: true,
       city_marker: 'dot',

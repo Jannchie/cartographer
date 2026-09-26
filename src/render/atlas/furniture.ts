@@ -1,4 +1,5 @@
 import type { World } from '../../gen/types'
+import { cjkFont, lang, t, worldTitle } from '../../i18n'
 import { hash, type Fields } from './fields'
 import { HYPSO_STOPS, REALM_COLORS, type Theme } from './styles'
 
@@ -174,7 +175,6 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, world: World, theme:
   const nice = [100, 200, 250, 500, 1000, 2000]
   const kmLen = nice.reduce((a, b) => (Math.abs(b - target) < Math.abs(a - target) ? b : a))
   const len = kmLen / kmPx
-  const zh = theme.labels.zh
   ctx.save()
   ctx.translate(x - len / 2, y)
   ctx.strokeStyle = theme.ink
@@ -192,7 +192,7 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, world: World, theme:
   for (let s = 0; s <= segs; s += 2) ctx.fillText(`${(kmLen / segs) * s}`, (len / segs) * s, -3 * k)
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
-  ctx.fillText(zh ? '公里' : 'km', len + 5 * k, 3 * k)
+  ctx.fillText(t('公里'), len + 5 * k, 3 * k)
   ctx.restore()
 }
 
@@ -215,7 +215,7 @@ function spaced(ctx: CanvasRenderingContext2D, text: string, cx: number, y: numb
 /** 返回图名区域（供注记避让） */
 export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme: Theme, S: number, MW: number) {
   const k = S / 2
-  const title = world.worldName.toUpperCase()
+  const title = lang === 'en' ? world.worldName.toUpperCase() : worldTitle(world)
   const paper = rgb(theme.paper)
   ctx.save()
   ctx.textBaseline = 'alphabetic'
@@ -250,11 +250,11 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
         ctx.stroke()
       }
       ctx.fillStyle = theme.ink
-      ctx.font = `400 ${32 * k}px ${theme.labels.display}`
+      ctx.font = `400 ${32 * k}px ${theme.labels.display}, ${cjkFont(lang)}`
       spaced(ctx, title, w / 2, 44 * k, 7 * k)
-      ctx.font = `italic 400 ${13 * k}px ${theme.labels.text}`
+      ctx.font = `italic 400 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
       ctx.textAlign = 'center'
-      ctx.fillText(`Here be the lands of ${world.worldName}`, w / 2, 62 * k)
+      ctx.fillText(t('此乃{name}之地', { name: worldTitle(world) }), w / 2, 62 * k)
       box = { x0: 0, y0: 0, x1: x + w + 20 * k, y1: y + h + 10 * k }
       break
     }
@@ -271,14 +271,14 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.strokeRect(0, 0, w, h)
       ctx.fillStyle = theme.ink
       ctx.textAlign = 'center'
-      ctx.font = `500 ${12 * k}px ${theme.labels.text}`
-      spaced(ctx, 'CHART OF THE COASTS OF', w / 2, 22 * k, 2.5 * k)
-      ctx.font = `600 ${30 * k}px ${theme.labels.display}`
+      ctx.font = `500 ${12 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      spaced(ctx, t('海图'), w / 2, 22 * k, 2.5 * k)
+      ctx.font = `600 ${30 * k}px ${theme.labels.display}, ${cjkFont(lang)}`
       spaced(ctx, title, w / 2, 56 * k, 6 * k)
-      ctx.font = `italic 500 ${12 * k}px ${theme.labels.text}`
+      ctx.font = `italic 500 ${12 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
       ctx.textAlign = 'center'
-      ctx.fillText('Soundings in metres · reduced to mean sea level', w / 2, 78 * k)
-      ctx.fillText(`Surveyed under seed “${world.params.seed}”`, w / 2, 94 * k)
+      ctx.fillText(t('测深以米计 · 以平均海面为基准'), w / 2, 78 * k)
+      ctx.fillText(t('种子「{seed}」测绘', { seed: world.params.seed }), w / 2, 94 * k)
       box = { x0: 0, y0: 0, x1: x + w + 12 * k, y1: y + h + 10 * k }
       break
     }
@@ -291,7 +291,7 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.fillStyle = theme.ink
       ctx.strokeStyle = theme.labels.halo
       ctx.lineJoin = 'round'
-      ctx.font = `600 ${34 * k}px ${theme.labels.display}`
+      ctx.font = `600 ${34 * k}px ${theme.labels.display}, ${cjkFont(lang)}`
       ctx.lineWidth = 4 * k
       spaced(ctx, title, w / 2, 38 * k, 8 * k, true)
       ctx.lineWidth = 1 * k
@@ -311,32 +311,47 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.closePath()
       ctx.fill()
       ctx.globalAlpha = 1
-      ctx.font = `600 ${12 * k}px ${theme.labels.text}`
+      ctx.font = `600 ${12 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
       ctx.strokeStyle = theme.labels.halo
       ctx.lineWidth = 3 * k
-      const sub = `SEED · ${world.params.seed.toUpperCase()}`
+      const sub = t('种子 · {seed}', { seed: lang === 'en' ? world.params.seed.toUpperCase() : world.params.seed })
       spaced(ctx, sub, w / 2, 74 * k, 3 * k, true)
       box = { x0: 0, y0: 0, x1: x + w + 16 * k, y1: y + 86 * k }
       break
     }
     case 'ink': {
-      // 竖排题名 + 朱文印
-      const zhTitle = `${world.worldNameZh}舆地全图`
+      // 竖排题名 + 朱文印（英文题名转 90° 顺边排）
+      const zhTitle = t('{name}舆地全图', { name: worldTitle(world) })
       const size = 30 * k
       const x = MW - 44 * k
       const y = 34 * k
       ctx.fillStyle = theme.ink
-      ctx.font = `400 ${size}px ${theme.labels.display}`
+      ctx.font = `400 ${size}px ${theme.labels.display}, ${cjkFont(lang)}`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
+      if (lang === 'en') {
+        ctx.save()
+        ctx.translate(x, y)
+        ctx.rotate(Math.PI / 2)
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.font = `400 ${size * 0.8}px ${theme.labels.display}, ${cjkFont(lang)}`
+        ctx.fillText(zhTitle, 0, 0)
+        const len = ctx.measureText(zhTitle).width
+        ctx.font = `400 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+        ctx.fillText(t('种子 {seed}', { seed: world.params.seed }), 0, size * 0.9)
+        ctx.restore()
+        box = { x0: x - size * 1.7, y0: 0, x1: MW, y1: y + len + 20 * k }
+        break
+      }
       const chars = [...zhTitle]
       chars.forEach((c, i) => ctx.fillText(c, x, y + i * size * 1.12))
       const bottom = y + chars.length * size * 1.12
       // 落款小字
-      ctx.font = `400 ${13 * k}px ${theme.labels.text}`
-      const sign = [...`种子 ${world.params.seed}`]
+      ctx.font = `400 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      const sign = [...t('种子 {seed}', { seed: world.params.seed })]
       sign.forEach((c, i) => ctx.fillText(c, x - size * 1.1, y + size * 0.6 + i * 14 * k))
-      seal(ctx, x - size * 0.5, bottom + 10 * k, 58 * k, world.worldNameZh, k)
+      seal(ctx, x - size * 0.5, bottom + 10 * k, 58 * k, worldTitle(world), k)
       box = { x0: x - size * 1.7, y0: 0, x1: MW, y1: bottom + 60 * k }
       break
     }
@@ -356,14 +371,14 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.strokeRect(4 * k, 4 * k, w - 8 * k, h - 8 * k)
       ctx.fillStyle = theme.ink
       const sans = theme.id === 'topo'
-      ctx.font = `${sans ? 700 : 600} ${(sans ? 26 : 32) * k}px ${theme.labels.display}`
+      ctx.font = `${sans ? 700 : 600} ${(sans ? 26 : 32) * k}px ${theme.labels.display}, ${cjkFont(lang)}`
       spaced(ctx, title, w / 2, 44 * k, (sans ? 5 : 9.6) * k)
-      ctx.font = `${sans ? '' : 'italic'} 500 ${13 * k}px ${theme.labels.text}`
+      ctx.font = `${sans ? '' : 'italic'} 500 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
       ctx.textAlign = 'center'
       const sub =
         theme.id === 'topo'
-            ? `Topographic survey · contour interval 100 m`
-            : `A physical map of the known world · seed “${world.params.seed}”`
+            ? t('地形测量图 · 等高距 100 米')
+            : t('已知世界自然地理图 · 种子「{seed}」', { seed: world.params.seed })
       ctx.fillText(sub, w / 2, 66 * k)
       box = { x0: 0, y0: 0, x1: x + w + 20 * k, y1: y + h + 20 * k }
     }
@@ -475,7 +490,7 @@ export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: T
     ctx.textBaseline = 'top'
     for (let v = 0; v <= maxH; v++) ctx.fillText(`${v * 1000}`, bx + (v / maxH) * bw, y + 30 * k)
     ctx.textAlign = 'left'
-    ctx.fillText('Elevation (m)', bx, y + 43 * k)
+    ctx.fillText(t('海拔（米）'), bx, y + 43 * k)
     box = { x0: 0, y0: y - 10 * k, x1: x + w + 10 * k, y1: MH }
   }
   ctx.restore()

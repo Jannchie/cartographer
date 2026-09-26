@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { NOISE_GLSL } from './glsl'
 import { createSky } from './sky'
+import { cjkFont, lang } from '../../i18n'
 
 /**
  * 沙盘作为一件摆在桌上的实物：
@@ -254,8 +255,8 @@ function nameplateTexture(title: string, sub: string) {
     g.fillStyle = '#3a2708'
     g.fillText(text, W / 2, y)
   }
-  engrave(title.toUpperCase(), '600 70px "Cormorant Garamond", "Noto Serif SC", serif', H / 2 - 14, 26)
-  engrave(sub, '600 34px "Cormorant Garamond", "Noto Serif SC", serif', H / 2 + 42, 8)
+  engrave(title.toUpperCase(), `600 70px "Cormorant Garamond", ${cjkFont(lang)}`, H / 2 - 14, 26)
+  engrave(sub, `600 34px "Cormorant Garamond", ${cjkFont(lang)}`, H / 2 + 42, 8)
   const tex = new THREE.CanvasTexture(cv)
   tex.colorSpace = THREE.SRGBColorSpace
   tex.anisotropy = 8

@@ -11,6 +11,7 @@ import { Scene3D, type View3DOptions } from './render/scene3d'
 import { buildPhysicalTexture } from './render/texture'
 import type { WorkerOut } from './worker'
 import GenWorker from './worker?worker'
+import { bindStatic, lang, LANGS, onLang, placeName, setLang, t, tr, worldTitle, type Lang } from './i18n'
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T
 
@@ -55,7 +56,8 @@ const sliders: (() => void)[] = []
 function slider(host: HTMLElement, s: SliderSpec) {
   const row = document.createElement('div')
   row.className = 'row'
-  row.innerHTML = `<label>${s.label}</label><input type="range" min="${s.min}" max="${s.max}" step="${s.step}"><output></output>`
+  row.innerHTML = `<label></label><input type="range" min="${s.min}" max="${s.max}" step="${s.step}"><output></output>`
+  tr(row.querySelector('label')!, s.label)
   const input = row.querySelector('input')!
   const out = row.querySelector('output')!
   const sync = () => {
@@ -76,13 +78,13 @@ function slider(host: HTMLElement, s: SliderSpec) {
 function toggles(host: HTMLElement, list: { label: string; get: () => boolean; set: (v: boolean) => void }[]) {
   const box = document.createElement('div')
   box.className = 'toggles'
-  for (const t of list) {
+  for (const it of list) {
     const b = document.createElement('button')
-    b.className = 'toggle' + (t.get() ? ' on' : '')
-    b.textContent = t.label
+    b.className = 'toggle' + (it.get() ? ' on' : '')
+    tr(b, it.label)
     b.addEventListener('click', () => {
-      t.set(!t.get())
-      b.classList.toggle('on', t.get())
+      it.set(!it.get())
+      b.classList.toggle('on', it.get())
     })
     box.appendChild(b)
   }
@@ -94,20 +96,27 @@ const x100 = (v: number) => v.toFixed(2)
 
 // —— 世界参数 ——
 /** 参数改了但还没重新生成：生成按钮给出提示 */
+let dirtyNow = false
 function markDirty(dirty = true) {
+  dirtyNow = dirty
   $('#generate').classList.toggle('dirty', dirty)
-  $('#generate').textContent = dirty ? '按新参数生成' : '生成世界'
+  $('#generate').textContent = t(dirty ? '按新参数生成' : '生成世界')
   if (dirty) for (const b of $('#presets').children) b.classList.remove('on')
 }
 
 const wc = $('#world-controls')
 const resRow = document.createElement('div')
 resRow.className = 'row'
-resRow.innerHTML = `<label>分辨率</label><select id="res">
-  <option value="768x480">768 × 480 · 快</option>
-  <option value="1024x640">1024 × 640 · 标准</option>
-  <option value="1536x960">1536 × 960 · 精细</option>
+resRow.innerHTML = `<label></label><select id="res">
+  <option value="768x480"></option>
+  <option value="1024x640"></option>
+  <option value="1536x960"></option>
 </select>`
+tr(resRow.querySelector('label')!, '分辨率')
+const RES_NOTE = ['快', '标准', '精细']
+const paintRes = () => resRow.querySelectorAll('option').forEach((o, i) => (o.textContent = `${o.value.replace('x', ' × ')} · ${t(RES_NOTE[i])}`))
+paintRes()
+onLang(paintRes)
 wc.appendChild(resRow)
 const resSel = $<HTMLSelectElement>('#res')
 const syncRes = () => {
@@ -180,8 +189,8 @@ function randomSeed() {
 }
 $('#dice').addEventListener('click', randomSeed)
 window.addEventListener('keydown', (e) => {
-  const t = e.target as HTMLElement
-  if (e.ctrlKey || e.metaKey || e.altKey || t.matches('input, select, textarea')) return
+  const el = e.target as HTMLElement
+  if (e.ctrlKey || e.metaKey || e.altKey || el.matches('input, select, textarea')) return
   if (e.key === 'r' || e.key === 'R') randomSeed()
 })
 
@@ -194,8 +203,7 @@ const presets: { name: string; p: Partial<WorldParams> }[] = [
   { name: '沙海', p: { landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
 ]
 for (const pr of presets) {
-  const b = document.createElement('button')
-  b.textContent = pr.name
+  const b = tr(document.createElement('button'), pr.name)
   b.addEventListener('click', () => {
     Object.assign(params, pr.p)
     syncParams()
@@ -259,14 +267,15 @@ const v2 = $('#view-2d')
 {
   const grid = document.createElement('div')
   grid.className = 'styles'
-  for (const t of THEMES) {
+  for (const th of THEMES) {
     const b = document.createElement('button')
-    b.className = 'style-card' + (t.id === atlasStyle ? ' on' : '')
-    b.title = t.desc
-    b.innerHTML = `<i style="background:rgb(${t.paper.join(',')})"><b style="border-color:${t.ink}"></b></i><span>${t.name}</span>`
+    b.className = 'style-card' + (th.id === atlasStyle ? ' on' : '')
+    tr(b, th.desc, 'title')
+    b.innerHTML = `<i style="background:rgb(${th.paper.join(',')})"><b style="border-color:${th.ink}"></b></i><span></span>`
+    tr(b.querySelector('span')!, th.name)
     b.addEventListener('click', () => {
-      atlasStyle = t.id
-      localStorageSet('atlasStyle', t.id)
+      atlasStyle = th.id
+      localStorageSet('atlasStyle', th.id)
       for (const x of grid.children) x.classList.toggle('on', x === b)
       refreshAtlas()
     })
@@ -306,12 +315,7 @@ function setMode(m: '3d' | '2d' | 'edit') {
   $('#ctl-2d').classList.toggle('hidden', m !== '2d')
   $('#ctl-edit').classList.toggle('hidden', m !== 'edit')
   $('#export-svg').classList.toggle('hidden', m !== '2d')
-  $('#hint').textContent =
-    m === '3d'
-      ? '拖动旋转 · 右键平移 · 滚轮缩放 · R 随机 · P 性能'
-      : m === '2d'
-        ? '拖动平移 · 滚轮缩放 · 双击复位 · R 随机'
-        : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销'
+  updateHint()
   if (m === '3d' && sceneStale && world && lastTex) {
     scene.setWorld(world, lastTex.color, lastTex.roughness, rivers)
     sceneStale = false
@@ -321,6 +325,16 @@ function setMode(m: '3d' | '2d' | 'edit') {
     ensureEditor()
     if (world && lastTex) editor!.setWorld(world, lastTex.color, edits, genEdits)
   }
+}
+
+function updateHint() {
+  $('#hint').textContent = t(
+    mode === '3d'
+      ? '拖动旋转 · 右键平移 · 滚轮缩放 · R 随机 · P 性能'
+      : mode === '2d'
+        ? '拖动平移 · 滚轮缩放 · 双击复位 · R 随机'
+        : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销',
+  )
 }
 
 // —— 生成 ——
@@ -333,7 +347,7 @@ function generate(quiet = false) {
   params.seed = seedInput.value.trim() || 'world'
   // 换了种子：编辑是针对旧世界的，询问后清除
   if (params.seed !== editsSize.seed && hasEdits(edits)) {
-    if (!window.confirm('换种子会生成一个全新的世界，当前的编辑将被清除。继续吗？')) {
+    if (!window.confirm(t('换种子会生成一个全新的世界，当前的编辑将被清除。继续吗？'))) {
       params.seed = editsSize.seed
       seedInput.value = params.seed
       return
@@ -349,7 +363,7 @@ function generate(quiet = false) {
   quietJob = quiet
   if (quiet) {
     $('#edit-status').classList.remove('hidden')
-    $('#edit-status').textContent = '演算中…'
+    $('#edit-status').textContent = t('演算中…')
   } else loading.classList.remove('hidden')
   $<HTMLButtonElement>('#generate').disabled = true
   sentEdits = snapshotEdits(edits)
@@ -360,18 +374,18 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   const m = ev.data
   if (m.id !== jobId) return
   if (m.type === 'progress') {
-    $('#load-stage').textContent = m.stage
+    $('#load-stage').textContent = t(m.stage)
     $('#load-bar').style.width = `${Math.round(m.frac * 100)}%`
-    if (quietJob) $('#edit-status').textContent = `演算中 · ${m.stage}`
+    if (quietJob) $('#edit-status').textContent = t('演算中 · {stage}', { stage: t(m.stage) })
     return
   }
   if (m.type === 'error') {
-    $('#load-stage').textContent = '生成失败：' + m.message.split('\n')[0]
+    $('#load-stage').textContent = t('生成失败：') + m.message.split('\n')[0]
     $<HTMLButtonElement>('#generate').disabled = false
     console.error(m.message)
     return
   }
-  $('#load-stage').textContent = '绘制地表'
+  $('#load-stage').textContent = t('绘制地表')
   await new Promise((r) => setTimeout(r, 16))
   world = m.world
   rivers = smoothRivers(world)
@@ -390,7 +404,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
     editor?.setWorld(world, tex.color, edits, genEdits)
   } catch (err) {
     console.error(err)
-    $('#load-stage').textContent = '绘制失败：' + (err instanceof Error ? err.message : String(err))
+    $('#load-stage').textContent = t('绘制失败：') + (err instanceof Error ? err.message : String(err))
     $<HTMLButtonElement>('#generate').disabled = false
     return
   }
@@ -422,7 +436,7 @@ async function refreshAtlas() {
   const job = ++atlasJob
   if (!atlasCache.has(style)) {
     loading.classList.remove('hidden')
-    $('#load-stage').textContent = `矢量绘制${THEMES.find((t) => t.id === style)!.name}`
+    $('#load-stage').textContent = t('矢量绘制{style}', { style: t(THEMES.find((th) => th.id === style)!.name) })
     $('#load-bar').style.width = '100%'
     await ensureFonts(w, style)
     await new Promise((r) => setTimeout(r, 20))
@@ -440,7 +454,9 @@ async function refreshAtlas() {
   else applyMap()
 }
 
-function showStats(w: World, cached = false) {
+let statsCached = false
+function showStats(w: World, cached = statsCached) {
+  statsCached = cached
   const s = w.stats
   const m = (km: number) => `${Math.round(km * 1000).toLocaleString()} m`
   const tiles: [string, string][] = [
@@ -451,8 +467,8 @@ function showStats(w: World, cached = false) {
     ['湖泊', String(s.lakes)],
     ['跨度', `${Math.round(w.W * w.kmPerCell).toLocaleString()} km`],
   ]
-  $('#world-name').innerHTML = `${w.worldName}<small>${cached ? '缓存' : `${(s.ms / 1000).toFixed(1)} s`}</small>`
-  $('#stats').innerHTML = tiles.map(([k, v]) => `<div><b>${v}</b><span>${k}</span></div>`).join('')
+  $('#world-name').innerHTML = `${worldTitle(w)}<small>${cached ? t('缓存') : `${(s.ms / 1000).toFixed(1)} s`}</small>`
+  $('#stats').innerHTML = tiles.map(([k, v]) => `<div><b>${v}</b><span>${t(k)}</span></div>`).join('')
   $('#info').classList.remove('hidden')
 }
 
@@ -545,7 +561,7 @@ function probeAt(clientX: number, clientY: number) {
   rows.push(['年均温', `${world.temperature[i].toFixed(1)} °C`])
   if (e > 0) rows.push(['年降水', `${Math.round(world.precipitation[i]).toLocaleString()} mm`])
   if (e > 0 && world.flow[i] > 1) rows.push(['径流', `${world.flow[i].toFixed(0)}`])
-  probe.innerHTML = `<div class="b">${BIOME_NAMES[world.biome[i]]}</div>` + rows.map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join('')
+  probe.innerHTML = `<div class="b">${t(BIOME_NAMES[world.biome[i]])}</div>` + rows.map(([k, v]) => `<span class="k">${t(k)}</span><span class="v">${v}</span>`).join('')
   probe.classList.remove('hidden')
 }
 $('#stage').addEventListener('pointermove', (e) => {
@@ -593,7 +609,7 @@ $('#export-svg').addEventListener('click', async () => {
   if (!world) return
   const w = world
   loading.classList.remove('hidden')
-  $('#load-stage').textContent = '矢量化：追踪等值线与区域轮廓'
+  $('#load-stage').textContent = t('矢量化：追踪等值线与区域轮廓')
   $('#load-bar').style.width = '100%'
   await ensureFonts(w, atlasStyle)
   await new Promise((r) => setTimeout(r, 20))
@@ -696,9 +712,7 @@ function ensureEditor() {
   ]
   const box = $('#edit-tools')
   for (const [id, label, tip] of tools) {
-    const b = document.createElement('button')
-    b.textContent = label
-    b.title = tip
+    const b = tr(tr(document.createElement('button'), label), tip, 'title')
     b.dataset.tool = id
     b.classList.toggle('on', id === 'select')
     b.addEventListener('click', () => {
@@ -739,7 +753,7 @@ function ensureEditor() {
   })
   $('#edit-undo').addEventListener('click', undo)
   $('#edit-clear').addEventListener('click', () => {
-    if (!hasEdits(edits) || !window.confirm('清除全部编辑，恢复为程序生成的原样？')) return
+    if (!hasEdits(edits) || !window.confirm(t('清除全部编辑，恢复为程序生成的原样？'))) return
     pushUndo()
     edits = { terrainRev: (edits.terrainRev ?? 0) + 1 }
     editor?.refreshEdits(edits)
@@ -771,7 +785,11 @@ const KIND_NAMES: [Label['kind'], string][] = [
 ]
 {
   const sel = $<HTMLSelectElement>('#insp-kind')
-  sel.innerHTML = KIND_NAMES.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')
+  for (const [k, n] of KIND_NAMES) {
+    const o = tr(document.createElement('option'), n)
+    o.value = k
+    sel.appendChild(o)
+  }
   const commit = () => {
     edits.labels = world ? world.labels.map((l) => ({ ...l })) : edits.labels
     atlasCache.clear()
@@ -797,7 +815,14 @@ const KIND_NAMES: [Label['kind'], string][] = [
     l.name = (e.target as HTMLInputElement).value
     commit()
   })
-  for (const id of ['#insp-zh', '#insp-name']) $(id).addEventListener('change', () => (editing = false))
+  $<HTMLInputElement>('#insp-ja').addEventListener('input', (e) => {
+    const l = editor?.selected
+    if (!l) return
+    begin()
+    l.ja = (e.target as HTMLInputElement).value
+    commit()
+  })
+  for (const id of ['#insp-zh', '#insp-name', '#insp-ja']) $(id).addEventListener('change', () => (editing = false))
   sel.addEventListener('change', () => {
     const l = editor?.selected
     if (!l) return
@@ -824,6 +849,7 @@ function showInspector(l: Label | null) {
   if (!l) return
   $<HTMLInputElement>('#insp-zh').value = l.zh
   $<HTMLInputElement>('#insp-name').value = l.name
+  $<HTMLInputElement>('#insp-ja').value = l.ja ?? ''
   $<HTMLSelectElement>('#insp-kind').value = l.kind
 }
 $<HTMLInputElement>('#edit-names').addEventListener('change', (e) => {
@@ -857,7 +883,7 @@ $<HTMLInputElement>('#open-file').addEventListener('change', async (e) => {
     syncParams()
     generate()
   } catch (err) {
-    window.alert('无法打开：' + (err instanceof Error ? err.message : String(err)))
+    window.alert(t('无法打开：') + t(err instanceof Error ? err.message : String(err)))
   }
 })
 
@@ -900,14 +926,14 @@ function ensureRegions() {
   if (edits.regions || !world || !editor) return
   const { W, H } = world
   const reg = new Int16Array(W * H).fill(-1)
-  const meta: { name: string; zh: string }[] = []
+  const meta: { name: string; zh: string; ja?: string }[] = []
   const land = editor.landMask()
   for (const l of world.labels) {
     if (l.kind !== 'continent') continue
     const i = Math.min(H - 1, Math.max(0, Math.round(l.y))) * W + Math.min(W - 1, Math.max(0, Math.round(l.x)))
     if (!land[i] || reg[i] >= 0) continue
     const id = meta.length
-    meta.push({ name: l.name, zh: l.zh })
+    meta.push({ name: l.name, zh: l.zh, ja: l.ja })
     for (const j of floodLand(land, reg, W, H, i, -1)) reg[j] = id
   }
   pushUndo()
@@ -926,7 +952,7 @@ function syncContinentLabels() {
   ;(edits.regionMeta ?? []).forEach((m, id) => {
     const a = regionAnchor(reg, w.W, w.H, id)
     if (!a) return
-    conts.push({ kind: 'continent', name: m.name, zh: m.zh, x: a.x, y: a.y, angle: 0, weight: 1000 + a.area / 20, span: a.span })
+    conts.push({ kind: 'continent', name: m.name, zh: m.zh, ja: m.ja, x: a.x, y: a.y, angle: 0, weight: 1000 + a.area / 20, span: a.span })
   })
   w.labels.splice(0, w.labels.length, ...conts, ...others)
   edits.labels = w.labels.map((l) => ({ ...l }))
@@ -940,7 +966,7 @@ slider($('#region-neck'), {
   min: 2,
   max: 40,
   step: 1,
-  fmt: (v) => `${Math.round(v)} 格`,
+  fmt: (v) => t('{n} 格', { n: Math.round(v) }),
   get: () => neck,
   set: (v) => (neck = v),
 })
@@ -957,7 +983,7 @@ $('#region-auto').addEventListener('click', () => {
   for (const v of reg) n = Math.max(n, v + 1)
   const meta = Array.from({ length: n }, (_, id) => {
     const hit = old.find((l) => reg[Math.min(H - 1, Math.round(l.y)) * W + Math.min(W - 1, Math.round(l.x))] === id)
-    return hit ? { name: hit.name, zh: hit.zh } : { name: `Terra ${id + 1}`, zh: `新大洲${id + 1}` }
+    return hit ? { name: hit.name, zh: hit.zh, ja: hit.ja } : { name: `Terra ${id + 1}`, zh: `新大洲${id + 1}`, ja: `テラ${id + 1}` }
   })
   pushUndo()
   edits.regions = reg
@@ -972,10 +998,12 @@ function showRegionInspector(id: number) {
   if (!m) return
   $<HTMLInputElement>('#region-zh').value = m.zh
   $<HTMLInputElement>('#region-name').value = m.name
+  $<HTMLInputElement>('#region-ja').value = m.ja ?? ''
 }
 for (const [sel, key] of [
   ['#region-zh', 'zh'],
   ['#region-name', 'name'],
+  ['#region-ja', 'ja'],
 ] as const) {
   $<HTMLInputElement>(sel).addEventListener('input', (e) => {
     const m = edits.regionMeta?.[editor?.selectedRegion ?? -1]
@@ -995,5 +1023,31 @@ $('#region-delete').addEventListener('click', () => {
   editor!.selectRegion(-1)
 })
 
+
+// —— 语言 ——
+bindStatic()
+document.title = t('Cartographer · 世界地图生成器')
+document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang
+for (const sel of document.querySelectorAll<HTMLSelectElement>('select.lang')) {
+  sel.innerHTML = LANGS.map((l) => `<option value="${l.id}">${l.label}</option>`).join('')
+  sel.value = lang
+  sel.addEventListener('change', () => setLang(sel.value as Lang))
+}
+onLang(async () => {
+  for (const sel of document.querySelectorAll<HTMLSelectElement>('select.lang')) sel.value = lang
+  markDirty(dirtyNow)
+  updateHint()
+  sliders.forEach((f) => f())
+  probe.classList.add('hidden')
+  if (!world) return
+  showStats(world)
+  // 地图文字：纸图重排版、3D 地名与铭牌、编辑视图地名
+  await document.fonts.load(`600 20px ${lang === 'ja' ? '"Noto Serif JP"' : '"Noto Serif SC"'}`, worldTitle(world) + world.labels.map((l) => placeName(l)).join(''))
+  atlasCache.clear()
+  if (mode === '2d') refreshAtlas()
+  scene.refreshLanguage()
+  editor?.draw()
+})
+updateHint()
 
 generate()

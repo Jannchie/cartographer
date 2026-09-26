@@ -84,6 +84,8 @@ export interface Label {
   name: string
   /** 中文名 */
   zh: string
+  /** 日文名 */
+  ja?: string
   x: number
   y: number
   /** 文字旋转角（弧度） */
@@ -138,10 +140,11 @@ export interface WorldEdits {
   /** 大洲区域：每格所属大洲序号，-1 为不属于任何大洲 */
   regions?: Int16Array
   /** 大洲名称（下标即区域序号） */
-  regionMeta?: { name: string; zh: string }[]
+  regionMeta?: { name: string; zh: string; ja?: string }[]
   /** 世界名（编辑后固定，不随重算变化） */
   worldName?: string
   worldNameZh?: string
+  worldNameJa?: string
   /** 地形编辑的版本号：变了才需要重算侵蚀 */
   terrainRev?: number
 }
@@ -171,6 +174,7 @@ export interface World {
   roads: Road[]
   worldName: string
   worldNameZh: string
+  worldNameJa: string
   /** 每格代表的公里数 */
   kmPerCell: number
   stats: { land: number; peak: number; trench: number; lakes: number; rivers: number; ms: number }

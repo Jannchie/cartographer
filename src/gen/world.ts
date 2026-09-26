@@ -1,4 +1,5 @@
 import { buildRoads } from './roads'
+import { JaNamer } from './names_ja'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
@@ -148,9 +149,13 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   const lang = new Language(rNames)
   const zh = new ZhNamer(p.seed)
   const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, lang, rPlace, terr.basins)
-  for (const l of generated) l.zh = zh.name(l.kind, l.name)
+  const ja = new JaNamer()
+  for (const l of generated) {
+    l.zh = zh.name(l.kind, l.name)
+    l.ja = ja.name(l.kind, l.name)
+  }
   // 地点编辑：用户改过的列表整体替换生成结果（政区按新的都城重算）
-  const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || zh.name(l.kind, l.name) })) : generated
+  const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || zh.name(l.kind, l.name), ja: l.ja || ja.name(l.kind, l.name) })) : generated
   const { realm, realms } = buildRealms(elev, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W), lang, zh, rPlace.fork())
   progress('道路与航线', 0.97)
   const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W))
@@ -184,6 +189,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     roads,
     worldName,
     worldNameZh: edits.worldNameZh ?? zh.name('world', worldName),
+    worldNameJa: edits.worldNameJa ?? ja.name('world', worldName),
     kmPerCell,
     stats: {
       land: land / N,

@@ -1,4 +1,5 @@
 import type { World } from '../../gen/types'
+import { cjkFont, lang, placeName, t as tr, worldTitle } from '../../i18n'
 import type { SmoothRiver } from '../rivers'
 import { drawRivers } from '../rivers'
 import { Fields } from './fields'
@@ -23,14 +24,16 @@ export { Fields }
 
 const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
 
-/** 按风格加载所需字体；中文字体按实际用到的字取子集 */
+/** 按风格加载所需字体；中文、日文字体按实际用到的字取子集 */
 export async function ensureFonts(world: World, id: StyleId) {
   const t = themeById(id)
   const fams = new Set<string>()
   for (const f of [t.labels.display, t.labels.text]) fams.add(f.split(',')[0].trim())
-  const text = t.labels.zh
-    ? [...world.labels.map((l) => l.zh), ...world.realms.map((r) => r.zh), world.worldNameZh, '舆地全图种子公里'].join('') + world.params.seed
-    : undefined
+  let text: string | undefined
+  if (lang !== 'en') {
+    for (const f of [cjkFont(lang), cjkFont(lang, true)]) fams.add(f.split(',')[0].trim())
+    text = [...world.labels.map((l) => placeName(l)), worldTitle(world), tr('{name}舆地全图', { name: '' }), tr('种子 {seed}', { seed: '' }), tr('公里'), tr('海拔（米）')].join('') + world.params.seed
+  }
   const loads: Promise<unknown>[] = []
   for (const fam of fams) {
     for (const style of ['400', '600', 'italic 400']) loads.push(document.fonts.load(`${style} 20px ${fam}`, text))

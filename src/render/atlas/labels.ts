@@ -1,4 +1,5 @@
 import type { Label, World } from '../../gen/types'
+import { cjkFont, lang, placeName } from '../../i18n'
 import { REALM_COLORS, type Theme } from './styles'
 
 interface Box {
@@ -50,10 +51,11 @@ export class LabelLayer {
   style(kind: Kind, weight: number): TextStyle {
     const L = this.theme.labels
     const k = this.S / 2
-    const zh = L.zh
-    const vertical = L.vertical.includes(kind)
+    // 中文、日文：可竖排，不用斜体、不大写，字距收紧；字体后面接对应语言的 CJK 字体
+    const zh = lang !== 'en'
+    const vertical = zh && L.vertical.includes(kind)
     const caps = L.caps && !zh
-    const f = (style: string, size: number, fam: string) => ({ font: `${style} ${size * k}px ${fam}`, size: size * k })
+    const f = (style: string, size: number, fam: string) => ({ font: `${style} ${size * k}px ${fam}, ${cjkFont(lang)}`, size: size * k })
     const halo = !(L.noHalo ?? NO_HALO).includes(kind)
     const base = (o: ReturnType<typeof f>, color: string, spacing: number, upper: boolean): TextStyle => ({
       ...o,
@@ -174,7 +176,7 @@ export class LabelLayer {
     const r = (big ? 4.2 : 2.6) * k
     const dot = { x0: x - r - 1, y0: y - r - 1, x1: x + r + 1, y1: y + r + 1 }
     if (this.hit(dot)) return
-    const name = this.theme.labels.zh ? l.zh : l.name
+    const name = placeName(l)
     ctx.font = st.font
     const tw = [...name].reduce((a, ch) => a + ctx.measureText(ch).width, 0) + st.spacing * st.size * (name.length - 1)
     const size = st.size
@@ -280,7 +282,6 @@ export class LabelLayer {
   all() {
     const { world, S, theme } = this
     const k = S / 2
-    const zh = theme.labels.zh
     const order: Kind[] = ['ocean', 'realm', 'continent', 'capital', 'range', 'sea', 'city', 'island', 'lake', 'desert', 'basin', 'forest']
     const capitals = new Set(theme.realms ? world.realms.map((r) => r.capital) : [])
     type Item = { kind: Kind; weight: number; label?: Label; realm?: number }
@@ -296,7 +297,7 @@ export class LabelLayer {
         const st = this.style('realm', r.area)
         const c = REALM_COLORS[r.color]
         const col = `rgb(${c.map((v) => Math.round(v * 0.42)).join(',')})`
-        const name = zh ? r.zh : r.name
+        const name = placeName(r)
         for (const [ox, oy] of [[0, 0], [0, -30 * k], [0, 30 * k], [-50 * k, 0], [50 * k, 0]]) {
           if (world.realm[Math.round(r.y + oy / S) * world.W + Math.round(r.x + ox / S)] !== it.realm) continue
           if (this.text(name, r.x * S + ox, r.y * S + oy, 0, st, true, col)) break
@@ -309,7 +310,7 @@ export class LabelLayer {
         continue
       }
       const st = this.style(l.kind, l.weight)
-      const name = zh ? l.zh : l.name
+      const name = placeName(l)
       const r = Math.max(30 * k, Math.min(120 * k, l.span * S * 0.25))
       const offs = [[0, 0], [0, -r * 0.5], [0, r * 0.5], [-r, 0], [r, 0], [-r, -r * 0.6], [r, r * 0.6], [r, -r * 0.6], [-r, r * 0.6], [-2 * r, 0], [2 * r, 0], [0, -r], [0, r]]
       const water = l.kind === 'ocean' || l.kind === 'sea'
