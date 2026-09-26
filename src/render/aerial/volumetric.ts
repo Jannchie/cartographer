@@ -238,11 +238,24 @@ const MARCH_FRAG = /* glsl */ `
       t1 = max(a, b);
     }
     t1 = min(t1, min(sceneDist, 700.0));
+    // 再与沙盘上空的方柱求交：平视时视线在云层里的路径很长，只算沙盘范围内的那一段
+    {
+      vec2 inv = 1.0 / (sign(dir.xz) * max(abs(dir.xz), vec2(1e-5)) + vec2(equal(dir.xz, vec2(0.0))) * 1e-5);
+      vec2 ta = (uMapRect.xy - uCamPos.xz) * inv;
+      vec2 tb = (uMapRect.xy + uMapRect.zw - uCamPos.xz) * inv;
+      vec2 tmin = min(ta, tb), tmax = max(ta, tb);
+      t0 = max(t0, max(tmin.x, tmin.y));
+      t1 = min(t1, min(tmax.x, tmax.y));
+    }
     if (t1 <= t0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
-    int N = int(uSteps);
-    float dt = (t1 - t0) / uSteps;
-    float t = t0 + dt * hash12(gl_FragCoord.xy + fract(uTime) * 91.0);
+    // 步长有上限：平视时路径长，按长度增加步数，而不是把步子拉大到跨过整朵云
+    float maxStep = (uTop - uBase) * 0.12;
+    int N = int(clamp(ceil((t1 - t0) / maxStep), uSteps * 0.5, 128.0));
+    float dt = (t1 - t0) / float(N);
+    // 固定的逐像素抖动（交错梯度噪声）：不随帧变化，平视时不再闪烁
+    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float t = t0 + dt * ign;
     vec3 L = normalize(uSun);
     float cosT = dot(dir, L);
     float phase = mix(HG(cosT, 0.62), HG(cosT, -0.22), 0.35) * 4.0 * 3.14159;

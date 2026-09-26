@@ -144,6 +144,7 @@ vec4 gMask2;
 float gDune;
 vec3 gEr;
 float gErK;
+float gPlainK;
 uniform vec2 uColorSize;
 uniform vec2 uMaskSize;
 vec2 sharpUv(vec2 uv, vec2 size, vec2 warp) {
@@ -166,6 +167,32 @@ vec3 crownCell(vec2 p) {
     if (dd < d) { d = dd; off = v; }
   }
   return vec3(off, sqrt(d));
+}
+/** 树冠格（带每格随机数）：返回 (像素相对树心的偏移.xy, 距离, 该树的随机数) */
+vec4 crownCell2(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  float d = 9.0;
+  vec2 off = vec2(0.0);
+  float hid = 0.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y));
+    vec2 o = vec2(hash12(i + g), hash12(i + g + 19.19)) * 0.9 + 0.05;
+    vec2 v = f - (g + o);
+    float dd = dot(v, v);
+    if (dd < d) { d = dd; off = v; hid = hash12(i + g + 7.7); }
+  }
+  return vec4(off, sqrt(d), hid);
+}
+/** 不规则树冠：每棵大小不同，轮廓起伏，冠内有叶团明暗 */
+float crownShade2(vec4 c, vec3 L) {
+  float r = 0.3 + 0.3 * c.w;
+  float ang = atan(c.y, c.x);
+  float rr = r * (0.86 + 0.1 * sin(ang * 5.0 + c.w * 40.0) + 0.06 * sin(ang * 9.0 + c.w * 17.0));
+  if (c.z > rr) return 0.45 + 0.1 * c.w;
+  vec2 q = c.xy / rr;
+  vec3 n = normalize(vec3(q.x, sqrt(max(0.0, 1.0 - dot(q, q))) * 1.1, q.y));
+  float lobes = vnoise(c.xy * 9.0 + c.w * 31.0);
+  return (0.5 + 0.75 * max(dot(n, L), 0.0)) * (0.82 + 0.3 * lobes);
 }
 /** 把每棵树当成半球：受光面亮、背光面与树间空隙暗 */
 float crownShade(vec3 c, vec3 L, float r) {
@@ -200,7 +227,12 @@ vec3 wN0 = normalize(inverseTransformDirection(normalize(vNormal), viewMatrix));
 float slope = 1.0 - wN0.y;
 // 顺坡的细冲沟（侵蚀噪声）：颜色与法线共用一次计算
 gErK = smoothstep(0.08, 0.4, slope) * smoothstep(0.15, 0.8, hKm) * gLod1;
-gEr = gErK > 0.001 ? erosionNoise(P, -wN0.xz / max(wN0.y, 0.25), 3, 9.0) : vec3(0.5, 0.0, 0.0);
+// 平原：坡度很小，按坡向单位化后驱动，得到顺坡汇集的细小汇水沟
+gPlainK = (1.0 - smoothstep(0.06, 0.2, slope)) * smoothstep(0.003, 0.03, hKm) * gLod1;
+vec2 gg = -wN0.xz / max(wN0.y, 0.25);
+vec2 gdir = gg / max(length(gg), 1e-5);
+vec2 gIn = mix(gdir * 0.6, gg, smoothstep(0.08, 0.3, slope));
+gEr = (gErK > 0.001 || gPlainK > 0.001) ? erosionNoise(P, gIn, 3, 9.0) : vec3(0.5, 0.0, 0.0);
 vec3 col = base;
 if (hKm > 0.0) {
   // 大尺度色相起伏
@@ -244,13 +276,17 @@ if (hKm > 0.0) {
   float reed = smoothstep(0.7, 0.76, pn) * smoothstep(0.5, 0.9, m2.b) * gLod1;
   col = mix(col, col * vec3(0.7, 0.85, 0.7), reed * 0.6);
   col = mix(col, vec3(0.1, 0.15, 0.18), pond * 0.85);
+  // 平原汇水细沟：沟里湿润、植被更深更绿（沙地与雪地不画）
+  float rill = 1.0 - smoothstep(0.1, 0.55, gEr.x);
+  col = mix(col, col * vec3(0.7, 0.86, 0.68), rill * gPlainK * (1.0 - gMask.g) * 0.85);
+  col *= mix(1.0, 0.86 + 0.26 * smoothstep(0.3, 0.9, gEr.x), gPlainK);
   // 树冠
   float f = gMask.r;
   if (f > 0.01) {
     vec3 Ls = normalize(uSun);
     // 单株树冠 + 近景细冠；远处淡出为均匀的林冠色，不再出现大块斑
-    float s1 = crownShade(crownCell(P * 16.0), Ls, 0.6);
-    float s2 = crownShade(crownCell(P * 44.0), Ls, 0.56);
+    float s1 = crownShade2(crownCell2(P * 16.0), Ls);
+    float s2 = crownShade2(crownCell2(P * 44.0 + 3.1), Ls);
     float crown = mix(0.8, s1, gLod1 * 0.8) * mix(0.9, s2, gLod2 * 0.7);
     vec3 leaf = base * mix(vec3(0.74, 0.8, 0.72), vec3(1.14, 1.16, 1.02), clamp(crown * 0.95, 0.0, 1.0));
     leaf *= mix(vec3(0.95, 1.0, 0.92), vec3(1.05, 1.02, 0.85), fbm3(P * 3.1 + 7.0));
@@ -269,7 +305,7 @@ if (hKm > 0.0) {
     col = mix(col, soil, a * 0.8);
     // 沙海：橙黄色的沙丘区（沙脊的明暗在法线阶段）
     gDune = smoothstep(0.6, 0.9, a) * smoothstep(0.25, 0.55, gMask.g) * (1.0 - smoothstep(0.08, 0.2, slope)) * smoothstep(0.02, 0.1, hKm);
-    col = mix(col, pow(vec3(0.86, 0.67, 0.44), vec3(2.2)) * (0.92 + 0.12 * fbm3(P * 6.0)), gDune * 0.7);
+    col = mix(col, pow(vec3(0.86, 0.67, 0.44), vec3(2.2)) * (0.92 + 0.12 * fbm3(P * 6.0)), gDune * 0.45);
     // 砾漠：平地上深色的荒漠漆斑（坡面不画，否则像水渍）
     float rocky = a * (1.0 - gDune) * (1.0 - smoothstep(0.04, 0.12, slope));
     float varn = smoothstep(0.55, 0.75, fbm3(P * 7.0 + wv * 4.0));
@@ -324,6 +360,7 @@ if (vWorld.y > 0.0 && uDetail > 0.0) {
   vec3 dW = vec3(0.0);
   // 逐像素风化法线：沿当前坡向的细冲沟（相当于一张程序化的侵蚀法线贴图）
   if (gErK > 0.001) dW += vec3(-gEr.y, 0.0, -gEr.z) * 0.0032 * gErK * uDetail;
+  if (gPlainK > 0.001) dW += vec3(-gEr.y, 0.0, -gEr.z) * 0.0022 * gPlainK * uDetail;
   // 沙丘：迎风缓坡、背风陡坡的新月形沙脊，沙脊随区域风向弯曲
   if (gDune > 0.01 && fw < 0.012) {
     // 盛行风向全图一致（随位置变化的风向会让相位绕成同心环）
@@ -335,7 +372,7 @@ if (vWorld.y > 0.0 && uDetail > 0.0) {
     float c = fract(u);
     // 迎风缓坡、背风陡坡，脊顶圆滑
     float dh = mix(1.0 / 0.72, -1.0 / 0.28, smoothstep(0.66, 0.78, c)) * smoothstep(0.0, 0.08, c);
-    float A = 0.003 * (0.35 + 0.65 * smoothstep(0.2, 0.8, vnoise(vec2(along * 20.0, floor(u) * 1.7))));
+    float A = 0.0014 * (0.35 + 0.65 * smoothstep(0.2, 0.8, vnoise(vec2(along * 20.0, floor(u) * 1.7))));
     float dl = 1.0 - smoothstep(0.004, 0.012, fw);
     dW -= vec3(wd.x, 0.0, wd.y) * A * 24.0 * dh * gDune * dl;
   }

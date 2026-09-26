@@ -18,7 +18,8 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
   const idx: number[] = []
   const toX = (gx: number) => ((gx - 0.5) / (W - 1) - 0.5) * SX
   const toZ = (gy: number) => ((gy - 0.5) / (H - 1) - 0.5) * SZ
-  for (const r of rivers) {
+  for (const r0 of rivers) {
+    const r = extendToWater(world, r0)
     const n = r.xs.length
     if (n < 2) continue
     const base = pos.length / 3
@@ -108,4 +109,63 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
   mesh.renderOrder = 1
   mesh.frustumCulled = false
   return { mesh, mat }
+}
+
+/**
+ * 入海口 / 入湖口：河道点列止于最后一个陆地格，离水边还差一段。
+ * 沿末端方向继续延伸到水面以下，伸进水里的部分被水面盖住，河口因此严丝合缝。
+ */
+function extendToWater(world: World, r: SmoothRiver): SmoothRiver {
+  const n = r.xs.length
+  if (n < 2) return r
+  const { W, H, elevation: e, water } = world
+  const wetAt = (x: number, y: number) => {
+    // 河道坐标以格左上角为原点，格心在 +0.5
+    const gx = Math.min(W - 1, Math.max(0, Math.round(x - 0.5)))
+    const gy = Math.min(H - 1, Math.max(0, Math.round(y - 0.5)))
+    const i = gy * W + gx
+    return e[i] <= 0 || !Number.isNaN(water[i])
+  }
+  // 末端方向取最后约 2 格的平均走向，避免被蜿蜒的最后一小段带偏
+  const x1 = r.xs[n - 1]
+  const y1 = r.ys[n - 1]
+  let k = n - 2
+  while (k > 0 && Math.hypot(x1 - r.xs[k], y1 - r.ys[k]) < 2) k--
+  let dx = x1 - r.xs[k]
+  let dy = y1 - r.ys[k]
+  const dl = Math.hypot(dx, dy) || 1
+  dx /= dl
+  dy /= dl
+  const xs: number[] = []
+  const ys: number[] = []
+  const f = r.fl[n - 1]
+  let reached = false
+  for (let s = 0.35; s <= 3.5; s += 0.35) {
+    const x = x1 + dx * s
+    const y = y1 + dy * s
+    xs.push(x)
+    ys.push(y)
+    if (wetAt(x, y)) {
+      // 再多伸一小段进水里
+      xs.push(x + dx * 0.8)
+      ys.push(y + dy * 0.8)
+      reached = true
+      break
+    }
+  }
+  if (!reached) return r
+  const m = xs.length
+  const ox = new Float32Array(n + m)
+  const oy = new Float32Array(n + m)
+  const of = new Float32Array(n + m)
+  ox.set(r.xs)
+  oy.set(r.ys)
+  of.set(r.fl)
+  for (let j = 0; j < m; j++) {
+    ox[n + j] = xs[j]
+    oy[n + j] = ys[j]
+    // 河口略微展宽
+    of[n + j] = f * (1 + (j + 1) / m)
+  }
+  return { xs: ox, ys: oy, fl: of }
 }
