@@ -1,30 +1,30 @@
+import type { DisplayList, Matrix } from './displayList'
+import { pathBBox, transformBBox } from './displayList'
+
 /**
  * 录制型 Canvas2D：实现地图叠加层用到的那部分 CanvasRenderingContext2D 接口，
- * 每次 fill / stroke / fillText 输出一个 SVG 元素。于是河流、符号、注记、罗盘、图框等
- * 现有的绘制代码无需改动，就能同时产出位图和矢量图。
+ * 每次 fill / stroke / fillText 生成一条显示列表指令。于是河流、符号、注记、罗盘、
+ * 图框等现有的绘制代码无需改动，就能同时产出位图与矢量。
  */
 
-type M = [number, number, number, number, number, number]
-
 interface State {
-  m: M
+  m: Matrix
   fillStyle: string
   strokeStyle: string
   lineWidth: number
-  lineCap: string
-  lineJoin: string
+  lineCap: CanvasLineCap
+  lineJoin: CanvasLineJoin
   dash: number[]
   alpha: number
   font: string
   textAlign: CanvasTextAlign
   textBaseline: CanvasTextBaseline
-  clip: string | null
   composite: string
 }
 
 const num = (v: number) => (Math.round(v * 100) / 100).toString()
 
-function mul(a: M, b: M): M {
+function mul(a: Matrix, b: Matrix): Matrix {
   return [
     a[0] * b[0] + a[2] * b[1],
     a[1] * b[0] + a[3] * b[1],
@@ -35,20 +35,18 @@ function mul(a: M, b: M): M {
   ]
 }
 
-function esc(s: string) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-/** 把 rgba()/rgb()/#hex 拆成颜色 + 不透明度（SVG 1.1 查看器不认 rgba） */
+/** 把 rgba()/rgb()/#hex 拆成颜色 + 不透明度 */
 function color(c: string): [string, number] {
   const m = c.match(/^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/)
   if (m) return [`rgb(${Math.round(+m[1])},${Math.round(+m[2])},${Math.round(+m[3])})`, +m[4]]
   return [c, 1]
 }
 
-export class SvgContext {
-  private out: (string | { d: string[]; a: string })[] = []
-  private defs: string[] = []
+const isIdentity = (m: Matrix) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0
+
+export class Recorder {
+  /** 当前写入的坐标空间 */
+  space: 'page' | 'map' = 'map'
   private stack: State[] = []
   private st: State = {
     m: [1, 0, 0, 1, 0, 0],
@@ -62,19 +60,14 @@ export class SvgContext {
     font: '10px sans-serif',
     textAlign: 'start',
     textBaseline: 'alphabetic',
-    clip: null,
     composite: 'source-over',
   }
   private path: string[] = []
-  /** 上一个 path 元素的样式签名，相同则合并 d，减小体积 */
-  private last: { d: string[]; a: string } | null = null
-  private clipId = 0
-  /** 用于 measureText 的真实画布 */
-  private measurer: CanvasRenderingContext2D
 
-  constructor(measurer: CanvasRenderingContext2D) {
-    this.measurer = measurer
-  }
+  constructor(
+    private list: DisplayList,
+    private measurer: CanvasRenderingContext2D,
+  ) {}
 
   // —— 状态属性 ——
   get fillStyle() {
@@ -95,10 +88,10 @@ export class SvgContext {
   set lineWidth(v: number) {
     this.st.lineWidth = v
   }
-  set lineCap(v: string) {
+  set lineCap(v: CanvasLineCap) {
     this.st.lineCap = v
   }
-  set lineJoin(v: string) {
+  set lineJoin(v: CanvasLineJoin) {
     this.st.lineJoin = v
   }
   get globalAlpha() {
@@ -127,7 +120,7 @@ export class SvgContext {
   }
 
   save() {
-    this.stack.push({ ...this.st, m: [...this.st.m] as M, dash: [...this.st.dash] })
+    this.stack.push({ ...this.st, m: [...this.st.m] as Matrix, dash: [...this.st.dash] })
   }
   restore() {
     const s = this.stack.pop()
@@ -145,7 +138,7 @@ export class SvgContext {
     this.st.m = mul(this.st.m, [x, 0, 0, y, 0, 0])
   }
 
-  // —— 路径 ——
+  // —— 路径（全部用绝对坐标，便于求包围盒） ——
   beginPath() {
     this.path = []
   }
@@ -162,11 +155,10 @@ export class SvgContext {
     this.path.push('Z')
   }
   rect(x: number, y: number, w: number, h: number) {
-    this.path.push(`M${num(x)} ${num(y)}h${num(w)}v${num(h)}h${num(-w)}Z`)
+    this.path.push(`M${num(x)} ${num(y)}L${num(x + w)} ${num(y)}L${num(x + w)} ${num(y + h)}L${num(x)} ${num(y + h)}Z`)
   }
   arc(x: number, y: number, r: number, a0: number, a1: number) {
-    const full = Math.abs(a1 - a0) >= Math.PI * 2 - 1e-6
-    if (full) {
+    if (Math.abs(a1 - a0) >= Math.PI * 2 - 1e-6) {
       this.path.push(`M${num(x + r)} ${num(y)}A${num(r)} ${num(r)} 0 1 1 ${num(x - r)} ${num(y)}A${num(r)} ${num(r)} 0 1 1 ${num(x + r)} ${num(y)}`)
       return
     }
@@ -182,41 +174,44 @@ export class SvgContext {
       this.path.push(`M${num(x + rx)} ${num(y)}A${num(rx)} ${num(ry)} 0 1 1 ${num(x - rx)} ${num(y)}A${num(rx)} ${num(ry)} 0 1 1 ${num(x + rx)} ${num(y)}`)
     }
   }
-
-  private attrs(): string {
-    const m = this.st.m
-    let a = ''
-    if (!(m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0)) a += ` transform="matrix(${m.map(num).join(' ')})"`
-    if (this.st.alpha < 1) a += ` opacity="${num(this.st.alpha)}"`
-    if (this.st.clip) a += ` clip-path="url(#${this.st.clip})"`
-    return a
+  clip() {
+    // 叠加层的绘制代码不使用裁剪
   }
 
-  private emitPath(attrs: string) {
+  private get m(): Matrix | undefined {
+    return isIdentity(this.st.m) ? undefined : ([...this.st.m] as Matrix)
+  }
+
+  /** 与上一条指令样式完全相同则合并路径，减小体积、加快绘制 */
+  private emit(fill: boolean) {
+    if (this.st.composite !== 'source-over' || !this.path.length) return
     const d = this.path.join('')
-    const last = this.out[this.out.length - 1]
-    if (this.last && last === this.last && this.last.a === attrs) {
-      this.last.d.push(d)
+    const m = this.m
+    const seg = this.list.segment(this.space)
+    const last = seg.items[seg.items.length - 1]
+    const [c, a] = color(fill ? this.st.fillStyle : this.st.strokeStyle)
+    const fillP = fill ? { color: c, alpha: a } : undefined
+    const strokeP = fill
+      ? undefined
+      : { color: c, alpha: a, width: this.st.lineWidth, dash: this.st.dash.length ? [...this.st.dash] : undefined, cap: this.st.lineCap, join: this.st.lineJoin }
+    const sig = JSON.stringify([fillP, strokeP, m, this.st.alpha])
+    if (last && last.k === 'path' && (last as unknown as { sig?: string }).sig === sig) {
+      last.d += d
+      const b = transformBBox(pathBBox(d), m)
+      const r = (strokeP?.width ?? 0) * 2 + 1
+      last.bbox = [Math.min(last.bbox[0], b[0] - r), Math.min(last.bbox[1], b[1] - r), Math.max(last.bbox[2], b[2] + r), Math.max(last.bbox[3], b[3] + r)]
+      last.p2d = undefined
       return
     }
-    this.last = { d: [d], a: attrs }
-    this.out.push(this.last)
+    const it = this.list.path(this.space, d, { fill: fillP, stroke: strokeP, m, opacity: this.st.alpha })
+    if (it) (it as unknown as { sig?: string }).sig = sig
   }
 
   fill() {
-    if (this.st.composite !== 'source-over' || !this.path.length) return
-    const [c, o] = color(this.st.fillStyle)
-    this.emitPath(` fill="${c}"${o < 1 ? ` fill-opacity="${num(o)}"` : ''}${this.attrs()}`)
+    this.emit(true)
   }
   stroke() {
-    if (this.st.composite !== 'source-over' || !this.path.length) return
-    const [c, o] = color(this.st.strokeStyle)
-    let a = ` stroke="${c}" stroke-width="${num(this.st.lineWidth)}"`
-    if (o < 1) a += ` stroke-opacity="${num(o)}"`
-    if (this.st.lineCap !== 'butt') a += ` stroke-linecap="${this.st.lineCap}"`
-    if (this.st.lineJoin !== 'miter') a += ` stroke-linejoin="${this.st.lineJoin}"`
-    if (this.st.dash.length) a += ` stroke-dasharray="${this.st.dash.map(num).join(' ')}"`
-    this.emitPath(` fill="none"${a}${this.attrs()}`)
+    this.emit(false)
   }
   fillRect(x: number, y: number, w: number, h: number) {
     this.beginPath()
@@ -230,58 +225,41 @@ export class SvgContext {
     this.stroke()
     this.beginPath()
   }
-  clip() {
-    const id = `c${++this.clipId}`
-    const m = this.st.m
-    this.defs.push(`<clipPath id="${id}"><path d="${this.path.join('')}" transform="matrix(${m.map(num).join(' ')})"/></clipPath>`)
-    this.st.clip = id
-  }
 
   // —— 文字 ——
   measureText(t: string) {
     this.measurer.font = this.st.font
     return this.measurer.measureText(t)
   }
-  private text(t: string, x: number, y: number, paint: string) {
-    const anchor = this.st.textAlign === 'center' ? 'middle' : this.st.textAlign === 'right' || this.st.textAlign === 'end' ? 'end' : 'start'
+  private text(t: string, x: number, y: number, stroke: boolean) {
+    const align = this.st.textAlign === 'center' ? 'middle' : this.st.textAlign === 'right' || this.st.textAlign === 'end' ? 'end' : 'start'
     const bl = this.st.textBaseline
-    const base = bl === 'middle' ? 'central' : bl === 'top' || bl === 'hanging' ? 'hanging' : bl === 'bottom' ? 'text-after-edge' : 'auto'
-    this.out.push(
-      `<text x="${num(x)}" y="${num(y)}" style="font:${esc(this.st.font)}" text-anchor="${anchor}"${base !== 'auto' ? ` dominant-baseline="${base}"` : ''} ${paint}${this.attrs()}>${esc(t)}</text>`,
-    )
-  }
-  fillText(t: string, x: number, y: number) {
-    const [c, o] = color(this.st.fillStyle)
-    this.text(t, x, y, `fill="${c}"${o < 1 ? ` fill-opacity="${num(o)}"` : ''}`)
-  }
-  strokeText(t: string, x: number, y: number) {
-    const [c, o] = color(this.st.strokeStyle)
-    this.text(
+    const baseline = bl === 'middle' ? 'central' : bl === 'top' || bl === 'hanging' ? 'hanging' : bl === 'bottom' ? 'text-after-edge' : 'auto'
+    // 估算包围盒
+    this.measurer.font = this.st.font
+    const w = this.measurer.measureText(t).width
+    const size = parseFloat(this.st.font.match(/([\d.]+)px/)?.[1] ?? '12')
+    const bx0 = align === 'middle' ? x - w / 2 : align === 'end' ? x - w : x
+    const bb = transformBBox([bx0 - 4, y - size * 1.2, bx0 + w + 4, y + size * 1.2], this.m)
+    const [c, a] = color(stroke ? this.st.strokeStyle : this.st.fillStyle)
+    this.list.text(this.space, {
       t,
       x,
       y,
-      `fill="none" stroke="${c}" stroke-width="${num(this.st.lineWidth)}" stroke-linejoin="round"${o < 1 ? ` stroke-opacity="${num(o)}"` : ''}`,
-    )
+      font: this.st.font,
+      align,
+      baseline,
+      fill: stroke ? undefined : { color: c, alpha: a },
+      stroke: stroke ? { color: c, alpha: a, width: this.st.lineWidth } : undefined,
+      m: this.m,
+      opacity: this.st.alpha,
+      bbox: bb,
+    })
   }
-
-  // —— 直接写入原始 SVG ——
-  raw(s: string) {
-    this.out.push(s)
+  fillText(t: string, x: number, y: number) {
+    this.text(t, x, y, false)
   }
-  def(s: string) {
-    this.defs.push(s)
-  }
-  get currentClip() {
-    return this.st.clip
-  }
-
-  toString(width: number, height: number, head = '') {
-    return (
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-      head +
-      `<defs>${this.defs.join('')}</defs>` +
-      this.out.map((o) => (typeof o === 'string' ? o : `<path d="${o.d.join('')}"${o.a}/>`)).join('\n') +
-      `</svg>`
-    )
+  strokeText(t: string, x: number, y: number) {
+    this.text(t, x, y, true)
   }
 }

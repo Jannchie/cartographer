@@ -1,6 +1,8 @@
 import { latitudeOf } from './gen/climate'
 import { BIOME_NAMES, DEFAULT_PARAMS, type World, type WorldParams } from './gen/types'
-import { THEMES, ensureFonts, renderAtlas, type StyleId } from './render/atlas'
+import { THEMES, ensureFonts, type StyleId } from './render/atlas'
+import type { DisplayList } from './render/atlas/svg/displayList'
+import { AtlasViewer } from './render/atlas/svg/viewer'
 import { smoothRivers, type SmoothRiver } from './render/rivers'
 import { Scene3D, type View3DOptions } from './render/scene3d'
 import { buildPhysicalTexture } from './render/texture'
@@ -15,7 +17,8 @@ const view3d: View3DOptions = { exaggeration: 28, trees: false, labels: true, su
 const atlasOpts = { labels: true, contours: true, graticule: true }
 let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
 /** 每种风格缓存一份 SVG 源码（预览与导出共用） */
-const atlasCache = new Map<string, { svg: string; width: number; height: number }>()
+/** 每种风格缓存一份矢量显示列表（预览、SVG 导出、PNG 导出共用） */
+const atlasCache = new Map<string, DisplayList>()
 let world: World | null = null
 let rivers: SmoothRiver[] = []
 /** 当前预览的纸图尺寸（像素，与导出一致） */
@@ -297,36 +300,39 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
 $('#generate').addEventListener('click', generate)
 
 let atlasJob = 0
+let viewer: AtlasViewer | null = null
+async function buildList(w: World, style: StyleId) {
+  let list = atlasCache.get(style)
+  if (list) return list
+  const { buildAtlasVector } = await import('./render/atlas/svg/vector')
+  const measurer = document.createElement('canvas').getContext('2d')!
+  list = buildAtlasVector(w, rivers, style, atlasOpts, measurer, 2)
+  atlasCache.set(style, list)
+  return list
+}
 async function refreshAtlas() {
   if (!world) return
   const w = world
   const style = atlasStyle
   const job = ++atlasJob
-  let c = atlasCache.get(style)
-  if (!c) {
+  if (!atlasCache.has(style)) {
     loading.classList.remove('hidden')
     $('#load-stage').textContent = `矢量绘制${THEMES.find((t) => t.id === style)!.name}`
     $('#load-bar').style.width = '100%'
     await ensureFonts(w, style)
     await new Promise((r) => setTimeout(r, 20))
     if (job !== atlasJob || w !== world) return
-    const { renderAtlasSvg } = await import('./render/atlas/svg/vector')
-    const measurer = document.createElement('canvas').getContext('2d')!
-    const svg = renderAtlasSvg(w, rivers, style, atlasOpts, measurer, 2)
-    const m = svg.match(/width="(\d+)" height="(\d+)"/)!
-    c = { svg, width: +m[1], height: +m[2] }
-    atlasCache.set(style, c)
-    loading.classList.add('hidden')
   }
+  const list = await buildList(w, style)
+  loading.classList.add('hidden')
   if (job !== atlasJob) return
-  const keepView = atlasCanvas !== null && atlasCanvas.width === c.width && atlasCanvas.height === c.height
-  atlasCanvas = { width: c.width, height: c.height }
-  // 直接内联 SVG：缩放时浏览器按矢量重新栅格化，任意放大都清晰
-  const wrap = $('#map-wrap')
-  wrap.innerHTML = c.svg
-  const el = wrap.querySelector('svg')!
-  el.style.display = 'block'
+  const keepView = atlasCanvas !== null && atlasCanvas.width === list.width && atlasCanvas.height === list.height
+  atlasCanvas = { width: list.width, height: list.height }
+  if (!viewer) viewer = new AtlasViewer($('#view2d'))
+  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__viewer = viewer
+  viewer.setList(list)
   if (!keepView) fitMap()
+  else applyMap()
 }
 
 function showStats(w: World) {
@@ -346,18 +352,8 @@ function showStats(w: World) {
 
 // —— 2D 平移缩放 ——
 const map = { x: 0, y: 0, k: 1 }
-// 交互期间让浏览器把 SVG 当位图缩放（流畅），停下后再按矢量重绘（清晰）
-let settleTimer = 0
-let mapRaf = 0
 function applyMap() {
-  cancelAnimationFrame(mapRaf)
-  mapRaf = requestAnimationFrame(() => {
-    const wrap = $('#map-wrap')
-    wrap.style.willChange = 'transform'
-    wrap.style.transform = `translate(${map.x}px, ${map.y}px) scale(${map.k})`
-    clearTimeout(settleTimer)
-    settleTimer = window.setTimeout(() => (wrap.style.willChange = 'auto'), 250)
-  })
+  viewer?.setView(map.x, map.y, map.k)
 }
 function fitMap() {
   if (!atlasCanvas) return
@@ -454,9 +450,12 @@ $('#export').addEventListener('click', async () => {
   let url: string
   if (mode === '3d') url = scene.snapshot()
   else {
-    // 位图导出按需栅格化
+    // 由矢量显示列表按 2 倍分辨率栅格化
     await ensureFonts(world, atlasStyle)
-    url = renderAtlas(world, rivers, atlasStyle, atlasOpts, 2).toDataURL('image/png')
+    await buildList(world, atlasStyle)
+    if (!viewer) viewer = new AtlasViewer($('#view2d'))
+    viewer.setList(atlasCache.get(atlasStyle)!)
+    url = viewer.rasterize(2).toDataURL('image/png')
   }
   const a = document.createElement('a')
   a.href = url
@@ -489,12 +488,7 @@ $('#export-svg').addEventListener('click', async () => {
   await ensureFonts(w, atlasStyle)
   await new Promise((r) => setTimeout(r, 20))
   try {
-    let svg = atlasCache.get(atlasStyle)?.svg
-    if (!svg) {
-      const { renderAtlasSvg } = await import('./render/atlas/svg/vector')
-      const measurer = document.createElement('canvas').getContext('2d')!
-      svg = renderAtlasSvg(w, rivers, atlasStyle, atlasOpts, measurer, 2)
-    }
+    const svg = (await buildList(w, atlasStyle)).toSVG()
     const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
     const a = document.createElement('a')
     a.href = url
