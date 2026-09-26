@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { NOISE_GLSL } from './aerial/glsl'
+import { HEIGHT_GLSL } from './aerial/heightGLSL'
 
 /**
  * 水体着色器（按光学吸收建模）：
@@ -11,12 +12,22 @@ import { NOISE_GLSL } from './aerial/glsl'
  * - 云影、空气透视（雾）、海冰
  * 海洋、湖泊与地图外延伸到地平线的外海共用这一材质。
  */
-export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Texture, colorTex: THREE.Texture, vScale: number, size: THREE.Vector2) {
+export function createWaterMaterial(
+  heightTex: THREE.Texture,
+  tempTex: THREE.Texture,
+  colorTex: THREE.Texture,
+  vScale: number,
+  size: THREE.Vector2,
+  hSize: THREE.Vector2,
+) {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: true,
     uniforms: {
       uHeight: { value: heightTex },
+      uHSize: { value: hSize },
+      uMapSize: { value: size },
+      uDetailKm: { value: 1 },
       uTemp: { value: tempTex },
       uColor: { value: colorTex },
       uVScale: { value: vScale },
@@ -45,7 +56,6 @@ export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Tex
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform sampler2D uHeight;
       uniform sampler2D uTemp;
       uniform sampler2D uColor;
       uniform float uVScale;
@@ -66,6 +76,7 @@ export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Tex
       uniform float uCloudOn;
       varying vec3 vWorld;
       ${NOISE_GLSL}
+      ${HEIGHT_GLSL}
 
       float waves(vec2 p, float lod) {
         float t = uTime;
@@ -80,7 +91,7 @@ export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Tex
       void main() {
         vec2 uv = vec2(vWorld.x / uSize.x + 0.5, vWorld.z / uSize.y + 0.5);
         bool outside = uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0;
-        float terrain = outside ? -4.5 : texture2D(uHeight, uv).r;
+        float terrain = outside ? -4.5 : bicubicHeight(vWorld.xz);
         float level = vWorld.y / uVScale;
         float depth = level - terrain;
         if (depth < 0.0) discard;
@@ -127,7 +138,7 @@ export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Tex
         vec3 T = exp(-absorb * dm * 2.0);
         vec3 scatter = lake ? uLake : uDeep;
         float diff = (max(L.y, 0.0) * 0.8 + 0.2) * cs;
-        vec3 body = bed * T * diff * 1.25 + scatter * (1.0 - T) * (0.6 + 0.4 * cs);
+        vec3 body = bed * T * diff * 1.08 + scatter * (1.0 - T) * (0.6 + 0.4 * cs);
         // 浅水的阳光焦散
         float caust = pow(abs(sin(P.x * 38.0 + h0 * 9.0) * sin(P.y * 41.0 - hx * 9.0)), 6.0) * (1.0 - smoothstep(1.0, 8.0, dm)) * lod;
         body += vec3(0.9, 1.0, 0.95) * caust * 0.12 * cs;

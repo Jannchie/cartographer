@@ -51,9 +51,9 @@ export const ATLAS: Record<number, RGB> = {
 /** 海底：浅滩沙色 → 陆架青绿 → 深海蓝 */
 export function seabed(depthKm: number): RGB {
   const stops: [number, RGB][] = [
-    [0, hex('#efe6cb')],
-    [0.01, hex('#e8dfc2')],
-    [0.03, hex('#d6cfae')],
+    [0, hex('#bfb593')],
+    [0.012, hex('#d9d0b0')],
+    [0.03, hex('#d3cbaa')],
     [0.07, hex('#a9b397')],
     [0.16, hex('#5f7f7c')],
     [0.6, hex('#2c4b5a')],

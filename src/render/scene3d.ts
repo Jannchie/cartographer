@@ -1,10 +1,10 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Biome, type World } from '../gen/types'
-import { createClouds, type CloudLayer } from './aerial/clouds'
 import { buildMaterialMask } from './aerial/mask'
 import { createSky } from './aerial/sky'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
+import { VolumetricClouds } from './aerial/volumetric'
 import { createWaterMaterial } from './water'
 
 export interface View3DOptions {
@@ -44,7 +44,7 @@ export class Scene3D {
   private tempTex: THREE.DataTexture | null = null
   private maskTex: THREE.DataTexture | null = null
   private terrainU: TerrainUniforms | null = null
-  private clouds: CloudLayer | null = null
+  private clouds: VolumetricClouds | null = null
   private sky = createSky()
   private outer: THREE.Mesh | null = null
   private fog = new THREE.FogExp2(HAZE.getHex(), 0.0036)
@@ -110,8 +110,7 @@ export class Scene3D {
       if (!this.active) return
       this.controls.update()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = this.clock.getElapsedTime()
-      if (this.clouds && this.clouds.mesh.visible) this.clouds.update(this.camera)
-      this.renderer.render(this.scene, this.camera)
+      this.renderFrame()
       this.updateLabels()
     }
     loop()
@@ -123,10 +122,19 @@ export class Scene3D {
     return (SX / (w.W * w.kmPerCell)) * this.opts.exaggeration
   }
 
+  /** 航拍且开云时走体积云管线（场景 → 云 → 合成），否则直接渲染 */
+  private renderFrame() {
+    const cloudsOn = this.opts.look === 'aerial' && this.opts.clouds && this.clouds
+    if (cloudsOn) this.clouds!.render(this.renderer, this.scene, this.camera, this.clock.getElapsedTime())
+    else this.renderer.render(this.scene, this.camera)
+  }
+
   private resize() {
     const w = this.container.clientWidth
     const h = this.container.clientHeight
     this.renderer.setSize(w, h, false)
+    const pr = this.renderer.getPixelRatio()
+    this.clouds?.setSize(Math.round(w * pr), Math.round(h * pr))
     this.renderer.domElement.style.width = w + 'px'
     this.renderer.domElement.style.height = h + 'px'
     this.camera.aspect = w / Math.max(1, h)
@@ -151,13 +159,11 @@ export class Scene3D {
     if (this.outer) this.outer.visible = aerial
     for (const c of this.group.children) if (c.userData.skirt) c.visible = !aerial
     const cloudsOn = this.opts.clouds && aerial && !!this.clouds
-    if (this.clouds) this.clouds.mesh.visible = cloudsOn
     if (this.terrainU) this.terrainU.uCloudOn.value = cloudsOn ? 1 : 0
     if (this.waterMat) {
       this.waterMat.uniforms.uCloudOn.value = cloudsOn ? 1 : 0
       this.waterMat.uniforms.uFogDensity.value = aerial ? this.fog.density : 0
     }
-    this.clouds?.setFog(HAZE, aerial ? this.fog.density : 0)
     this.renderer.toneMappingExposure = aerial ? 1.0 : 1.05
     this.updateSun()
   }
@@ -192,9 +198,16 @@ export class Scene3D {
       this.waterMat.uniforms.uSkyTop.value.copy(this.sky.mat.uniforms.uTop.value)
       this.waterMat.uniforms.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
     }
-    this.clouds?.setFog(this.fog.color, this.opts.look === 'aerial' ? this.fog.density : 0)
     if (this.terrainU) this.terrainU.uSun.value.copy(d)
-    this.clouds?.setSun(d, this.sun.color, 0.5 + 0.5 * k)
+    if (this.clouds) {
+      const u = this.clouds.march.uniforms
+      u.uSun.value.copy(d)
+      u.uSunColor.value.copy(this.sun.color).multiplyScalar(0.35 + 0.65 * k)
+      u.uSkyTop.value.copy(this.sky.mat.uniforms.uTop.value)
+      u.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
+      u.uFogColor.value.copy(this.fog.color)
+      u.uFogDensity.value = this.fog.density
+    }
   }
 
   setWorld(world: World, color: HTMLCanvasElement, rough: HTMLCanvasElement) {
@@ -240,14 +253,16 @@ export class Scene3D {
     mk.minFilter = THREE.LinearFilter
     mk.needsUpdate = true
     this.maskTex = mk
-    const { mat, uniforms } = createTerrainMaterial(colorTex, roughTex, mk, this.vScale)
+    const hSize = new THREE.Vector2(W, H)
+    const { mat, uniforms, depth } = createTerrainMaterial(colorTex, roughTex, mk, ht, hSize, new THREE.Vector2(SX, this.SZ), this.vScale)
     this.terrainU = uniforms
     this.terrain = new THREE.Mesh(new THREE.BufferGeometry(), mat)
+    this.terrain.customDepthMaterial = depth
     this.terrain.castShadow = true
     this.terrain.receiveShadow = true
     this.group.add(this.terrain)
 
-    this.waterMat = createWaterMaterial(ht, tt, colorTex, this.vScale, new THREE.Vector2(SX, this.SZ))
+    this.waterMat = createWaterMaterial(ht, tt, colorTex, this.vScale, new THREE.Vector2(SX, this.SZ), hSize)
     this.water = new THREE.Mesh(new THREE.BufferGeometry(), this.waterMat)
     this.water.renderOrder = 2
     this.group.add(this.water)
@@ -272,19 +287,19 @@ export class Scene3D {
 
   private buildClouds() {
     const w = this.world!
-    if (this.clouds) {
-      this.scene.remove(this.clouds.mesh)
-      this.clouds.dispose()
-    }
+    this.clouds?.dispose()
     let seed = 0
     for (const ch of w.params.seed) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0
-    const baseY = this.vScale * 3.4
-    this.clouds = createClouds(seed, SX, this.SZ, baseY, 0.35)
-    this.scene.add(this.clouds.mesh)
+    // 积云：云底约 1.6 km、云顶约 4.5 km（随垂直夸张一起缩放）
+    const base = this.vScale * 1.6 + 0.4
+    const top = this.vScale * 4.5 + 0.9
+    this.clouds = new VolumetricClouds(seed, SX, this.SZ, base, top, 0.28)
+    const pr = this.renderer.getPixelRatio()
+    this.clouds.setSize(Math.round(this.container.clientWidth * pr), Math.round(this.container.clientHeight * pr))
     for (const u of [this.terrainU!, this.waterMat!.uniforms as unknown as TerrainUniforms]) {
-      u.uCloud.value = this.clouds.shadow
+      u.uCloud.value = this.clouds.coverage
       u.uCloudRect.value.copy(this.clouds.rect)
-      u.uCloudY.value = baseY
+      u.uCloudY.value = base + (top - base) * 0.25
     }
   }
 
@@ -334,37 +349,38 @@ export class Scene3D {
     return h * this.vScale
   }
 
-  private terrainGeometry(w: World, vs: number) {
-    const { W, H, elevation: e } = w
-    const pos = new Float32Array(W * H * 3)
-    const nor = new Float32Array(W * H * 3)
-    const uv = new Float32Array(W * H * 2)
-    const dx = SX / (W - 1)
-    const dz = this.SZ / (H - 1)
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const i = y * W + x
-        pos[i * 3] = x * dx - SX / 2
-        pos[i * 3 + 1] = e[i] * vs
-        pos[i * 3 + 2] = y * dz - this.SZ / 2
-        const xl = Math.max(0, x - 1), xr = Math.min(W - 1, x + 1)
-        const yu = Math.max(0, y - 1), yd = Math.min(H - 1, y + 1)
-        const hx = ((e[y * W + xr] - e[y * W + xl]) * vs) / ((xr - xl) * dx)
-        const hz = ((e[yd * W + x] - e[yu * W + x]) * vs) / ((yd - yu) * dz)
-        const l = Math.hypot(hx, 1, hz)
-        nor[i * 3] = -hx / l
-        nor[i * 3 + 1] = 1 / l
-        nor[i * 3 + 2] = -hz / l
-        uv[i * 2] = (x + 0.5) / W
-        uv[i * 2 + 1] = (y + 0.5) / H
+  /**
+   * 地形网格：比高度图更密（约 2 倍），高度与法线都在顶点着色器里由
+   * 双三次插值 + 亚网格细节求得，这里只给平面坐标和贴图坐标。
+   */
+  private terrainGeometry(w: World, _vs: number) {
+    const { W, H } = w
+    const d = Math.min(2, Math.sqrt(3.2e6 / (W * H)))
+    const GW = Math.round((W - 1) * d) + 1
+    const GH = Math.round((H - 1) * d) + 1
+    const pos = new Float32Array(GW * GH * 3)
+    const uv = new Float32Array(GW * GH * 2)
+    for (let y = 0; y < GH; y++) {
+      for (let x = 0; x < GW; x++) {
+        const i = y * GW + x
+        const fx = x / (GW - 1)
+        const fy = y / (GH - 1)
+        pos[i * 3] = (fx - 0.5) * SX
+        pos[i * 3 + 2] = (fy - 0.5) * this.SZ
+        // 与高度图纹素中心对齐
+        uv[i * 2] = (fx * (W - 1) + 0.5) / W
+        uv[i * 2 + 1] = (fy * (H - 1) + 0.5) / H
       }
     }
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3))
     g.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
-    g.setIndex(gridIndex(W, H))
-    g.computeBoundingSphere()
+    // 占位法线（真正的法线在顶点着色器里求）：没有 normal 属性时 three 会退化为平面着色
+    const nor = new Int8Array(GW * GH * 3)
+    for (let i = 0; i < GW * GH; i++) nor[i * 3 + 1] = 127
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3, true))
+    g.setIndex(gridIndex(GW, GH))
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), Math.hypot(SX, this.SZ))
     return g
   }
 
@@ -642,7 +658,7 @@ export class Scene3D {
   }
 
   snapshot(): string {
-    this.renderer.render(this.scene, this.camera)
+    this.renderFrame()
     return this.renderer.domElement.toDataURL('image/png')
   }
 

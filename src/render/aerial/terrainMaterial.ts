@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { NOISE_GLSL } from './glsl'
+import { HEIGHT_GLSL } from './heightGLSL'
 
 export interface TerrainUniforms {
   uMask: { value: THREE.Texture }
@@ -10,6 +11,35 @@ export interface TerrainUniforms {
   uCloudOn: { value: number }
   uSun: { value: THREE.Vector3 }
   uDetail: { value: number }
+  uHeight: { value: THREE.Texture }
+  uHSize: { value: THREE.Vector2 }
+  uMapSize: { value: THREE.Vector2 }
+  uDetailKm: { value: number }
+}
+
+/** 顶点着色器：高度在 GPU 上由双三次插值 + 亚网格细节求得，法线用有限差分 */
+const VERTEX_HEIGHT = /* glsl */ `
+  vec2 xzP = position.xz;
+  float eN = uMapSize.x / (uHSize.x - 1.0) * 0.35;
+  float hC = terrainHeight(xzP);
+  float hX = terrainHeight(xzP + vec2(eN, 0.0));
+  float hZ = terrainHeight(xzP + vec2(0.0, eN));
+  vec3 objectNormal = normalize(vec3(-(hX - hC) * uVScale / eN, 1.0, -(hZ - hC) * uVScale / eN));
+`
+
+function injectVertex(sh: THREE.WebGLProgramParametersWithUniforms, withNormal: boolean) {
+  sh.vertexShader = sh.vertexShader.replace(
+    '#include <common>',
+    `#include <common>\nuniform float uVScale;\n${NOISE_GLSL}\n${HEIGHT_GLSL}\nvarying vec3 vWorld;`,
+  )
+  if (withNormal) sh.vertexShader = sh.vertexShader.replace('#include <beginnormal_vertex>', VERTEX_HEIGHT)
+  // 深度材质的顶点着色器里没有法线段，高度在这里求
+  sh.vertexShader = sh.vertexShader
+    .replace(
+      '#include <begin_vertex>',
+      (withNormal ? '' : 'float hC = terrainHeight(position.xz);\n') + 'vec3 transformed = vec3(position.x, hC * uVScale, position.z);',
+    )
+    .replace('#include <project_vertex>', '#include <project_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
 }
 
 /**
@@ -20,7 +50,15 @@ export interface TerrainUniforms {
  * - 细节法线：微地形起伏，让低角度阳光下有真实的颗粒感
  * - 地平线 AO 与云影
  */
-export function createTerrainMaterial(color: THREE.Texture, rough: THREE.Texture, mask: THREE.Texture, vScale: number) {
+export function createTerrainMaterial(
+  color: THREE.Texture,
+  rough: THREE.Texture,
+  mask: THREE.Texture,
+  height: THREE.Texture,
+  hSize: THREE.Vector2,
+  mapSize: THREE.Vector2,
+  vScale: number,
+) {
   const mat = new THREE.MeshStandardMaterial({ map: color, roughnessMap: rough, roughness: 1, metalness: 0 })
   const uniforms: TerrainUniforms = {
     uMask: { value: mask },
@@ -31,12 +69,14 @@ export function createTerrainMaterial(color: THREE.Texture, rough: THREE.Texture
     uCloudOn: { value: 0 },
     uSun: { value: new THREE.Vector3(0.5, 0.6, 0.3) },
     uDetail: { value: 1 },
+    uHeight: { value: height },
+    uHSize: { value: hSize },
+    uMapSize: { value: mapSize },
+    uDetailKm: { value: 1 },
   }
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms)
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWorld;')
-      .replace('#include <project_vertex>', '#include <project_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
+    injectVertex(sh, true)
     sh.fragmentShader = sh.fragmentShader
       .replace(
         '#include <common>',
@@ -55,6 +95,26 @@ float gAO;
 float gLod1;
 float gLod2;
 vec4 gMask;
+/** 树冠格：返回 (像素相对树心的偏移.xy, 距离) */
+vec3 crownCell(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  float d = 9.0;
+  vec2 off = vec2(0.0);
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y));
+    vec2 o = vec2(hash12(i + g), hash12(i + g + 19.19)) * 0.8 + 0.1;
+    vec2 v = f - (g + o);
+    float dd = dot(v, v);
+    if (dd < d) { d = dd; off = v; }
+  }
+  return vec3(off, sqrt(d));
+}
+/** 把每棵树当成半球：受光面亮、背光面与树间空隙暗 */
+float crownShade(vec3 c, vec3 L, float r) {
+  if (c.z > r) return 0.42;
+  vec3 n = normalize(vec3(c.x, sqrt(r * r - c.z * c.z) * 1.1, c.y));
+  return 0.5 + 0.75 * max(dot(n, L), 0.0);
+}
 float detailH(vec2 p, vec4 m) {
   float h = fbm3(p * 5.0) * 0.5;
   // 树冠的鼓包
@@ -91,10 +151,14 @@ if (hKm > 0.0) {
   // 树冠
   float f = gMask.r;
   if (f > 0.01) {
-    float c1 = 1.0 - smoothstep(0.15, 0.9, cells(P * 11.0));
-    float c2 = 1.0 - smoothstep(0.1, 0.8, cells(P * 34.0));
-    float crown = mix(0.55, c1, gLod1) * 0.55 + mix(0.5, c2, gLod2) * 0.45;
-    vec3 leaf = base * mix(vec3(0.72, 0.8, 0.7), vec3(1.15, 1.18, 1.0), crown);
+    vec3 Ls = normalize(uSun);
+    // 三个尺度的树冠：林冠团块、单株树冠、近景细冠
+    float s0 = crownShade(crownCell(P * 4.0), Ls, 0.62);
+    float s1 = crownShade(crownCell(P * 13.0), Ls, 0.58);
+    float s2 = crownShade(crownCell(P * 40.0), Ls, 0.55);
+    float gLod0 = 1.0 - smoothstep(0.06, 0.2, fw);
+    float crown = mix(0.85, s0, gLod0 * 0.6) * mix(0.85, s1, gLod1) * mix(0.9, s2, gLod2);
+    vec3 leaf = base * mix(vec3(0.6, 0.68, 0.58), vec3(1.25, 1.28, 1.08), clamp(crown * 0.9, 0.0, 1.0));
     leaf *= mix(vec3(0.95, 1.0, 0.92), vec3(1.05, 1.02, 0.85), fbm3(P * 3.1 + 7.0));
     col = mix(col, leaf, f);
   }
@@ -112,9 +176,15 @@ if (hKm > 0.0) {
   sand = mix(wet, sand, smoothstep(0.0015, 0.012, hKm));
   col = mix(col, sand, smoothstep(0.45, 0.9, s) * (1.0 - smoothstep(0.3, 0.5, slope)));
   // 岩石：陡坡露出基岩，带层理
-  float strata = sin(vWorld.y * 60.0 + fbm3(P * 6.0) * 5.0) * 0.5 + 0.5;
-  vec3 rock = mix(vec3(0.4, 0.38, 0.35), vec3(0.6, 0.57, 0.52), fbm3(P * 9.0)) * (0.85 + 0.2 * strata * gLod1);
-  float rk = smoothstep(0.42, 0.7, slope + (fbm3(P * 8.0) - 0.5) * 0.25) * (1.0 - gMask.r * 0.5);
+  // 三平面投影：陡崖上的纹理不被拉伸
+  vec3 bw = pow(abs(wN0), vec3(4.0));
+  bw /= (bw.x + bw.y + bw.z);
+  float rn = fbm3(vWorld.zy * 9.0) * bw.x + fbm3(vWorld.xz * 9.0) * bw.y + fbm3(vWorld.xy * 9.0) * bw.z;
+  float cr = (1.0 - smoothstep(0.0, 0.08, abs(vnoise(vWorld.xz * 14.0 + vWorld.y * 6.0) - 0.5))) * gLod1;
+  float strata = sin(vWorld.y * 70.0 + rn * 6.0) * 0.5 + 0.5;
+  vec3 rock = mix(vec3(0.44, 0.41, 0.37), vec3(0.68, 0.64, 0.58), rn) * (0.82 + 0.25 * strata * gLod1) * (1.0 - cr * 0.35);
+  // 陡坡上岩石与植被斑驳相间，只有近乎垂直的崖壁才整片裸露
+  float rk = smoothstep(0.5, 0.82, slope + (fbm3(P * 8.0) - 0.5) * 0.35) * (1.0 - gMask.r * 0.4);
   // 雪上不画岩
   float snowy = smoothstep(0.75, 0.9, min(base.r, min(base.g, base.b)));
   col = mix(col, rock, rk * (1.0 - snowy) * 0.9);
@@ -150,5 +220,11 @@ if (uCloudOn > 0.5) {
 reflectedLight.indirectDiffuse *= mix(1.0, gAO, 0.6);`,
       )
   }
-  return { mat, uniforms }
+  // 阴影深度材质：同样的顶点位移，否则阴影与地形错位
+  const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
+  depth.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, uniforms)
+    injectVertex(sh, false)
+  }
+  return { mat, uniforms, depth }
 }
