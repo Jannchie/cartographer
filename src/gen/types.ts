@@ -109,6 +109,12 @@ export interface Realm {
   room: number
 }
 
+/** 道路：交替存储的 x, y（格坐标，已平滑）；major 干道、minor 支线、sea 航线 */
+export interface Road {
+  kind: 'major' | 'minor' | 'sea'
+  pts: number[]
+}
+
 export interface River {
   /** 交替存储 x, y（格坐标，可为小数） */
   points: Float32Array
@@ -161,6 +167,8 @@ export interface World {
   /** 每格所属国家，-1 为海洋 */
   realm: Int16Array
   realms: Realm[]
+  /** 连通各城市的道路与跨海航线 */
+  roads: Road[]
   worldName: string
   worldNameZh: string
   /** 每格代表的公里数 */

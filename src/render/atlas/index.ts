@@ -13,6 +13,7 @@ import {
   drawSoundings,
 } from './furniture'
 import { fitRiversToCoast } from './riverMouth'
+import { drawRoads } from './roads'
 import { drawGlyphs } from './glyphs'
 import { LabelLayer } from './labels'
 import { FANTASY_GLYPHS, THEMES, themeById, type AtlasOpts, type StyleId, type Theme } from './styles'
@@ -109,6 +110,8 @@ export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Th
   const rv = theme.river
   drawRivers(ctx, rv.fitCoast ? fitRiversToCoast(rivers, f) : rivers, W, S, rv.color, rv.width, rv.minFlow)
   if (theme.glyphs) drawGlyphs(ctx, f, FANTASY_GLYPHS)
+  // 道路画在山形、树林符号之上：翻山的路段也看得见
+  drawRoads(ctx, world.roads, S, theme.roads)
   if (opts.graticule && theme.graticule) drawGraticule(ctx, world, S, theme.graticule)
   drawCompass(ctx, theme, cx, cy, compassR)
   drawScaleBar(ctx, world, theme, S, MW - 150 * S, MH - 24 * S)

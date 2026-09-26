@@ -27,6 +27,16 @@ export interface LabelTheme {
   noHalo?: string[]
 }
 
+export interface RoadStyle {
+  color: string
+  width: number
+  dash?: number[]
+  /** 路两侧的衬边，让路从底色上跳出来 */
+  casing?: string
+  sea: string
+  seaDash: number[]
+}
+
 export interface AtlasOpts {
   labels: boolean
   contours: boolean
@@ -42,6 +52,8 @@ export interface Theme {
   prepare?: (f: Fields) => void
   pixel: (p: Px, o: Float32Array, f: Fields, opts: AtlasOpts) => void
   river: { color: string; width: number; minFlow: number; fitCoast?: boolean }
+  /** 道路（干道；支线更细）与跨海航线（虚线）。dash 以 S=2 时的像素计 */
+  roads: RoadStyle
   frame: 'atlas' | 'ornate' | 'ink' | 'none'
   compass: 'star' | 'ornate' | 'nautical' | 'north' | 'none'
   cartouche: 'box' | 'scroll' | 'nautical' | 'ink' | 'game'
@@ -467,6 +479,7 @@ export const THEMES: Theme[] = [
     ink: '#3a4246',
     pixel: physicalPixel,
     river: { color: 'rgba(78, 122, 146, 0.92)', width: 1, minFlow: 1.8 },
+    roads: { color: 'rgba(158, 60, 42, 0.88)', width: 1.4, casing: 'rgba(241, 234, 216, 0.65)', sea: 'rgba(60, 96, 120, 0.55)', seaDash: [5, 4] },
     frame: 'atlas',
     compass: 'star',
     cartouche: 'box',
@@ -494,6 +507,7 @@ export const THEMES: Theme[] = [
     ink: '#4a3624',
     pixel: fantasyPixel,
     river: { color: 'rgba(48, 70, 88, 0.95)', width: 1.15, minFlow: 2, fitCoast: true },
+    roads: { color: 'rgba(74, 54, 36, 0.92)', width: 1.7, dash: [2, 3.2], sea: 'rgba(74, 54, 36, 0.5)', seaDash: [6, 5] },
     frame: 'ornate',
     compass: 'ornate',
     cartouche: 'scroll',
@@ -522,6 +536,7 @@ export const THEMES: Theme[] = [
     ink: '#1f2a33',
     pixel: nauticalPixel,
     river: { color: 'rgba(60, 110, 150, 0.85)', width: 0.8, minFlow: 3 },
+    roads: { color: 'rgba(60, 60, 60, 0.6)', width: 0.9, sea: 'rgba(30, 70, 110, 0.7)', seaDash: [7, 4] },
     frame: 'atlas',
     compass: 'nautical',
     cartouche: 'nautical',
@@ -551,6 +566,7 @@ export const THEMES: Theme[] = [
     ink: '#f2f0e6',
     pixel: teyvatPixel,
     river: { color: 'rgba(88, 150, 152, 0.95)', width: 1.1, minFlow: 2, fitCoast: true },
+    roads: { color: 'rgba(236, 222, 164, 0.95)', width: 1.9, casing: 'rgba(50, 56, 24, 0.55)', sea: 'rgba(190, 230, 222, 0.55)', seaDash: [4, 5] },
     frame: 'none',
     compass: 'none',
     cartouche: 'game',
@@ -580,6 +596,7 @@ export const THEMES: Theme[] = [
     ink: '#2b2a27',
     pixel: inkPixel,
     river: { color: 'rgba(60, 62, 60, 0.75)', width: 0.8, minFlow: 2.2 },
+    roads: { color: 'rgba(43, 42, 39, 0.75)', width: 1, dash: [3, 2.5], sea: 'rgba(43, 42, 39, 0.45)', seaDash: [2, 4] },
     frame: 'ink',
     compass: 'none',
     cartouche: 'ink',
@@ -607,6 +624,7 @@ export const THEMES: Theme[] = [
     ink: '#2d3a44',
     pixel: topoPixel,
     river: { color: 'rgba(50, 110, 160, 0.95)', width: 0.8, minFlow: 1.8 },
+    roads: { color: 'rgba(170, 40, 30, 0.88)', width: 1.3, casing: 'rgba(255, 255, 255, 0.8)', sea: 'rgba(50, 110, 160, 0.6)', seaDash: [6, 4] },
     frame: 'atlas',
     compass: 'north',
     cartouche: 'box',

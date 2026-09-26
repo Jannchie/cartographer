@@ -1,3 +1,4 @@
+import { buildRoads } from './roads'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
@@ -151,6 +152,8 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   // 地点编辑：用户改过的列表整体替换生成结果（政区按新的都城重算）
   const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || zh.name(l.kind, l.name) })) : generated
   const { realm, realms } = buildRealms(elev, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W), lang, zh, rPlace.fork())
+  progress('道路与航线', 0.97)
+  const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W))
   const genName = lang.word()
   const worldName = edits.worldName ?? genName
 
@@ -178,6 +181,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     labels,
     realm,
     realms,
+    roads,
     worldName,
     worldNameZh: edits.worldNameZh ?? zh.name('world', worldName),
     kmPerCell,
