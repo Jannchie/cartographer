@@ -209,7 +209,7 @@ for (const pr of presets) {
     Object.assign(params, pr.p)
     syncParams()
     generate()
-    b.classList.add('on')
+    for (const x of $('#presets').children) x.classList.toggle('on', x === b)
   })
   $('#presets').appendChild(b)
 }
