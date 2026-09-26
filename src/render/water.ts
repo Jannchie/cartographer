@@ -47,15 +47,42 @@ export function createWaterMaterial(
       uCloudY: { value: 3 },
       uCloudOn: { value: 0 },
     },
-    vertexShader: /* glsl */ `
-      varying vec3 vWorld;
-      void main() {
-        vec4 w = modelMatrix * vec4(position, 1.0);
-        vWorld = w.xyz;
-        gl_Position = projectionMatrix * viewMatrix * w;
-      }
-    `,
-    fragmentShader: /* glsl */ `
+    vertexShader: WATER_VERT,
+    fragmentShader: WATER_FRAG,
+
+  })
+}
+
+const WATER_VERT = /* glsl */ `
+  varying vec3 vWorld;
+  void main() {
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vWorld = w.xyz;
+    gl_Position = projectionMatrix * viewMatrix * w;
+  }
+`
+
+/** 河流：带状网格贴在烘焙地形上（或湖面、海面上）略高一点，水深即为这段高差 */
+const RIVER_VERT = /* glsl */ `
+  uniform float uVScale;
+  attribute float side;
+  attribute float aMouth;
+  attribute float aFloor;
+  ${BAKED_GLSL}
+  varying vec3 vWorld;
+  varying float vSide;
+  varying float vMouth;
+  void main() {
+    float h = bakedAt(position.xz).x;
+    vec3 p = vec3(position.x, max(h, aFloor) * uVScale + 0.004, position.z);
+    vSide = side;
+    vMouth = aMouth;
+    vWorld = p;
+    gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+  }
+`
+
+const WATER_FRAG = /* glsl */ `
       uniform sampler2D uTemp;
       uniform sampler2D uColor;
       uniform float uVScale;
@@ -75,6 +102,10 @@ export function createWaterMaterial(
       uniform float uCloudY;
       uniform float uCloudOn;
       varying vec3 vWorld;
+      #ifdef RIVER
+      varying float vSide;
+      varying float vMouth;
+      #endif
       ${NOISE_GLSL}
       ${BAKED_GLSL}
 
@@ -95,9 +126,15 @@ export function createWaterMaterial(
         float level = vWorld.y / uVScale;
         float depth = level - terrain;
         if (depth < 0.0) discard;
+        #ifdef RIVER
+        // 河道：按海水的算法着色，只是水更浑；越近河口越接近海水
+        bool lake = false;
+        float dm = depth * 1000.0 * mix(1.0, 0.42, vMouth);
+        #else
         bool lake = level > 0.002;
         // 米；颜色用的视觉水深压缩了陆架，让环礁浅滩呈现青绿
         float dm = depth * 1000.0 * (lake ? 1.0 : 0.42);
+        #endif
 
         vec2 P = vWorld.xz;
         float fw = length(fwidth(P));
@@ -135,8 +172,12 @@ export function createWaterMaterial(
         bed = mix(bed * vec3(0.8, 0.85, 0.82), bed, beachy);
         // 光在水中往返的衰减（每米）
         vec3 absorb = lake ? vec3(0.16, 0.07, 0.06) : vec3(0.1, 0.03, 0.016);
-        vec3 T = exp(-absorb * dm * 2.0);
         vec3 scatter = lake ? uLake : uDeep;
+        #ifdef RIVER
+        absorb = mix(vec3(0.3, 0.16, 0.12), absorb, vMouth);
+        scatter = mix(uLake * 0.9, scatter, vMouth);
+        #endif
+        vec3 T = exp(-absorb * dm * 2.0);
         float diff = (max(L.y, 0.0) * 0.8 + 0.2) * cs;
         vec3 body = bed * T * diff * 1.08 + scatter * (1.0 - T) * (0.6 + 0.4 * cs);
         // 浅水的阳光焦散
@@ -148,7 +189,12 @@ export function createWaterMaterial(
         vec3 R = reflect(-V, n);
         vec3 sky = mix(uSkyHorizon, uSkyTop, smoothstep(0.0, 0.5, R.y));
         float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
-        vec3 col = mix(body, sky * uLight, fres * 0.85);
+        float refl = 0.85;
+        #ifdef RIVER
+        // 河道窄、两岸有遮挡，天光反射弱一些（入海后与海水一致）
+        refl = mix(0.55, 0.85, vMouth);
+        #endif
+        vec3 col = mix(body, sky * uLight, fres * refl);
         vec3 Hh = normalize(L + V);
         float nh = max(dot(n, Hh), 0.0);
         float spec = pow(nh, 900.0) * 3.5 + pow(nh, 120.0) * 0.35 + pow(nh, 14.0) * 0.04;
@@ -156,7 +202,11 @@ export function createWaterMaterial(
 
         // —— 碎浪 ——
         float shoreFoam = 0.0;
+        #ifdef RIVER
+        if (false) {
+        #else
         if (!outside) {
+        #endif
           // 沿岸：一道道向岸推进的浪线
           float band = sin(dm * 1.4 - uTime * 1.3 + fbm3(P * 3.0) * 8.0);
           float breakZone = 1.0 - smoothstep(0.0, lake ? 0.8 : 2.2, dm);
@@ -186,6 +236,11 @@ export function createWaterMaterial(
         // 岸边与沙滩柔和衔接
         float alpha = smoothstep(0.0, 0.6, dm);
         alpha = max(alpha, foam);
+        #ifdef RIVER
+        // 河岸柔边；入海后与下面的海水叠在一起，逐渐隐去
+        alpha *= 1.0 - smoothstep(0.55, 1.0, abs(vSide));
+        alpha *= 1.0 - smoothstep(0.35, 1.0, vMouth);
+        #endif
 
         // 空气透视
         float dist = length(cameraPosition - vWorld);
@@ -196,6 +251,22 @@ export function createWaterMaterial(
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }
-    `,
+    `
+
+/**
+ * 河流材质：与海水、湖水同一个水体着色器（#define RIVER），共用全部 uniform，
+ * 于是河口处河水与海水是同一种水——只在河道里用更浑的水色，按 vMouth 逐渐过渡到海水参数。
+ */
+export function createRiverWaterMaterial(water: THREE.ShaderMaterial) {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+    defines: { RIVER: 1 },
+    uniforms: water.uniforms,
+    vertexShader: RIVER_VERT,
+    fragmentShader: WATER_FRAG,
   })
 }

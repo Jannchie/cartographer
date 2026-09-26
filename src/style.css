@@ -294,26 +294,6 @@ details summary:hover {
   margin: 14px 0 4px;
 }
 
-.segmented {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  padding: 3px;
-  gap: 3px;
-  border: 1px solid var(--line-2);
-  border-radius: 6px;
-  margin-bottom: 10px;
-}
-.segmented button {
-  border: none;
-  padding: 5px 0;
-  color: var(--muted);
-}
-.segmented button.on {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-}
-
 .toggles {
   display: flex;
   flex-wrap: wrap;

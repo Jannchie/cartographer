@@ -8,7 +8,7 @@ import { VolumetricClouds } from './aerial/volumetric'
 import { TerrainBake } from './aerial/bake'
 import { createRiverMesh } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
-import { createWaterMaterial } from './water'
+import { createRiverWaterMaterial, createWaterMaterial } from './water'
 
 export interface View3DOptions {
   exaggeration: number
@@ -17,6 +17,8 @@ export interface View3DOptions {
   sunElevation: number
   /** 航拍写实 / 沙盘模型 */
   look: 'aerial' | 'model'
+  /** 空气感：远景霾与低空薄雾 */
+  haze: boolean
   clouds: boolean
 }
 
@@ -146,7 +148,6 @@ export class Scene3D {
       }
       const t = this.clock.getElapsedTime()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = t
-      if (this.riverMat) this.riverMat.uniforms.uTime.value = t
       this.updatePatch()
       this.renderFrame()
       if (pf) {
@@ -203,7 +204,8 @@ export class Scene3D {
   /** 航拍且开云时走体积云管线（场景 → 云 → 合成），否则直接渲染 */
   private renderFrame() {
     // 航拍：后处理管线（空气透视 + 体积云）；沙盘模型：直接渲染
-    if (this.opts.look === 'aerial' && this.clouds) {
+    // 云和空气感都关掉时直接渲染，省掉后处理
+    if (this.opts.look === 'aerial' && this.clouds && (this.opts.clouds || this.opts.haze)) {
       this.clouds.march.uniforms.uEnabled.value = this.opts.clouds ? 1 : 0
       this.clouds.render(this.renderer, this.scene, this.camera, this.clock.getElapsedTime())
     } else this.renderer.render(this.scene, this.camera)
@@ -228,7 +230,7 @@ export class Scene3D {
     this.lastInteract = performance.now()
     if (o.sunAzimuth !== undefined || o.sunElevation !== undefined) this.updateSun()
     if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
-    if (o.look !== undefined || o.clouds !== undefined) this.applyLook()
+    if (o.look !== undefined || o.clouds !== undefined || o.haze !== undefined) this.applyLook()
   }
 
   /** 航拍：天空、空气透视、延伸到地平线的外海、云；沙盘：悬浮的立体模型 */
@@ -277,11 +279,6 @@ export class Scene3D {
     }
     this.sky.mat.uniforms.uSun.value.copy(d)
     this.sky.mat.uniforms.uSunColor.value.copy(this.sun.color)
-    if (this.riverMat) {
-      this.riverMat.uniforms.uSunDir.value.copy(d)
-      this.riverMat.uniforms.uSunColor.value.copy(this.sun.color)
-      this.riverMat.uniforms.uLight.value = 0.45 + 0.55 * k
-    }
     // 天空随太阳高度变暗、偏暖
     this.sky.mat.uniforms.uTop.value.copy(SKY_TOP).multiplyScalar(0.35 + 0.65 * k)
     this.sky.mat.uniforms.uHorizon.value.copy(HAZE).lerp(new THREE.Color('#f0c59a'), warm * 0.45).multiplyScalar(0.45 + 0.55 * k)
@@ -299,13 +296,15 @@ export class Scene3D {
       u.uSkyTop.value.copy(this.sky.mat.uniforms.uTop.value)
       u.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
       u.uFogColor.value.copy(this.fog.color)
-      u.uFogDensity.value = this.fog.density
+      u.uFogDensity.value = this.opts.haze ? this.fog.density : 0
       // 空气感：霾色随天空，顺光方向有太阳散射光晕；低空薄雾高度约 0.9 km
       const c = this.clouds.comp.uniforms
       c.uSun.value.copy(d)
       c.uSunColor.value.copy(this.sun.color).multiplyScalar(0.25 + 0.35 * k)
       c.uHaze.value.copy(this.fog.color).multiplyScalar(0.9)
       c.uFogHeight.value = this.vScale * 0.9
+      c.uHazeDensity.value = this.opts.haze ? 0.0026 : 0
+      c.uFogDensity.value = this.opts.haze ? 0.035 : 0
     }
   }
 
@@ -325,6 +324,8 @@ export class Scene3D {
       })
     }
     this.heightTex?.dispose()
+    // 水面材质随世界重建，河流材质跟着重建
+    this.riverMat = null
 
     const { W, H } = world
     const ht = new THREE.DataTexture(world.elevation, W, H, THREE.RedFormat, THREE.FloatType)
@@ -441,14 +442,11 @@ export class Scene3D {
       this.group.remove(c)
       ;(c as THREE.Mesh).geometry.dispose()
     }
-    this.riverMat?.dispose()
-    const rv = createRiverMesh(w, this.riverList, SX, this.SZ)
-    rv.mesh.userData.river = true
-    rv.mat.uniforms.uBaked.value = this.bake.rt.texture
-    rv.mat.uniforms.uGSize.value.set(GW, GH)
-    rv.mat.uniforms.uVScale.value = vs
-    this.riverMat = rv.mat
-    this.group.add(rv.mesh)
+    // 河流与水面共用 uniform（烘焙纹理、日照、天色、时间都随水面一起更新）
+    if (!this.riverMat) this.riverMat = createRiverWaterMaterial(this.waterMat!)
+    const rv = createRiverMesh(w, this.riverList, SX, this.SZ, this.riverMat)
+    rv.userData.river = true
+    this.group.add(rv)
     this.renderer.shadowMap.needsUpdate = true
     this.water!.geometry.dispose()
     this.water!.geometry = this.waterGeometry(w, vs)
@@ -766,24 +764,48 @@ export class Scene3D {
 /** 高清块网格分辨率 */
 const PATCH_N = 513
 
-/** 高清块：[0,1]² 的规则网格（顶点着色器按 uPatch 映射到世界） */
+/**
+ * 高清块：[0,1]² 的规则网格（顶点着色器按 uPatch 映射到世界），
+ * 四周再加一圈向下的裙边（position.y = 1 的顶点下沉），遮住与粗网格之间的细缝。
+ */
 function patchGeometry(N: number) {
-  const pos = new Float32Array(N * N * 3)
-  const uv = new Float32Array(N * N * 2)
-  const nor = new Int8Array(N * N * 3)
+  const ring: number[] = []
+  for (let x = 0; x < N; x++) ring.push(x)
+  for (let y = 1; y < N; y++) ring.push(y * N + N - 1)
+  for (let x = N - 2; x >= 0; x--) ring.push((N - 1) * N + x)
+  for (let y = N - 2; y > 0; y--) ring.push(y * N)
+  const total = N * N + ring.length
+  const pos = new Float32Array(total * 3)
+  const uv = new Float32Array(total * 2)
+  const nor = new Int8Array(total * 3)
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       const i = y * N + x
       pos[i * 3] = x / (N - 1)
       pos[i * 3 + 2] = y / (N - 1)
-      nor[i * 3 + 1] = 127
     }
+  }
+  ring.forEach((src, k) => {
+    const i = N * N + k
+    pos[i * 3] = pos[src * 3]
+    pos[i * 3 + 1] = 1
+    pos[i * 3 + 2] = pos[src * 3 + 2]
+  })
+  for (let i = 0; i < total; i++) nor[i * 3 + 1] = 127
+  const idx: number[] = Array.from(gridIndex(N, N).array as Uint32Array)
+  for (let k = 0; k < ring.length; k++) {
+    const a = ring[k]
+    const b = ring[(k + 1) % ring.length]
+    const a2 = N * N + k
+    const b2 = N * N + ((k + 1) % ring.length)
+    // 两面都连：裙边从哪一侧看都不透
+    idx.push(a, b, a2, b, b2, a2, a, a2, b, b, a2, b2)
   }
   const g = new THREE.BufferGeometry()
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
   g.setAttribute('normal', new THREE.BufferAttribute(nor, 3, true))
-  g.setIndex(gridIndex(N, N))
+  g.setIndex(idx)
   return g
 }
 

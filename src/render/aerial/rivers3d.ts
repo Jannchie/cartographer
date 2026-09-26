@@ -2,19 +2,20 @@ import * as THREE from 'three'
 import type { World } from '../../gen/types'
 import { riverThreshold } from '../../gen/world'
 import type { SmoothRiver } from '../rivers'
-import { BAKED_GLSL } from './bake'
 
 /**
  * 河流几何：沿平滑河道生成带状网格（宽度随流量），顶点高度取烘焙地形，
- * 与细分后的地表严丝合缝；片元用简化的水面着色（天空反射 + 太阳高光 + 边缘柔化）。
+ * 与细分后的地表严丝合缝；着色与海水、湖水共用同一个水体着色器（见 water.ts 的 RIVER 变体）。
  * 与贴图分辨率无关，拉近看始终是清晰的河道。
  */
-export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number, SZ: number) {
+export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number, SZ: number, mat: THREE.Material) {
   const { W, H } = world
   const thr = riverThreshold(W)
   const cell = SX / (W - 1)
   const pos: number[] = []
   const side: number[] = []
+  const mouth: number[] = []
+  const floorY: number[] = []
   const idx: number[] = []
   const toX = (gx: number) => ((gx - 0.5) / (W - 1) - 0.5) * SX
   const toZ = (gy: number) => ((gy - 0.5) / (H - 1) - 0.5) * SZ
@@ -23,6 +24,11 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
     const n = r.xs.length
     if (n < 2) continue
     const base = pos.length / 3
+    // 距末端的弧长（格）：末端最后一段渐隐收尾，接不到深水时也不会一刀切
+    const toEnd = new Float32Array(n)
+    for (let k = n - 2; k >= 0; k--) toEnd[k] = toEnd[k + 1] + Math.hypot(r.xs[k + 1] - r.xs[k], r.ys[k + 1] - r.ys[k])
+    // 只对流到岸边的河道收尾；支流末端要接住干流，不能渐隐
+    const coastal = waterDepth(world, r.xs[n - 1], r.ys[n - 1]).depth > -0.02
     for (let k = 0; k < n; k++) {
       const a = Math.max(0, k - 1)
       const b = Math.min(n - 1, k + 1)
@@ -38,6 +44,11 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
       const z = toZ(r.ys[k])
       pos.push(x - tz * w, 0, z + tx * w, x + tz * w, 0, z - tx * w)
       side.push(-1, 1)
+      // 河口：进入水域后按水深渐隐、向水色过渡；河带贴在水面上（湖面或海面）
+      const wd = waterDepth(world, r.xs[k], r.ys[k])
+      const m = Math.max(smooth01((wd.depth - 0.01) / 0.025), coastal ? 1 - smooth01(toEnd[k] / 1.5) : 0)
+      mouth.push(m, m)
+      floorY.push(wd.level, wd.level)
       if (k < n - 1) {
         const i = base + k * 2
         idx.push(i, i + 2, i + 1, i + 1, i + 2, i + 3)
@@ -47,68 +58,15 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
   const g = new THREE.BufferGeometry()
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
   g.setAttribute('side', new THREE.Float32BufferAttribute(side, 1))
+  g.setAttribute('aMouth', new THREE.Float32BufferAttribute(mouth, 1))
+  g.setAttribute('aFloor', new THREE.Float32BufferAttribute(floorY, 1))
   g.setIndex(idx)
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Math.hypot(SX, SZ))
-  const mat = new THREE.ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-    uniforms: {
-      uBaked: { value: null as THREE.Texture | null },
-      uGSize: { value: new THREE.Vector2(1, 1) },
-      uBMapSize: { value: new THREE.Vector2(SX, SZ) },
-      uVScale: { value: 1 },
-      uSunDir: { value: new THREE.Vector3(0.5, 0.6, 0.3) },
-      uSunColor: { value: new THREE.Color(1, 0.95, 0.85) },
-      uSky: { value: new THREE.Color('#9fbfdf') },
-      uLight: { value: 1 },
-      uTime: { value: 0 },
-    },
-    vertexShader: /* glsl */ `
-      uniform float uVScale;
-      attribute float side;
-      ${BAKED_GLSL}
-      varying float vSide;
-      varying vec3 vWorld;
-      void main() {
-        float h = bakedAt(position.xz).x;
-        vec3 p = vec3(position.x, max(h, 0.0) * uVScale + 0.004, position.z);
-        vSide = side;
-        vWorld = p;
-        gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uSunDir;
-      uniform vec3 uSunColor;
-      uniform vec3 uSky;
-      uniform float uLight;
-      uniform float uTime;
-      varying float vSide;
-      varying vec3 vWorld;
-      void main() {
-        float edge = 1.0 - smoothstep(0.55, 1.0, abs(vSide));
-        vec3 V = normalize(cameraPosition - vWorld);
-        vec3 n = normalize(vec3(sin(vWorld.x * 90.0 + uTime) * 0.03, 1.0, cos(vWorld.z * 80.0 - uTime) * 0.03));
-        float fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
-        vec3 body = vec3(0.05, 0.12, 0.14);
-        vec3 col = mix(body, uSky, fres * 0.7) * uLight;
-        vec3 Hh = normalize(normalize(uSunDir) + V);
-        col += uSunColor * pow(max(dot(n, Hh), 0.0), 300.0) * 2.0;
-        // 河岸的湿润过渡
-        col = mix(col, body * 0.6, (1.0 - edge) * 0.5);
-        gl_FragColor = vec4(col, edge * 0.92);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }
-    `,
-  })
   const mesh = new THREE.Mesh(g, mat)
-  mesh.renderOrder = 1
+  // 画在水面之后，河口才能盖在水上渐隐
+  mesh.renderOrder = 3
   mesh.frustumCulled = false
-  return { mesh, mat }
+  return mesh
 }
 
 /**
@@ -119,12 +77,19 @@ function extendToWater(world: World, r: SmoothRiver): SmoothRiver {
   const n = r.xs.length
   if (n < 2) return r
   const { W, H, elevation: e, water } = world
+  // 只有几米深的近岸浅水看上去就是沙滩，要伸到看得见的水里（约 15 m 深，或湖面）才算接上
   const wetAt = (x: number, y: number) => {
     // 河道坐标以格左上角为原点，格心在 +0.5
-    const gx = Math.min(W - 1, Math.max(0, Math.round(x - 0.5)))
-    const gy = Math.min(H - 1, Math.max(0, Math.round(y - 0.5)))
-    const i = gy * W + gx
-    return e[i] <= 0 || !Number.isNaN(water[i])
+    const fx = Math.min(W - 1.001, Math.max(0, x - 0.5))
+    const fy = Math.min(H - 1.001, Math.max(0, y - 0.5))
+    const x0 = Math.floor(fx)
+    const y0 = Math.floor(fy)
+    const tx = fx - x0
+    const ty = fy - y0
+    const i = y0 * W + x0
+    const h = (e[i] * (1 - tx) + e[i + 1] * tx) * (1 - ty) + (e[i + W] * (1 - tx) + e[i + W + 1] * tx) * ty
+    const lake = !Number.isNaN(water[Math.round(fy) * W + Math.round(fx)]) && h > 0
+    return h < -0.022 || (lake && water[Math.round(fy) * W + Math.round(fx)] - h > 0.012)
   }
   // 末端方向取最后约 2 格的平均走向，避免被蜿蜒的最后一小段带偏
   const x1 = r.xs[n - 1]
@@ -136,24 +101,49 @@ function extendToWater(world: World, r: SmoothRiver): SmoothRiver {
   const dl = Math.hypot(dx, dy) || 1
   dx /= dl
   dy /= dl
-  const xs: number[] = []
-  const ys: number[] = []
   const f = r.fl[n - 1]
-  let reached = false
-  for (let s = 0.35; s <= 3.5; s += 0.35) {
-    const x = x1 + dx * s
-    const y = y1 + dy * s
-    xs.push(x)
-    ys.push(y)
-    if (wetAt(x, y)) {
-      // 再多伸一小段进水里
-      xs.push(x + dx * 0.8)
-      ys.push(y + dy * 0.8)
-      reached = true
-      break
+  const march = (ux: number, uy: number) => {
+    const xs: number[] = []
+    const ys: number[] = []
+    // 穿过潮滩的潮沟略带弯曲，不是一条直线
+    const ph = (x1 * 12.9898 + y1 * 78.233) % 6.283
+    for (let s = 0.35; s <= 20; s += 0.35) {
+      const wig = Math.sin(s * 0.7 + ph) * 0.5 * Math.min(1, s / 3)
+      const x = x1 + ux * s - uy * wig
+      const y = y1 + uy * s + ux * wig
+      xs.push(x)
+      ys.push(y)
+      if (wetAt(x, y)) {
+        // 再多伸一小段进水里
+        xs.push(x + ux * 1.2)
+        ys.push(y + uy * 1.2)
+        return { xs, ys }
+      }
     }
+    return null
   }
-  if (!reached) return r
+  // 先沿末端走向；走向与海岸平行时改朝最近的深水
+  let ext = march(dx, dy)
+  // 只对真正到了岸边的河道（末端几乎贴海平面）找最近的深水，支流末端不动
+  const endH = e[Math.min(H - 1, Math.max(0, Math.round(y1 - 0.5))) * W + Math.min(W - 1, Math.max(0, Math.round(x1 - 0.5)))]
+  if (!ext && endH < 0.01) {
+    let best = 99
+    let bx = 0
+    let by = 0
+    for (let oy = -20; oy <= 20; oy++) {
+      for (let ox = -20; ox <= 20; ox++) {
+        const d = Math.hypot(ox, oy)
+        if (d < best && d > 0 && wetAt(x1 + ox, y1 + oy)) {
+          best = d
+          bx = ox / d
+          by = oy / d
+        }
+      }
+    }
+    if (best < 99) ext = march(bx, by)
+  }
+  if (!ext) return r
+  const { xs, ys } = ext
   const m = xs.length
   const ox = new Float32Array(n + m)
   const oy = new Float32Array(n + m)
@@ -168,4 +158,25 @@ function extendToWater(world: World, r: SmoothRiver): SmoothRiver {
     of[n + j] = f * (1 + (j + 1) / m)
   }
   return { xs: ox, ys: oy, fl: of }
+}
+
+function smooth01(t: number) {
+  const x = Math.min(1, Math.max(0, t))
+  return x * x * (3 - 2 * x)
+}
+
+/** 某点的水深（km，陆地为负）与水面高度（海 0 / 湖面 / 陆地取海平面以下占位） */
+function waterDepth(world: World, x: number, y: number) {
+  const { W, H, elevation: e, water } = world
+  const fx = Math.min(W - 1.001, Math.max(0, x - 0.5))
+  const fy = Math.min(H - 1.001, Math.max(0, y - 0.5))
+  const x0 = Math.floor(fx)
+  const y0 = Math.floor(fy)
+  const tx = fx - x0
+  const ty = fy - y0
+  const i = y0 * W + x0
+  const h = (e[i] * (1 - tx) + e[i + 1] * tx) * (1 - ty) + (e[i + W] * (1 - tx) + e[i + W + 1] * tx) * ty
+  const lv = water[Math.round(fy) * W + Math.round(fx)]
+  if (!Number.isNaN(lv) && lv > 0) return { depth: lv - h, level: lv }
+  return { depth: -h, level: 0 }
 }

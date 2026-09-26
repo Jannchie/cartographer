@@ -48,6 +48,7 @@ function injectVertex(sh: THREE.WebGLProgramParametersWithUniforms, withNormal: 
     '#include <uv_vertex>',
     isPatch
       ? `vec2 pXZ = uPatch.xy + (position.xz - 0.5) * uPatch.z;
+float skirt = position.y;
 #include <uv_vertex>
 vec2 tUv = ((pXZ / uMapSize + 0.5) * (uHSize - 1.0) + 0.5) / uHSize;
 vMapUv = tUv;
@@ -59,7 +60,9 @@ vRoughnessMapUv = tUv;`
   sh.vertexShader = sh.vertexShader
     .replace(
       '#include <begin_vertex>',
-      (withNormal ? '' : 'float hC = bakedAt(pXZ).x;\n') + 'vec3 transformed = vec3(pXZ.x, hC * uVScale, pXZ.y);',
+      (withNormal ? '' : 'float hC = bakedAt(pXZ).x;\n') +
+        'vec3 transformed = vec3(pXZ.x, hC * uVScale, pXZ.y);' +
+        (isPatch ? '\ntransformed.y -= skirt * 0.03;' : ''),
     )
     .replace('#include <project_vertex>', '#include <project_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
 }
@@ -115,9 +118,9 @@ export function createTerrainMaterial(
           ? // 高清块超出沙盘的部分不画
             `#include <clipping_planes_fragment>
 if (abs(vWorld.x) > uMapSize.x * 0.5 || abs(vWorld.z) > uMapSize.y * 0.5) discard;`
-          : // 粗网格让出高清块覆盖的区域（留一圈重叠，由高清块的深度偏移盖住）
+          : // 粗网格让出高清块覆盖的区域；接缝由高清块四周向下的裙边遮住（不用深度偏移，否则浅水岸线会随镜头跳动）
             `#include <clipping_planes_fragment>
-if (uPatch.w > 0.5 && all(lessThan(abs(vWorld.xz - uPatch.xy), vec2(uPatch.z * 0.5 - 0.08)))) discard;`,
+if (uPatch.w > 0.5 && all(lessThan(abs(vWorld.xz - uPatch.xy), vec2(uPatch.z * 0.5 - 0.004)))) discard;`,
       )
       .replace(
         '#include <common>',
@@ -147,12 +150,29 @@ float gErK;
 float gPlainK;
 uniform vec2 uColorSize;
 uniform vec2 uMaskSize;
-vec2 sharpUv(vec2 uv, vec2 size, vec2 warp) {
-  vec2 st = uv * size - 0.5 + warp;
+/** 三次 B 样条采样（4 次双线性采样合成）：放大后没有双线性插值的格子感 */
+vec4 texBicubic(sampler2D t, vec2 uv, vec2 size, vec2 gx, vec2 gy) {
+  vec2 st = uv * size - 0.5;
   vec2 i = floor(st);
-  vec2 f = fract(st);
-  f = smoothstep(0.22, 0.78, f);
-  return (i + f + 0.5) / size;
+  vec2 f = st - i;
+  vec2 f2 = f * f, f3 = f2 * f;
+  vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+  vec2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+  vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+  vec2 w3 = f3 / 6.0;
+  vec2 g0 = w0 + w1, g1 = w2 + w3;
+  vec2 h0 = (i - 1.0 + w1 / g0 + 0.5) / size;
+  vec2 h1 = (i + 1.0 + w3 / g1 + 0.5) / size;
+  return g0.y * (g0.x * textureGrad(t, h0, gx, gy) + g1.x * textureGrad(t, vec2(h1.x, h0.y), gx, gy))
+       + g1.y * (g0.x * textureGrad(t, vec2(h0.x, h1.y), gx, gy) + g1.x * textureGrad(t, h1, gx, gy));
+}
+/**
+ * 覆盖度 → 清晰而不规则的边界：与噪声阈值比较（不贴着纹素网格），
+ * 远处像素覆盖大时退回平滑的覆盖度，避免闪烁。
+ */
+float organic(float cover, float n, float lod) {
+  float th = 0.06 + 0.88 * n;
+  return mix(cover, smoothstep(th - 0.12, th + 0.12, cover), lod);
 }
 /** 树冠格：返回 (像素相对树心的偏移.xy, 距离) */
 vec3 crownCell(vec2 p) {
@@ -212,16 +232,25 @@ vec2 wv = vec2(fbm3(P * 7.0), fbm3(P * 7.0 + 31.7)) - 0.5;
 vec2 gdx = dFdx(vMapUv);
 vec2 gdy = dFdy(vMapUv);
 // 连续的颜色只做扭曲（不锐化，避免把渐变变成台阶）；分类遮罩才锐化
-vec4 texel = textureGrad(map, vMapUv + wv * 0.9 / uColorSize, gdx, gdy);
+vec4 texel = texBicubic(map, vMapUv + wv * 0.9 / uColorSize, uColorSize, gdx, gdy);
 vec3 base = texel.rgb;
-gMask = textureGrad(uMask, sharpUv(vMapUv, uMaskSize, wv * 1.1), gdx, gdy);
+gMask = texBicubic(uMask, vMapUv + wv * 1.1 / uMaskSize, uMaskSize, gdx, gdy);
 gAO = gMask.a;
-gMask2 = textureGrad(uMask2, sharpUv(vMapUv, uMaskSize, wv * 1.1), gdx, gdy);
+gMask2 = texBicubic(uMask2, vMapUv + wv * 1.1 / uMaskSize, uMaskSize, gdx, gdy);
 gDune = 0.0;
 // LOD：像素覆盖的世界尺寸越大，高频细节越弱
 float fw = length(fwidth(P));
 gLod1 = 1.0 - smoothstep(0.02, 0.07, fw);
 gLod2 = 1.0 - smoothstep(0.006, 0.025, fw);
+// 类别边界（森林 / 沙地 / 旱地 / 湿地 / 盐壳）按噪声阈值成形，放大后是自然的不规则轮廓
+{
+  float edgeLod = 1.0 - smoothstep(0.006, 0.04, fw);
+  float nEdge = fbm3(P * 14.0 + wv * 3.0);
+  gMask.r = organic(gMask.r, nEdge, edgeLod);
+  gMask.b = organic(gMask.b, fbm3(P * 11.0 + 9.1), edgeLod);
+  gMask2.b = organic(gMask2.b, nEdge, edgeLod);
+  gMask2.a = organic(gMask2.a, fbm3(P * 13.0 + 2.2), edgeLod);
+}
 float hKm = vWorld.y / uVScale;
 vec3 wN0 = normalize(inverseTransformDirection(normalize(vNormal), viewMatrix));
 float slope = 1.0 - wN0.y;
@@ -398,9 +427,6 @@ reflectedLight.indirectDiffuse *= mix(1.0, gAO, 0.6);`,
   /** 视口高清块的材质：共用贴图与大部分 uniform，只换烘焙纹理与映射 */
   const makePatch = (baked: THREE.Texture, N: number) => {
     const pm = new THREE.MeshStandardMaterial({ map: color, roughnessMap: rough, roughness: 1, metalness: 0 })
-    pm.polygonOffset = true
-    pm.polygonOffsetFactor = -1
-    pm.polygonOffsetUnits = -1
     const pu: TerrainUniforms = {
       ...uniforms,
       uBaked: { value: baked },

@@ -13,7 +13,7 @@ const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySele
 
 // —— 状态 ——
 const params: WorldParams = { ...DEFAULT_PARAMS, ...readHash() }
-const view3d: View3DOptions = { exaggeration: 28, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true }
+const view3d: View3DOptions = { exaggeration: 28, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true, haze: true }
 const atlasOpts = { labels: true, contours: true, graticule: true }
 let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
 /** 每种风格缓存一份矢量显示列表（预览、SVG 导出、PNG 导出共用） */
@@ -70,23 +70,6 @@ function toggles(host: HTMLElement, list: { label: string; get: () => boolean; s
     b.addEventListener('click', () => {
       t.set(!t.get())
       b.classList.toggle('on', t.get())
-    })
-    box.appendChild(b)
-  }
-  host.appendChild(box)
-}
-
-/** 分段单选 */
-function segmented<T extends string>(host: HTMLElement, items: [T, string][], get: () => T, set: (v: T) => void) {
-  const box = document.createElement('div')
-  box.className = 'segmented'
-  for (const [v, label] of items) {
-    const b = document.createElement('button')
-    b.textContent = label
-    b.classList.toggle('on', get() === v)
-    b.addEventListener('click', () => {
-      set(v)
-      for (const x of box.children) x.classList.toggle('on', x === b)
     })
     box.appendChild(b)
   }
@@ -211,17 +194,9 @@ for (const pr of presets) {
 
 // —— 3D 沙盘控件 ——
 const v3 = $('#view-3d')
-segmented(
-  v3,
-  [
-    ['aerial', '航拍写实'],
-    ['model', '地形模型'],
-  ],
-  () => view3d.look,
-  (v) => scene.setOptions({ look: (view3d.look = v) }),
-)
 toggles(v3, [
   { label: '云层', get: () => view3d.clouds, set: (v) => scene.setOptions({ clouds: (view3d.clouds = v) }) },
+  { label: '空气感', get: () => view3d.haze, set: (v) => scene.setOptions({ haze: (view3d.haze = v) }) },
   { label: '地名', get: () => view3d.labels, set: (v) => scene.setOptions({ labels: (view3d.labels = v) }) },
 ])
 slider(v3, {
