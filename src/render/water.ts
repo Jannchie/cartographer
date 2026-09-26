@@ -165,12 +165,12 @@ export function createWaterMaterial(
           // 迎浪岸段碎浪强、背风湾里几乎没有
           shoreFoam *= smoothstep(0.3, 0.7, fbm3(P * 0.9 - 5.0));
           // 礁缘碎浪
-          shoreFoam += reef * smoothstep(0.62, 0.78, fbm3(P * 9.0 + uTime * 0.2)) * 0.35 * (1.0 - smoothstep(3.0, 12.0, dm));
+          shoreFoam += reef * smoothstep(0.7, 0.85, fbm3(P * 5.0 + uTime * 0.1)) * 0.2 * (1.0 - smoothstep(2.0, 8.0, dm));
           shoreFoam *= 0.55 + 0.45 * fbm3(P * 26.0 + vec2(uTime * 0.3, 0.0));
           if (lake) shoreFoam *= 0.25;
         }
         // 外海白浪
-        float caps = smoothstep(0.83, 0.9, fbm3(P * 5.0 + vec2(uTime * 0.05, -uTime * 0.04))) * smoothstep(40.0, 200.0, dm) * 0.5 * lod;
+        float caps = smoothstep(0.86, 0.92, fbm3(P * 5.0 + vec2(uTime * 0.05, -uTime * 0.04))) * smoothstep(60.0, 250.0, dm) * 0.35 * lod;
         float foam = clamp(shoreFoam + caps, 0.0, 1.0);
         col = mix(col, vec3(0.95, 0.97, 0.98) * uLight * (0.6 + 0.4 * cs), foam * 0.9);
 

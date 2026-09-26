@@ -44,7 +44,7 @@ export class AtlasViewer {
     this.base.style.width = list.width + 'px'
     this.base.style.height = list.height + 'px'
     this.drawn = null
-    this.detail.style.visibility = 'hidden'
+    this.detail.style.display = 'none'
     this.apply()
   }
 
@@ -85,7 +85,7 @@ export class AtlasViewer {
     const { x, y, k } = this.view
     // 底图精度足够时不需要细节层
     if (k * dpr <= this.baseScale * 1.05) {
-      this.detail.style.visibility = 'hidden'
+      this.detail.style.display = 'none'
       this.drawn = null
       return
     }
@@ -100,6 +100,6 @@ export class AtlasViewer {
     this.list.render(ctx, k * dpr, x * dpr, y * dpr)
     this.drawn = { x, y, k }
     this.detail.style.transform = 'none'
-    this.detail.style.visibility = 'visible'
+    this.detail.style.display = 'block'
   }
 }

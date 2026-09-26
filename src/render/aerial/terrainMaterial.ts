@@ -20,24 +20,37 @@ export interface TerrainUniforms {
 /** 顶点着色器：高度在 GPU 上由双三次插值 + 亚网格细节求得，法线用有限差分 */
 const VERTEX_HEIGHT = /* glsl */ `
   vec2 xzP = position.xz;
-  float eN = uMapSize.x / (uHSize.x - 1.0) * 0.35;
-  float hC = terrainHeight(xzP);
-  float hX = terrainHeight(xzP + vec2(eN, 0.0));
-  float hZ = terrainHeight(xzP + vec2(0.0, eN));
-  vec3 objectNormal = normalize(vec3(-(hX - hC) * uVScale / eN, 1.0, -(hZ - hC) * uVScale / eN));
+  float eN = uMapSize.x / (uHSize.x - 1.0) * 0.5;
+  float b0 = bicubicHeight(xzP);
+  vec2 gB = vec2(bicubicHeight(xzP + vec2(eN, 0.0)) - b0, bicubicHeight(xzP + vec2(0.0, eN)) - b0) / eN; // km / 世界单位
+  float slope = length(gB) * uVScale;
+  float amp = detailAmp(b0, slope);
+  vec3 er = amp > 0.0 ? erosionNoise(xzP, gB * uVScale, 4, 2.3) : vec3(0.0);
+  float hC = b0 + amp * (er.x - 0.15);
+  vec2 gT = gB + amp * er.yz;
+  vErosion = er.x;
+  vec3 objectNormal = normalize(vec3(-gT.x * uVScale, 1.0, -gT.y * uVScale));
+`
+
+const DEPTH_HEIGHT = /* glsl */ `
+  float eN = uMapSize.x / (uHSize.x - 1.0) * 0.5;
+  float b0 = bicubicHeight(position.xz);
+  vec2 gB = vec2(bicubicHeight(position.xz + vec2(eN, 0.0)) - b0, bicubicHeight(position.xz + vec2(0.0, eN)) - b0) / eN;
+  float amp = detailAmp(b0, length(gB) * uVScale);
+  float hC = b0 + (amp > 0.0 ? amp * (erosionNoise(position.xz, gB * uVScale, 4, 2.3).x - 0.15) : 0.0);
 `
 
 function injectVertex(sh: THREE.WebGLProgramParametersWithUniforms, withNormal: boolean) {
   sh.vertexShader = sh.vertexShader.replace(
     '#include <common>',
-    `#include <common>\nuniform float uVScale;\n${NOISE_GLSL}\n${HEIGHT_GLSL}\nvarying vec3 vWorld;`,
+    `#include <common>\nuniform float uVScale;\n${NOISE_GLSL}\n${HEIGHT_GLSL}\nvarying vec3 vWorld;\nvarying float vErosion;`,
   )
   if (withNormal) sh.vertexShader = sh.vertexShader.replace('#include <beginnormal_vertex>', VERTEX_HEIGHT)
   // 深度材质的顶点着色器里没有法线段，高度在这里求
   sh.vertexShader = sh.vertexShader
     .replace(
       '#include <begin_vertex>',
-      (withNormal ? '' : 'float hC = terrainHeight(position.xz);\n') + 'vec3 transformed = vec3(position.x, hC * uVScale, position.z);',
+      (withNormal ? '' : DEPTH_HEIGHT) + 'vec3 transformed = vec3(position.x, hC * uVScale, position.z);',
     )
     .replace('#include <project_vertex>', '#include <project_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
 }
@@ -90,7 +103,9 @@ uniform float uCloudY;
 uniform float uCloudOn;
 uniform vec3 uSun;
 uniform float uDetail;
+varying float vErosion;
 ${NOISE_GLSL}
+${HEIGHT_GLSL}
 float gAO;
 float gLod1;
 float gLod2;
@@ -188,6 +203,9 @@ if (hKm > 0.0) {
   // 雪上不画岩
   float snowy = smoothstep(0.75, 0.9, min(base.r, min(base.g, base.b)));
   col = mix(col, rock, rk * (1.0 - snowy) * 0.9);
+  // 风化：冲沟暗、刃脊亮，山地越陡越明显
+  float mnt = smoothstep(0.12, 0.45, slope) * smoothstep(0.2, 1.2, hKm);
+  col *= mix(1.0, mix(0.7, 1.12, smoothstep(0.15, 0.85, vErosion)), mnt);
 }
 col *= mix(1.0, gAO, 0.85);
 diffuseColor.rgb *= col;
@@ -203,6 +221,15 @@ if (vWorld.y > 0.0 && uDetail > 0.0) {
   float hx = detailH(Q + vec2(e, 0.0), gMask);
   float hz = detailH(Q + vec2(0.0, e), gMask);
   vec3 dW = vec3(-(hx - h0) / e, 0.0, -(hz - h0) / e) * 0.012 * uDetail;
+  // 逐像素风化法线：沿当前坡向的细冲沟（相当于一张程序化的侵蚀法线贴图）
+  vec3 wN = normalize(inverseTransformDirection(normal, viewMatrix));
+  float st = 1.0 - wN.y;
+  float mk = smoothstep(0.08, 0.4, st) * smoothstep(0.15, 0.8, vWorld.y / uVScale) * gLod1;
+  if (mk > 0.001) {
+    vec2 gW = -wN.xz / max(wN.y, 0.25);
+    vec3 er = erosionNoise(Q, gW, 3, 9.0);
+    dW += vec3(-er.y, 0.0, -er.z) * 0.0032 * mk * uDetail;
+  }
   normal = normalize(normal + (viewMatrix * vec4(dW, 0.0)).xyz);
 }`,
       )

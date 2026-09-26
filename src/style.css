@@ -475,6 +475,7 @@ dl#stats dd {
   overflow: hidden;
 }
 .l3 {
+  opacity: 0;
   position: absolute;
   left: 0;
   top: 0;

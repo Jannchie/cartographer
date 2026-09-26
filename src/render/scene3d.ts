@@ -124,9 +124,11 @@ export class Scene3D {
 
   /** 航拍且开云时走体积云管线（场景 → 云 → 合成），否则直接渲染 */
   private renderFrame() {
-    const cloudsOn = this.opts.look === 'aerial' && this.opts.clouds && this.clouds
-    if (cloudsOn) this.clouds!.render(this.renderer, this.scene, this.camera, this.clock.getElapsedTime())
-    else this.renderer.render(this.scene, this.camera)
+    // 航拍：后处理管线（空气透视 + 体积云）；沙盘模型：直接渲染
+    if (this.opts.look === 'aerial' && this.clouds) {
+      this.clouds.march.uniforms.uEnabled.value = this.opts.clouds ? 1 : 0
+      this.clouds.render(this.renderer, this.scene, this.camera, this.clock.getElapsedTime())
+    } else this.renderer.render(this.scene, this.camera)
   }
 
   private resize() {
@@ -154,15 +156,16 @@ export class Scene3D {
   /** 航拍：天空、空气透视、延伸到地平线的外海、云；沙盘：悬浮的立体模型 */
   private applyLook() {
     const aerial = this.opts.look === 'aerial'
-    this.sky.mesh.visible = aerial
-    this.scene.fog = aerial ? this.fog : null
-    if (this.outer) this.outer.visible = aerial
-    for (const c of this.group.children) if (c.userData.skirt) c.visible = !aerial
+    // 两种观感都是切出来的方块沙盘：四周是地层与海水剖面，不再延伸无尽外海
+    this.sky.mesh.visible = false
+    this.scene.fog = null
+    if (this.outer) this.outer.visible = false
+    for (const c of this.group.children) if (c.userData.skirt) c.visible = true
     const cloudsOn = this.opts.clouds && aerial && !!this.clouds
     if (this.terrainU) this.terrainU.uCloudOn.value = cloudsOn ? 1 : 0
     if (this.waterMat) {
       this.waterMat.uniforms.uCloudOn.value = cloudsOn ? 1 : 0
-      this.waterMat.uniforms.uFogDensity.value = aerial ? this.fog.density : 0
+      this.waterMat.uniforms.uFogDensity.value = 0
     }
     this.renderer.toneMappingExposure = aerial ? 1.0 : 1.05
     this.updateSun()
@@ -207,6 +210,12 @@ export class Scene3D {
       u.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
       u.uFogColor.value.copy(this.fog.color)
       u.uFogDensity.value = this.fog.density
+      // 空气感：霾色随天空，顺光方向有太阳散射光晕；低空薄雾高度约 0.9 km
+      const c = this.clouds.comp.uniforms
+      c.uSun.value.copy(d)
+      c.uSunColor.value.copy(this.sun.color).multiplyScalar(0.25 + 0.35 * k)
+      c.uHaze.value.copy(this.fog.color).multiplyScalar(0.9)
+      c.uFogHeight.value = this.vScale * 0.9
     }
   }
 

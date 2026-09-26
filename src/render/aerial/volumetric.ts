@@ -169,6 +169,8 @@ const MARCH_FRAG = /* glsl */ `
   uniform float uFogDensity;
   uniform float uTime;
   uniform float uSteps;
+  uniform vec4 uMapRect;
+  uniform float uEnabled;
   varying vec2 vUv;
 
   float hash12(vec2 p) {
@@ -182,9 +184,16 @@ const MARCH_FRAG = /* glsl */ `
   }
 
   float density(vec3 p, bool cheap) {
+    // 只在沙盘上空成云，边缘柔和收拢
+    vec2 mq = (p.xz - uMapRect.xy) / uMapRect.zw;
+    float edge = smoothstep(0.0, 0.06, min(min(mq.x, 1.0 - mq.x), min(mq.y, 1.0 - mq.y)));
+    if (edge <= 0.0) return 0.0;
     vec2 cuv = (p.xz - uCovRect.xy) / uCovRect.zw;
     if (cuv.x < 0.0 || cuv.y < 0.0 || cuv.x > 1.0 || cuv.y > 1.0) return 0.0;
-    float cov = texture(uCov, cuv).r;
+    // 域扭曲：用 3D 噪声推开覆盖度的采样点，轮廓不再是规整的团块
+    vec3 wq = p * uNoiseScale * 0.35 + vec3(uTime * 0.002, 0.0, 0.0);
+    vec2 warp = (texture(uNoise, wq).rb - 0.5) * 0.012;
+    float cov = texture(uCov, cuv + warp).r;
     if (cov < 0.01) return 0.0;
     float h = (p.y - uBase) / (uTop - uBase);
     if (h < 0.0 || h > 1.0) return 0.0;
@@ -193,18 +202,21 @@ const MARCH_FRAG = /* glsl */ `
     float shape = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(topH * 0.45, topH, h));
     vec3 q = p * uNoiseScale + vec3(uTime * 0.006, 0.0, uTime * 0.003);
     float n = texture(uNoise, q).r;
-    float c = cov * shape;
+    float c = cov * shape * edge;
     float d = clamp((n - (1.0 - c)) / max(c, 0.001), 0.0, 1.0);
+    // 厚薄不一：低频"云水量"场让有的云浓、有的只是一缕薄纱
+    float lwc = texture(uCov, fract(cuv * 3.7 + warp * 6.0 + 0.37)).r;
+    d *= mix(0.18, 1.0, smoothstep(0.1, 0.9, lwc));
     if (!cheap && d > 0.0) {
       // 细节噪声侵蚀边缘：底部拉丝、顶部卷曲
-      float dn = texture(uNoise, q * 5.3 + vec3(0.0, uTime * 0.01, 0.0)).g;
-      d = clamp(d - dn * mix(0.5, 0.28, h) * (1.0 - d * 0.6), 0.0, 1.0);
-      d = smoothstep(0.0, 0.6, d);
+      float dn = texture(uNoise, q * 4.1 + vec3(0.0, uTime * 0.01, 0.0)).r;
+      d = clamp(d - (dn - 0.3) * mix(0.4, 0.22, h) * (1.0 - d), 0.0, 1.0);
     }
     return d;
   }
 
   void main() {
+    if (uEnabled < 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
     float depth = texture(uDepth, vUv).r;
     vec2 ndc = vUv * 2.0 - 1.0;
     vec4 vp = uInvProj * vec4(ndc, depth * 2.0 - 1.0, 1.0);
@@ -234,7 +246,7 @@ const MARCH_FRAG = /* glsl */ `
     vec3 L = normalize(uSun);
     float cosT = dot(dir, L);
     float phase = mix(HG(cosT, 0.62), HG(cosT, -0.22), 0.35) * 4.0 * 3.14159;
-    float sigma = 5.5;
+    float sigma = 2.6;
     float lstep = (uTop - uBase) * 0.1;
     vec3 col = vec3(0.0);
     float trans = 1.0;
@@ -276,13 +288,47 @@ const MARCH_FRAG = /* glsl */ `
 const COMPOSITE_FRAG = /* glsl */ `
   uniform sampler2D uScene;
   uniform sampler2D uClouds;
+  uniform sampler2D uDepth;
+  uniform mat4 uInvProj;
+  uniform mat4 uCamWorld;
+  uniform vec3 uCamPos;
+  uniform vec3 uSun;
+  uniform vec3 uSunColor;
+  uniform vec3 uHaze;
+  uniform float uHazeDensity;
+  uniform float uFogDensity;
+  uniform float uFogHeight;
   varying vec2 vUv;
   void main() {
     vec4 s = texture2D(uScene, vUv);
-    // 半分辨率云的柔和上采样
     vec4 c = texture2D(uClouds, vUv);
-    vec3 col = s.rgb * c.a + c.rgb;
-    gl_FragColor = vec4(col, 1.0);
+    vec3 col = s.rgb;
+    float depth = texture2D(uDepth, vUv).r;
+    if (depth < 0.9999 && s.a > 0.0) {
+      // 由深度重建世界坐标
+      vec2 ndc = vUv * 2.0 - 1.0;
+      vec4 vp = uInvProj * vec4(ndc, depth * 2.0 - 1.0, 1.0);
+      vp /= vp.w;
+      vec3 wp = (uCamWorld * vec4(vp.xyz, 1.0)).xyz;
+      vec3 rd = wp - uCamPos;
+      float t = length(rd);
+      rd /= t;
+      // 光学厚度：均匀霾 + 贴近海面的高度雾（沿视线解析积分 ∫exp(-y/H)dt）
+      float y0 = uCamPos.y;
+      float dy = rd.y;
+      float H = uFogHeight;
+      float hInt = abs(dy) > 1e-3 ? H / dy * (exp(-max(y0, 0.0) / H) - exp(-max(wp.y, 0.0) / H)) : t * exp(-max(y0, 0.0) / H);
+      float od = uHazeDensity * t + uFogDensity * max(hInt, 0.0);
+      // 蓝光散射得更多：远处偏蓝
+      vec3 T = exp(-od * vec3(0.62, 0.8, 1.0));
+      float mu = max(dot(rd, normalize(uSun)), 0.0);
+      vec3 inscatter = uHaze * (0.85 + 0.15 * rd.y) + uSunColor * (pow(mu, 8.0) * 0.55 + pow(mu, 32.0) * 0.6);
+      col = col * T + inscatter * (1.0 - T);
+    }
+    // 云（预乘）叠在最上面；背景保持透明，沙盘浮在页面上
+    vec3 outc = col * c.a + c.rgb;
+    float a = 1.0 - (1.0 - s.a) * c.a;
+    gl_FragColor = vec4(outc, a);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }
@@ -299,7 +345,7 @@ export class VolumetricClouds {
   private fsCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
   private quad: THREE.Mesh
   readonly march: THREE.ShaderMaterial
-  private comp: THREE.ShaderMaterial
+  readonly comp: THREE.ShaderMaterial
 
   constructor(seed: number, SX: number, SZ: number, base: number, top: number, coverage: number) {
     this.coverage = coverageMap(seed, coverage)
@@ -336,6 +382,8 @@ export class VolumetricClouds {
         uFogDensity: { value: 0.0036 },
         uTime: { value: 0 },
         uSteps: { value: 56 },
+        uMapRect: { value: new THREE.Vector4(-SX / 2, -SZ / 2, SX, SZ) },
+        uEnabled: { value: 1 },
       },
     })
     this.comp = new THREE.ShaderMaterial({
@@ -343,10 +391,20 @@ export class VolumetricClouds {
       fragmentShader: COMPOSITE_FRAG,
       depthTest: false,
       depthWrite: false,
+      transparent: true,
       uniforms: {
         uScene: { value: this.sceneRT.texture },
         uClouds: { value: this.cloudRT.texture },
-        uCloudTexel: { value: new THREE.Vector2() },
+        uDepth: { value: this.sceneRT.depthTexture },
+        uInvProj: { value: new THREE.Matrix4() },
+        uCamWorld: { value: new THREE.Matrix4() },
+        uCamPos: { value: new THREE.Vector3() },
+        uSun: { value: new THREE.Vector3(0, 1, 0) },
+        uSunColor: { value: new THREE.Color(1, 1, 1) },
+        uHaze: { value: new THREE.Color('#a9c6e4') },
+        uHazeDensity: { value: 0.0026 },
+        uFogDensity: { value: 0.035 },
+        uFogHeight: { value: 0.5 },
       },
     })
     const tri = new THREE.BufferGeometry()
@@ -361,7 +419,6 @@ export class VolumetricClouds {
     const cw = Math.max(1, Math.floor(w / 2))
     const ch = Math.max(1, Math.floor(h / 2))
     this.cloudRT.setSize(cw, ch)
-    this.comp.uniforms.uCloudTexel.value.set(1 / cw, 1 / ch)
   }
 
   render(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, time: number) {
@@ -370,6 +427,10 @@ export class VolumetricClouds {
     u.uCamWorld.value.copy(camera.matrixWorld)
     u.uCamPos.value.setFromMatrixPosition(camera.matrixWorld)
     u.uTime.value = time
+    const cu = this.comp.uniforms
+    cu.uInvProj.value.copy(camera.projectionMatrixInverse)
+    cu.uCamWorld.value.copy(camera.matrixWorld)
+    cu.uCamPos.value.copy(u.uCamPos.value)
     renderer.setRenderTarget(this.sceneRT)
     renderer.render(scene, camera)
     this.quad.material = this.march

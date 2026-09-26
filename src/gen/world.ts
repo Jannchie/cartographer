@@ -4,6 +4,7 @@ import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type H
 import { Language } from './names'
 import { ZhNamer } from './names_zh'
 import { buildRealms } from './realms'
+import { Noise } from './noise'
 import { RNG, hashString } from './rng'
 import { buildTerrain } from './terrain'
 import { Biome, type Label, type River, type World, type WorldParams } from './types'
@@ -113,7 +114,18 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
     runoff[i] = elev[i] > 0 ? (pr * ratio) / 1000 : 0
     lakeEvap[i] = (Math.max(0, e * 1.05 - pr * 0.9)) / 1000
   }
-  const hydro = hydrology(elev, runoff, lakeEvap, W, H)
+  // 汇流用"扰动地表"：陆上叠加低频微地形，平原与均匀斜坡上的水流会汇合成树枝状水系，
+  // 而不是一排排互不相交的平行直线。真实高度不改。
+  const route = routingSurface(elev, W, H, rClimate.fork())
+  const hydro = hydrology(route, runoff, lakeEvap, W, H)
+  // 湖面高度按真实地形重算（扰动只影响流向）
+  for (const lk of hydro.lakes) {
+    if (!lk.cells.length) continue
+    let lv = -Infinity
+    for (const c of lk.cells) lv = Math.max(lv, elev[c])
+    lk.level = lv + 0.002
+    for (const c of lk.cells) hydro.lakeLevel[c] = lk.level
+  }
   const rivers = extractRivers(hydro, elev, W, H)
   carveRivers(elev, hydro, W, H)
 
@@ -250,6 +262,27 @@ export function riverThreshold(W: number) {
 }
 
 /** 从汇流场提取河流折线：从每个源头向下游追踪，直到入海、入湖或汇入已有河道 */
+function routingSurface(elev: Float32Array, W: number, H: number, rng: RNG): Float32Array {
+  const n = new Noise(rng)
+  const out = new Float32Array(elev)
+  const s = 1024 / W
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x
+      const h = elev[i]
+      if (h <= 0) continue
+      // 两个尺度的微洼：~40 格的汇水盆与 ~12 格的细谷；越平的地方相对越重要
+      const u = (x * s) / 40
+      const v = (y * s) / 40
+      const m = n.fbm(u, v, 3) * 0.04 + n.fbm(u * 3.3 + 7, v * 3.3 - 3, 2) * 0.012
+      // 离海岸很近时收敛到原值，避免改变入海口
+      const fade = Math.min(1, h / 0.02)
+      out[i] = Math.max(0.0005, h + m * fade)
+    }
+  }
+  return out
+}
+
 function extractRivers(hydro: HydroResult, elev: Float32Array, W: number, H: number): River[] {
   const N = W * H
   const thr = riverThreshold(W)
@@ -259,31 +292,85 @@ function extractRivers(hydro: HydroResult, elev: Float32Array, W: number, H: num
   // 有上游河道的格不是源头
   const hasUp = new Uint8Array(N)
   for (let i = 0; i < N; i++) if (isRiver[i] && dir[i] >= 0) hasUp[dir[i]] = 1
-  const visited = new Uint8Array(N)
-  const rivers: River[] = []
-  // 按流量从大到小处理源头，主干优先完整
-  const heads: number[] = []
-  for (let i = 0; i < N; i++) if (isRiver[i] && !hasUp[i]) heads.push(i)
-  for (const h of heads) {
-    const pts: number[] = []
-    const fl: number[] = []
+  // 按河口流量从大到小处理：先追踪每条从源头到汇点的路径
+  interface Path {
+    cells: number[]
+    mouthFlow: number
+    toSea: boolean
+  }
+  const paths: Path[] = []
+  for (let h = 0; h < N; h++) {
+    if (!isRiver[h] || hasUp[h]) continue
+    const cells: number[] = []
     let c = h
+    let toSea = false
     for (let guard = 0; guard < N; guard++) {
-      pts.push(c % W + 0.5, Math.floor(c / W) + 0.5)
-      fl.push(flow[c])
-      if (visited[c]) break
-      visited[c] = 1
+      cells.push(c)
       const t = dir[c]
       if (t < 0) break
       if (elev[t] <= 0 || lakeId[t] >= 0) {
-        // 延伸到水边
-        pts.push(t % W + 0.5, Math.floor(t / W) + 0.5)
-        fl.push(flow[c])
+        cells.push(t)
+        toSea = true
         break
       }
       c = t
     }
-    if (pts.length >= 14) rivers.push({ points: Float32Array.from(pts), flow: Float32Array.from(fl) })
+    paths.push({ cells, mouthFlow: flow[cells[cells.length - 1]], toSea })
+  }
+  paths.sort((a, b) => b.mouthFlow - a.mouthFlow)
+
+  // 占据栅格：已接纳河道周围 R 格
+  const R = Math.max(3, Math.round(6 * (W / 1024)))
+  const occ = new Uint8Array(N)
+  const mark = (c: number) => {
+    const cx = c % W
+    const cy = (c - cx) / W
+    for (let dy = -R; dy <= R; dy++) {
+      const y = cy + dy
+      if (y < 0 || y >= H) continue
+      for (let dx = -R; dx <= R; dx++) {
+        const x = cx + dx
+        if (x < 0 || x >= W || dx * dx + dy * dy > R * R) continue
+        occ[y * W + x] = 1
+      }
+    }
+  }
+  const visited = new Uint8Array(N)
+  const rivers: River[] = []
+  for (const p of paths) {
+    // 截到与已有河道的汇合点为止（汇合点之后与主流重合）
+    const own: number[] = []
+    let joins = false
+    for (const c of p.cells) {
+      own.push(c)
+      if (visited[c]) {
+        joins = true
+        break
+      }
+    }
+    if (own.length < 7) continue
+    // 独立入海/入湖、且大部分河段贴着已有河道并行 → 视觉上的"平行河"，丢弃
+    if (!joins) {
+      let near = 0
+      for (const c of own) if (occ[c]) near++
+      if (near / own.length > 0.35) continue
+      // 又短又小的入海小溪
+      if (own.length < 18 && p.mouthFlow < thr * 3) continue
+    }
+    const pts: number[] = []
+    const fl: number[] = []
+    for (let k = 0; k < own.length; k++) {
+      const c = own[k]
+      pts.push((c % W) + 0.5, Math.floor(c / W) + 0.5)
+      fl.push(flow[own[Math.max(0, k - (k === own.length - 1 && !joins ? 1 : 0))]])
+    }
+    for (const c of own) {
+      if (!visited[c]) {
+        visited[c] = 1
+        mark(c)
+      }
+    }
+    rivers.push({ points: Float32Array.from(pts), flow: Float32Array.from(fl) })
   }
   return rivers
 }
