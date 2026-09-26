@@ -1,5 +1,6 @@
 import type { River, World } from '../gen/types'
 import { riverThreshold } from '../gen/world'
+import { hash } from './atlas/fields'
 
 export interface SmoothRiver {
   xs: Float32Array
@@ -123,7 +124,7 @@ function meander(xs: number[], ys: number[], fl: number[]): SmoothRiver {
   const oy: number[] = []
   const of: number[] = []
   let j = 0
-  const seed = xs[0] * 12.9898 + ys[0] * 78.233
+  const seed = Math.round(xs[0] * 12.9898 + ys[0] * 78.233)
   for (let k = 0; k < m; k++) {
     const s = (k / (m - 1)) * total
     while (j < n - 2 && L[j + 1] < s) j++
@@ -138,9 +139,10 @@ function meander(xs: number[], ys: number[], fl: number[]): SmoothRiver {
     // 沿弧长的一维分形噪声做摆动：弯的疏密、幅度都不规则；
     // 另一层低频噪声调制幅度，让有的河段近乎笔直、有的河段曲流发育。大河摆幅更大
     const f = fl[j]
-    const tort = 0.25 + 0.75 * noise1(s * 0.12, seed + 91.7)
+    const tort = 0.25 + 0.75 * noise1(s * 0.12, seed + 91)
     const amp = Math.min(1.1, 0.3 + 0.1 * Math.log2(1 + f)) * tort * Math.min(1, s / 2, (total - s) / 2)
-    const w = (noise1(s * 0.55, seed) - 0.5) * 1.3 + (noise1(s * 1.4, seed + 13.1) - 0.5) * 0.6 + (noise1(s * 3.3, seed + 47.9) - 0.5) * 0.25
+    let w = 0
+    for (const [freq, weight, off] of WIGGLE) w += (noise1(s * freq, seed + off) - 0.5) * weight
     ox.push(x - ty * w * amp)
     oy.push(y + tx * w * amp)
     of.push(f)
@@ -148,14 +150,13 @@ function meander(xs: number[], ys: number[], fl: number[]): SmoothRiver {
   return { xs: Float32Array.from(ox), ys: Float32Array.from(oy), fl: Float32Array.from(of) }
 }
 
-/** 平滑的一维值噪声，约 [0, 1] */
+/** 摆动的分形层：[频率, 权重, 种子偏移] */
+const WIGGLE = [[0.55, 1.3, 0], [1.4, 0.6, 13], [3.3, 0.25, 47]] as const
+
+/** 平滑的一维值噪声（seed 为整数行号），[0, 1] */
 function noise1(x: number, seed: number) {
-  const h = (i: number) => {
-    const v = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453
-    return v - Math.floor(v)
-  }
   const i = Math.floor(x)
   const t = x - i
   const u = t * t * (3 - 2 * t)
-  return h(i) * (1 - u) + h(i + 1) * u
+  return hash(i, seed) * (1 - u) + hash(i + 1, seed) * u
 }
