@@ -7,13 +7,11 @@ import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMat
 import { VolumetricClouds } from './aerial/volumetric'
 import { TerrainBake } from './aerial/bake'
 import { createRiverMesh } from './aerial/rivers3d'
-import { Forest } from './aerial/trees'
 import type { SmoothRiver } from './rivers'
 import { createWaterMaterial } from './water'
 
 export interface View3DOptions {
   exaggeration: number
-  trees: boolean
   labels: boolean
   sunAzimuth: number
   sunElevation: number
@@ -28,7 +26,7 @@ const HAZE = new THREE.Color('#a9c6e4')
 const SX = 100
 
 /**
- * 3D 立体沙盘：地形网格 + 水面 + 植被实例 + 侧面剖面，
+ * 3D 立体沙盘：地形网格 + 水面 + 河流 + 侧面剖面，
  * 光照带实时阴影，太阳方位与高度可调。
  */
 export class Scene3D {
@@ -43,7 +41,6 @@ export class Scene3D {
   private terrain: THREE.Mesh | null = null
   private water: THREE.Mesh | null = null
   private waterMat: THREE.ShaderMaterial | null = null
-  private forest: Forest | null = null
   private heightTex: THREE.DataTexture | null = null
   private tempTex: THREE.DataTexture | null = null
   private maskTex: THREE.DataTexture | null = null
@@ -74,7 +71,7 @@ export class Scene3D {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.05
     this.renderer.shadowMap.enabled = true
-    // 地形与植被都是静态的：阴影只在太阳或地形变化时重绘
+    // 地形是静态的：阴影只在太阳或地形变化时重绘
     this.renderer.shadowMap.autoUpdate = false
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.setClearColor(0x000000, 0)
@@ -139,7 +136,6 @@ export class Scene3D {
       const t = this.clock.getElapsedTime()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = t
       if (this.riverMat) this.riverMat.uniforms.uTime.value = t
-      this.forest?.update(this.camera)
       this.renderFrame()
       if (pf) {
         if (q) {
@@ -217,7 +213,6 @@ export class Scene3D {
     const prev = this.opts
     this.opts = { ...this.opts, ...o }
     if (o.exaggeration !== undefined && o.exaggeration !== prev.exaggeration && this.world) this.rebuildGeometry()
-    if (o.trees !== undefined && this.forest) this.forest.group.visible = this.opts.trees
     this.lastInteract = performance.now()
     if (o.sunAzimuth !== undefined || o.sunElevation !== undefined) this.updateSun()
     if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
@@ -285,7 +280,6 @@ export class Scene3D {
       this.waterMat.uniforms.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
     }
     if (this.terrainU) this.terrainU.uSun.value.copy(d)
-    this.forest?.setSunStrength(k)
     if (this.clouds) {
       const u = this.clouds.march.uniforms
       u.uSun.value.copy(d)
@@ -318,7 +312,6 @@ export class Scene3D {
         else mat?.dispose()
       })
     }
-    this.forest = null
     this.heightTex?.dispose()
 
     const { W, H } = world
@@ -355,9 +348,6 @@ export class Scene3D {
     this.terrain.castShadow = true
     this.terrain.receiveShadow = true
     this.group.add(this.terrain)
-    this.forest = new Forest(world, mk.image.data as Uint8Array, color, SX, this.SZ, uniforms)
-    this.forest.group.visible = this.opts.trees
-    this.group.add(this.forest.group)
 
     this.waterMat = createWaterMaterial(ht, tt, colorTex, this.vScale, new THREE.Vector2(SX, this.SZ), hSize)
     this.water = new THREE.Mesh(new THREE.BufferGeometry(), this.waterMat)
