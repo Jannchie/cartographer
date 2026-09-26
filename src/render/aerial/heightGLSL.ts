@@ -69,7 +69,7 @@ vec3 erosionNoise(vec2 p, vec2 grad, int octaves, float freq) {
   vec3 h = vec3(0.0);
   float a = 0.5;
   float f = freq;
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 8; i++) {
     if (i >= octaves) break;
     // 等高线方向（与坡向垂直），条纹沿它变化 → 条纹本身顺坡延伸
     vec2 dir = vec2(grad.y, -grad.x) + h.zy * vec2(1.0, -1.0) * 0.35;

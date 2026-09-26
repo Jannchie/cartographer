@@ -46,6 +46,16 @@ export class Scene3D {
   private maskTex: THREE.DataTexture | null = null
   private mask2Tex: THREE.DataTexture | null = null
   private terrainU: TerrainUniforms | null = null
+  /** 视口高清块：镜头拉近时在视口附近烘焙更细的地形并用更密的网格绘制 */
+  private patch: {
+    bake: TerrainBake
+    mesh: THREE.Mesh
+    u: TerrainUniforms
+    cx: number
+    cz: number
+    S: number
+    vs: number
+  } | null = null
   private clouds: VolumetricClouds | null = null
   private bake: TerrainBake | null = null
   private riverMat: THREE.ShaderMaterial | null = null
@@ -137,6 +147,7 @@ export class Scene3D {
       const t = this.clock.getElapsedTime()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = t
       if (this.riverMat) this.riverMat.uniforms.uTime.value = t
+      this.updatePatch()
       this.renderFrame()
       if (pf) {
         if (q) {
@@ -348,8 +359,20 @@ export class Scene3D {
     mk2.needsUpdate = true
     this.mask2Tex = mk2
     const hSize = new THREE.Vector2(W, H)
-    const { mat, uniforms, depth } = createTerrainMaterial(colorTex, roughTex, mk, mk2, ht, hSize, new THREE.Vector2(SX, this.SZ), this.vScale)
+    const { mat, uniforms, depth, makePatch } = createTerrainMaterial(colorTex, roughTex, mk, mk2, ht, hSize, new THREE.Vector2(SX, this.SZ), this.vScale)
     this.terrainU = uniforms
+    this.patch?.bake.dispose()
+    {
+      const bake = new TerrainBake(PATCH_N, PATCH_N, ht, hSize, new THREE.Vector2(SX, this.SZ))
+      const pm = makePatch(bake.rt.texture, PATCH_N)
+      const mesh = new THREE.Mesh(patchGeometry(PATCH_N), pm.mat)
+      mesh.receiveShadow = true
+      mesh.frustumCulled = false
+      mesh.visible = false
+      this.group.add(mesh)
+      this.patch = { bake, mesh, u: pm.uniforms, cx: 0, cz: 0, S: 0, vs: 0 }
+      uniforms.uPatch.value.set(0, 0, 0, 0)
+    }
     this.terrain = new THREE.Mesh(new THREE.BufferGeometry(), mat)
     this.terrain.customDepthMaterial = depth
     this.terrain.castShadow = true
@@ -434,7 +457,7 @@ export class Scene3D {
     // 侧面剖面
     for (const c of [...this.group.children]) if (c.userData.skirt) this.group.remove(c)
     this.group.add(...this.skirts(w, vs))
-    for (const l of this.labelEls) l.pos.y = this.heightAt(l.pos.x, l.pos.z) + 0.6
+    for (const l of this.labelEls) l.pos.y = this.labelY(l.kind, l.pos.x, l.pos.z)
     this.buildClouds()
     this.applyLook()
     this.updateSun()
@@ -444,6 +467,42 @@ export class Scene3D {
   private toCell(x: number, z: number) {
     const w = this.world!
     return { gx: (x / SX + 0.5) * (w.W - 1), gy: (z / this.SZ + 0.5) * (w.H - 1) }
+  }
+
+  /**
+   * 视口高清块：镜头静止后，若离地够近，就以视线落点附近为中心烘焙一块
+   * 边长约为观察距离 1.5 倍的高清地形（侵蚀噪声多 1~3 层）；镜头移出一定范围或缩放明显时重新烘焙。
+   */
+  private updatePatch() {
+    const p = this.patch
+    const u = this.terrainU
+    if (!p || !u || !this.world) return
+    const dist = this.camera.position.distanceTo(this.controls.target)
+    if (dist > 26) {
+      if (p.mesh.visible) {
+        p.mesh.visible = false
+        u.uPatch.value.w = 0
+      }
+      return
+    }
+    // 交互中不重烘焙，停下来再换
+    if (performance.now() - this.lastInteract < 180) return
+    const t = this.controls.target
+    const c = this.camera.position
+    // 中心略偏向镜头：画面下半部分（离镜头更近）最需要细节
+    const cx = t.x + (c.x - t.x) * 0.35
+    const cz = t.z + (c.z - t.z) * 0.35
+    const S = Math.min(32, Math.max(2.5, dist * 1.5))
+    const vs = this.vScale
+    if (p.mesh.visible && p.vs === vs && Math.hypot(cx - p.cx, cz - p.cz) < p.S * 0.15 && Math.abs(Math.log(S / p.S)) < 0.25) return
+    const oct = S < 5 ? 7 : S < 12 ? 6 : 5
+    p.bake.setRegion(cx, cz, S, S, oct)
+    p.bake.bake(this.renderer, vs)
+    p.u.uBOrigin.value.set(cx, cz)
+    p.u.uBMapSize.value.set(S, S)
+    u.uPatch.value.set(cx, cz, S, 1)
+    Object.assign(p, { cx, cz, S, vs })
+    p.mesh.visible = true
   }
 
   heightAt(x: number, z: number): number {
@@ -609,8 +668,7 @@ export class Scene3D {
       el.textContent = l.name
       const x = (l.x / (w.W - 1) - 0.5) * SX
       const z = (l.y / (w.H - 1) - 0.5) * this.SZ
-      const water = l.kind === 'ocean' || l.kind === 'sea'
-      const pos = new THREE.Vector3(x, water ? 0.3 : this.heightAt(x, z) + 0.6, z)
+      const pos = new THREE.Vector3(x, this.labelY(l.kind, x, z), z)
       this.labelLayer.appendChild(el)
       this.labelEls.push({ el, pos, kind: l.kind, w: 0, h: 0 })
     }
@@ -619,6 +677,13 @@ export class Scene3D {
       l.h = l.el.offsetHeight
     }
     this.labelLayer.style.display = this.opts.labels ? '' : 'none'
+  }
+
+  /** 地名锚点高度：城镇标点钉在地面上，海名贴海面，山脉、大陆等区域名悬在上空 */
+  private labelY(kind: string, x: number, z: number) {
+    if (kind === 'ocean' || kind === 'sea') return 0.3
+    if (kind === 'city' || kind === 'capital') return this.heightAt(x, z) + 0.01
+    return this.heightAt(x, z) + 0.6
   }
 
   private tmp = new THREE.Vector3()
@@ -645,7 +710,8 @@ export class Scene3D {
         continue
       }
       boxes.push(b)
-      l.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`
+      const dot = l.kind === 'capital' ? 3.5 : l.kind === 'city' ? 2.5 : 0
+      l.el.style.transform = `translate(${x.toFixed(1)}px, ${(y + dot).toFixed(1)}px) translate(-50%, -100%)`
     }
   }
 
@@ -695,6 +761,30 @@ export class Scene3D {
     cancelAnimationFrame(this.raf)
     this.renderer.dispose()
   }
+}
+
+/** 高清块网格分辨率 */
+const PATCH_N = 513
+
+/** 高清块：[0,1]² 的规则网格（顶点着色器按 uPatch 映射到世界） */
+function patchGeometry(N: number) {
+  const pos = new Float32Array(N * N * 3)
+  const uv = new Float32Array(N * N * 2)
+  const nor = new Int8Array(N * N * 3)
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const i = y * N + x
+      pos[i * 3] = x / (N - 1)
+      pos[i * 3 + 2] = y / (N - 1)
+      nor[i * 3 + 1] = 127
+    }
+  }
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
+  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3, true))
+  g.setIndex(gridIndex(N, N))
+  return g
 }
 
 function gridIndex(W: number, H: number) {

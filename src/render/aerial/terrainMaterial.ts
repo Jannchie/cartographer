@@ -20,29 +20,46 @@ export interface TerrainUniforms {
   uBaked: { value: THREE.Texture | null }
   uGSize: { value: THREE.Vector2 }
   uBMapSize: { value: THREE.Vector2 }
+  uBOrigin: { value: THREE.Vector2 }
+  /** 视口高清块 (中心 x, 中心 z, 边长, 是否启用) */
+  uPatch: { value: THREE.Vector4 }
   uColorSize: { value: THREE.Vector2 }
   uMaskSize: { value: THREE.Vector2 }
 }
 
 /** 顶点着色器：高度、坡度、侵蚀值都取自烘焙纹理（一次采样） */
 const VERTEX_HEIGHT = /* glsl */ `
-  vec4 B = bakedAt(position.xz);
+  vec4 B = bakedAt(pXZ);
   float hC = B.x;
   vErosion = B.w;
   vec3 objectNormal = normalize(vec3(-B.y * uVScale, 1.0, -B.z * uVScale));
 `
 
-function injectVertex(sh: THREE.WebGLProgramParametersWithUniforms, withNormal: boolean) {
+/**
+ * 顶点：粗网格的 position 就是世界坐标；高清块的 position 是 [0,1]² 的局部网格，
+ * 由 uPatch 映射到世界，贴图坐标也按世界坐标重算。
+ */
+function injectVertex(sh: THREE.WebGLProgramParametersWithUniforms, withNormal: boolean, isPatch = false) {
   sh.vertexShader = sh.vertexShader.replace(
     '#include <common>',
-    `#include <common>\nuniform float uVScale;\n${BAKED_GLSL}\nvarying vec3 vWorld;\nvarying float vErosion;`,
+    `#include <common>\nuniform float uVScale;\nuniform vec4 uPatch;\nuniform vec2 uMapSize;\nuniform vec2 uHSize;\n${BAKED_GLSL}\nvarying vec3 vWorld;\nvarying float vErosion;`,
+  )
+  sh.vertexShader = sh.vertexShader.replace(
+    '#include <uv_vertex>',
+    isPatch
+      ? `vec2 pXZ = uPatch.xy + (position.xz - 0.5) * uPatch.z;
+#include <uv_vertex>
+vec2 tUv = ((pXZ / uMapSize + 0.5) * (uHSize - 1.0) + 0.5) / uHSize;
+vMapUv = tUv;
+vRoughnessMapUv = tUv;`
+      : 'vec2 pXZ = position.xz;\n#include <uv_vertex>',
   )
   if (withNormal) sh.vertexShader = sh.vertexShader.replace('#include <beginnormal_vertex>', VERTEX_HEIGHT)
   // 深度材质的顶点着色器里没有法线段，高度在这里取
   sh.vertexShader = sh.vertexShader
     .replace(
       '#include <begin_vertex>',
-      (withNormal ? '' : 'float hC = bakedAt(position.xz).x;\n') + 'vec3 transformed = vec3(position.x, hC * uVScale, position.z);',
+      (withNormal ? '' : 'float hC = bakedAt(pXZ).x;\n') + 'vec3 transformed = vec3(pXZ.x, hC * uVScale, pXZ.y);',
     )
     .replace('#include <project_vertex>', '#include <project_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
 }
@@ -85,11 +102,23 @@ export function createTerrainMaterial(
     uBMapSize: { value: mapSize },
     uColorSize: { value: new THREE.Vector2((color.image as { width: number }).width, (color.image as { height: number }).height) },
     uMaskSize: { value: new THREE.Vector2(hSize.x, hSize.y) },
+    uBOrigin: { value: new THREE.Vector2(0, 0) },
+    uPatch: { value: new THREE.Vector4(0, 0, 0, 0) },
   }
-  mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, uniforms)
-    injectVertex(sh, true)
+  const compile = (u: TerrainUniforms, isPatch: boolean) => (sh: THREE.WebGLProgramParametersWithUniforms) => {
+    Object.assign(sh.uniforms, u)
+    injectVertex(sh, true, isPatch)
     sh.fragmentShader = sh.fragmentShader
+      .replace(
+        '#include <clipping_planes_fragment>',
+        isPatch
+          ? // 高清块超出沙盘的部分不画
+            `#include <clipping_planes_fragment>
+if (abs(vWorld.x) > uMapSize.x * 0.5 || abs(vWorld.z) > uMapSize.y * 0.5) discard;`
+          : // 粗网格让出高清块覆盖的区域（留一圈重叠，由高清块的深度偏移盖住）
+            `#include <clipping_planes_fragment>
+if (uPatch.w > 0.5 && all(lessThan(abs(vWorld.xz - uPatch.xy), vec2(uPatch.z * 0.5 - 0.08)))) discard;`,
+      )
       .replace(
         '#include <common>',
         `#include <common>
@@ -103,6 +132,7 @@ uniform float uCloudY;
 uniform float uCloudOn;
 uniform vec3 uSun;
 uniform float uDetail;
+uniform vec4 uPatch;
 varying float vErosion;
 ${NOISE_GLSL}
 ${HEIGHT_GLSL}
@@ -112,6 +142,8 @@ float gLod2;
 vec4 gMask;
 vec4 gMask2;
 float gDune;
+vec3 gEr;
+float gErK;
 uniform vec2 uColorSize;
 uniform vec2 uMaskSize;
 vec2 sharpUv(vec2 uv, vec2 size, vec2 warp) {
@@ -153,7 +185,7 @@ vec2 wv = vec2(fbm3(P * 7.0), fbm3(P * 7.0 + 31.7)) - 0.5;
 vec2 gdx = dFdx(vMapUv);
 vec2 gdy = dFdy(vMapUv);
 // 连续的颜色只做扭曲（不锐化，避免把渐变变成台阶）；分类遮罩才锐化
-vec4 texel = textureGrad(map, vMapUv + wv * 1.8 / uColorSize, gdx, gdy);
+vec4 texel = textureGrad(map, vMapUv + wv * 0.9 / uColorSize, gdx, gdy);
 vec3 base = texel.rgb;
 gMask = textureGrad(uMask, sharpUv(vMapUv, uMaskSize, wv * 1.1), gdx, gdy);
 gAO = gMask.a;
@@ -166,6 +198,9 @@ gLod2 = 1.0 - smoothstep(0.006, 0.025, fw);
 float hKm = vWorld.y / uVScale;
 vec3 wN0 = normalize(inverseTransformDirection(normalize(vNormal), viewMatrix));
 float slope = 1.0 - wN0.y;
+// 顺坡的细冲沟（侵蚀噪声）：颜色与法线共用一次计算
+gErK = smoothstep(0.08, 0.4, slope) * smoothstep(0.15, 0.8, hKm) * gLod1;
+gEr = gErK > 0.001 ? erosionNoise(P, -wN0.xz / max(wN0.y, 0.25), 3, 9.0) : vec3(0.5, 0.0, 0.0);
 vec3 col = base;
 if (hKm > 0.0) {
   // 大尺度色相起伏
@@ -182,7 +217,8 @@ if (hKm > 0.0) {
   float gLod3 = 1.0 - smoothstep(0.002, 0.008, fw);
   col *= (0.93 + 0.14 * mix(0.5, g1, gLod2)) * (0.95 + 0.1 * mix(0.5, g2, gLod3));
   vec4 m2 = gMask2;
-  float nonF = (1.0 - gMask.r) * (1.0 - gMask.b * 0.6);
+  // 草地斑驳只画在缓坡上：坡面上的软边色斑像水渍
+  float nonF = (1.0 - gMask.r) * (1.0 - gMask.b * 0.6) * (1.0 - smoothstep(0.12, 0.3, slope));
   // 草地上大小不一的枯黄斑与深绿斑（扭曲噪声，形状自然）
   float dry = smoothstep(0.52, 0.78, fbm3(P * 2.3 + wv * 3.0 + 13.0));
   float lush = smoothstep(0.55, 0.8, fbm3(P * 3.7 - wv * 2.0 + 71.0));
@@ -234,12 +270,10 @@ if (hKm > 0.0) {
     // 沙海：橙黄色的沙丘区（沙脊的明暗在法线阶段）
     gDune = smoothstep(0.6, 0.9, a) * smoothstep(0.25, 0.55, gMask.g) * (1.0 - smoothstep(0.08, 0.2, slope)) * smoothstep(0.02, 0.1, hKm);
     col = mix(col, pow(vec3(0.86, 0.67, 0.44), vec3(2.2)) * (0.92 + 0.12 * fbm3(P * 6.0)), gDune * 0.7);
-    // 砾漠：深色的荒漠漆斑与浅色的干河床网
-    float rocky = a * (1.0 - gDune);
-    float varn = smoothstep(0.5, 0.75, fbm3(P * 7.0 + wv * 4.0));
-    col = mix(col, col * vec3(0.7, 0.62, 0.56), varn * rocky * 0.5);
-    float wash = 1.0 - smoothstep(0.0, 0.05, abs(fbm3(P * 4.0 + wv * 6.0) - 0.5));
-    col = mix(col, col * vec3(1.2, 1.13, 1.02), wash * rocky * gLod1 * 0.55);
+    // 砾漠：平地上深色的荒漠漆斑（坡面不画，否则像水渍）
+    float rocky = a * (1.0 - gDune) * (1.0 - smoothstep(0.04, 0.12, slope));
+    float varn = smoothstep(0.55, 0.75, fbm3(P * 7.0 + wv * 4.0));
+    col = mix(col, col * vec3(0.78, 0.7, 0.64), varn * rocky * 0.4);
   }
   // 盐壳：白色结皮，龟裂成多边形，边缘是褐色泥滩
   float sf = gMask2.a;
@@ -267,16 +301,16 @@ if (hKm > 0.0) {
   // 岩性：不同山体偏暖（砂岩、红层）或偏冷（花岗岩、板岩）
   rock *= mix(vec3(1.08, 0.94, 0.82), vec3(0.9, 0.95, 1.03), fbm3(P * 0.7 + 40.0));
   // 陡坡上岩石与植被斑驳相间，只有近乎垂直的崖壁才整片裸露
-  float rk = smoothstep(0.5, 0.82, slope + (fbm3(P * 8.0) - 0.5) * 0.35) * (1.0 - gMask.r * 0.4);
+  // 露岩跟着侵蚀结构走：刃脊与陡崖露岩，冲沟里留着土和植被
+  float rk = smoothstep(0.42, 0.72, slope + (vErosion - 0.5) * 0.45 + (fbm3(P * 8.0) - 0.5) * 0.1) * (1.0 - gMask.r * 0.4);
   // 雪上不画岩
   float snowy = smoothstep(0.75, 0.9, min(base.r, min(base.g, base.b)));
   col = mix(col, rock, rk * (1.0 - snowy) * 0.9);
-  // 碎石坡：冲沟里、陡崖脚下的浅色岩屑
-  float scree = smoothstep(0.22, 0.42, slope) * (1.0 - smoothstep(0.2, 0.5, vErosion)) * smoothstep(0.4, 1.2, hKm);
-  col = mix(col, rock * vec3(1.1, 1.06, 1.0) * (0.85 + 0.3 * mix(0.5, vnoise(P * 160.0), gLod2)), scree * (1.0 - snowy) * 0.5);
   // 风化：冲沟暗、刃脊亮，山地越陡越明显
   float mnt = smoothstep(0.12, 0.45, slope) * smoothstep(0.2, 1.2, hKm);
   col *= mix(1.0, mix(0.78, 1.12, smoothstep(0.15, 0.85, vErosion)), mnt);
+  // 近景：沟暗脊亮的顺坡冲刷纹，取代被放大的低分辨率底色斑
+  col *= mix(1.0, 0.76 + 0.44 * smoothstep(0.15, 0.85, gEr.x), gErK);
 }
 col *= mix(1.0, gAO, 0.5);
 diffuseColor.rgb *= col;
@@ -289,14 +323,7 @@ if (vWorld.y > 0.0 && uDetail > 0.0) {
   vec2 Q = vWorld.xz;
   vec3 dW = vec3(0.0);
   // 逐像素风化法线：沿当前坡向的细冲沟（相当于一张程序化的侵蚀法线贴图）
-  vec3 wN = normalize(inverseTransformDirection(normal, viewMatrix));
-  float st = 1.0 - wN.y;
-  float mk = smoothstep(0.08, 0.4, st) * smoothstep(0.15, 0.8, vWorld.y / uVScale) * gLod1;
-  if (mk > 0.001) {
-    vec2 gW = -wN.xz / max(wN.y, 0.25);
-    vec3 er = erosionNoise(Q, gW, 3, 9.0);
-    dW += vec3(-er.y, 0.0, -er.z) * 0.0032 * mk * uDetail;
-  }
+  if (gErK > 0.001) dW += vec3(-gEr.y, 0.0, -gEr.z) * 0.0032 * gErK * uDetail;
   // 沙丘：迎风缓坡、背风陡坡的新月形沙脊，沙脊随区域风向弯曲
   if (gDune > 0.01 && fw < 0.012) {
     // 盛行风向全图一致（随位置变化的风向会让相位绕成同心环）
@@ -329,11 +356,30 @@ if (uCloudOn > 0.5) {
 reflectedLight.indirectDiffuse *= mix(1.0, gAO, 0.6);`,
       )
   }
+  mat.customProgramCacheKey = () => 'terrain'
+  mat.onBeforeCompile = compile(uniforms, false)
+  /** 视口高清块的材质：共用贴图与大部分 uniform，只换烘焙纹理与映射 */
+  const makePatch = (baked: THREE.Texture, N: number) => {
+    const pm = new THREE.MeshStandardMaterial({ map: color, roughnessMap: rough, roughness: 1, metalness: 0 })
+    pm.polygonOffset = true
+    pm.polygonOffsetFactor = -1
+    pm.polygonOffsetUnits = -1
+    const pu: TerrainUniforms = {
+      ...uniforms,
+      uBaked: { value: baked },
+      uGSize: { value: new THREE.Vector2(N, N) },
+      uBMapSize: { value: new THREE.Vector2(1, 1) },
+      uBOrigin: { value: new THREE.Vector2() },
+    }
+    pm.customProgramCacheKey = () => 'terrain-patch'
+    pm.onBeforeCompile = compile(pu, true)
+    return { mat: pm, uniforms: pu }
+  }
   // 阴影深度材质：同样的顶点位移，否则阴影与地形错位
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
   depth.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms)
     injectVertex(sh, false)
   }
-  return { mat, uniforms, depth }
+  return { mat, uniforms, depth, makePatch }
 }
