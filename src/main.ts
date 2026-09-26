@@ -13,7 +13,7 @@ const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySele
 
 // —— 状态 ——
 const params: WorldParams = { ...DEFAULT_PARAMS, ...readHash() }
-const view3d: View3DOptions = { exaggeration: 28, trees: false, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true }
+const view3d: View3DOptions = { exaggeration: 28, trees: true, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true }
 const atlasOpts = { labels: true, contours: true, graticule: true }
 let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
 /** 每种风格缓存一份矢量显示列表（预览、SVG 导出、PNG 导出共用） */

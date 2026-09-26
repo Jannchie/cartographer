@@ -1,12 +1,13 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { Biome, type World } from '../gen/types'
+import type { World } from '../gen/types'
 import { buildMaterialMask } from './aerial/mask'
 import { createSky } from './aerial/sky'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
 import { TerrainBake } from './aerial/bake'
 import { createRiverMesh } from './aerial/rivers3d'
+import { Forest } from './aerial/trees'
 import type { SmoothRiver } from './rivers'
 import { createWaterMaterial } from './water'
 
@@ -42,7 +43,7 @@ export class Scene3D {
   private terrain: THREE.Mesh | null = null
   private water: THREE.Mesh | null = null
   private waterMat: THREE.ShaderMaterial | null = null
-  private trees: THREE.InstancedMesh[] = []
+  private forest: Forest | null = null
   private heightTex: THREE.DataTexture | null = null
   private tempTex: THREE.DataTexture | null = null
   private maskTex: THREE.DataTexture | null = null
@@ -85,7 +86,7 @@ export class Scene3D {
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.07
     this.controls.maxPolarAngle = Math.PI * 0.47
-    this.controls.minDistance = 4
+    this.controls.minDistance = 3
     this.controls.maxDistance = 260
     this.controls.screenSpacePanning = false
     this.controls.zoomToCursor = true
@@ -138,6 +139,7 @@ export class Scene3D {
       const t = this.clock.getElapsedTime()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = t
       if (this.riverMat) this.riverMat.uniforms.uTime.value = t
+      this.forest?.update(this.camera)
       this.renderFrame()
       if (pf) {
         if (q) {
@@ -215,10 +217,7 @@ export class Scene3D {
     const prev = this.opts
     this.opts = { ...this.opts, ...o }
     if (o.exaggeration !== undefined && o.exaggeration !== prev.exaggeration && this.world) this.rebuildGeometry()
-    if (o.trees !== undefined) {
-      for (const t of this.trees) t.visible = this.opts.trees
-      this.renderer.shadowMap.needsUpdate = true
-    }
+    if (o.trees !== undefined && this.forest) this.forest.group.visible = this.opts.trees
     this.lastInteract = performance.now()
     if (o.sunAzimuth !== undefined || o.sunElevation !== undefined) this.updateSun()
     if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
@@ -286,6 +285,7 @@ export class Scene3D {
       this.waterMat.uniforms.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
     }
     if (this.terrainU) this.terrainU.uSun.value.copy(d)
+    this.forest?.setSunStrength(k)
     if (this.clouds) {
       const u = this.clouds.march.uniforms
       u.uSun.value.copy(d)
@@ -318,7 +318,7 @@ export class Scene3D {
         else mat?.dispose()
       })
     }
-    this.trees = []
+    this.forest = null
     this.heightTex?.dispose()
 
     const { W, H } = world
@@ -355,6 +355,9 @@ export class Scene3D {
     this.terrain.castShadow = true
     this.terrain.receiveShadow = true
     this.group.add(this.terrain)
+    this.forest = new Forest(world, mk.image.data as Uint8Array, color, SX, this.SZ, uniforms)
+    this.forest.group.visible = this.opts.trees
+    this.group.add(this.forest.group)
 
     this.waterMat = createWaterMaterial(ht, tt, colorTex, this.vScale, new THREE.Vector2(SX, this.SZ), hSize)
     this.water = new THREE.Mesh(new THREE.BufferGeometry(), this.waterMat)
@@ -434,15 +437,6 @@ export class Scene3D {
     // 侧面剖面
     for (const c of [...this.group.children]) if (c.userData.skirt) this.group.remove(c)
     this.group.add(...this.skirts(w, vs))
-    for (const t of this.trees) {
-      this.group.remove(t)
-      t.geometry.dispose()
-    }
-    this.trees = this.buildTrees(w, vs)
-    for (const t of this.trees) {
-      t.visible = this.opts.trees
-      this.group.add(t)
-    }
     for (const l of this.labelEls) l.pos.y = this.heightAt(l.pos.x, l.pos.z) + 0.6
     this.buildClouds()
     this.applyLook()
@@ -603,90 +597,6 @@ export class Scene3D {
     plate.position.y = base
     plate.userData.skirt = true
     return [rock, sea, plate]
-  }
-
-  /** 植被：森林群系里撒针叶树与阔叶树实例 */
-  private buildTrees(w: World, vs: number): THREE.InstancedMesh[] {
-    const { W, H, biome, elevation: e } = w
-    const density: Record<number, [number, number]> = {
-      // [针叶概率, 每格密度]
-      [Biome.Taiga]: [1, 0.9],
-      [Biome.TemperateForest]: [0.25, 0.85],
-      [Biome.TemperateRainforest]: [0.7, 1.2],
-      [Biome.TropicalSeasonalForest]: [0, 0.8],
-      [Biome.TropicalRainforest]: [0, 1.3],
-      [Biome.Wetland]: [0.2, 0.12],
-    }
-    const colors: Record<number, THREE.Color[]> = {
-      [Biome.Taiga]: ['#2b4632', '#324f3a', '#26402f'].map((c) => new THREE.Color(c)),
-      [Biome.TemperateForest]: ['#4f6e33', '#5d7a3a', '#6b7f3b', '#3f5f30'].map((c) => new THREE.Color(c)),
-      [Biome.TemperateRainforest]: ['#2a4d33', '#315a3a', '#24452d'].map((c) => new THREE.Color(c)),
-      [Biome.TropicalSeasonalForest]: ['#56782e', '#648432', '#4a6c2a'].map((c) => new THREE.Color(c)),
-      [Biome.TropicalRainforest]: ['#2b5a26', '#336529', '#244f22'].map((c) => new THREE.Color(c)),
-    }
-    const fallback = ['#5d6b3a', '#4f5f35'].map((c) => new THREE.Color(c))
-    const conif: { m: THREE.Matrix4; c: THREE.Color }[] = []
-    const broad: { m: THREE.Matrix4; c: THREE.Color }[] = []
-    let seed = 1234567
-    const rnd = () => {
-      seed = (seed * 1664525 + 1013904223) >>> 0
-      return seed / 4294967296
-    }
-    const cell = SX / (W - 1)
-    const q = new THREE.Quaternion()
-    const s = new THREE.Vector3()
-    const p = new THREE.Vector3()
-    const up = new THREE.Vector3(0, 1, 0)
-    const limit = 110000
-    for (let y = 1; y < H - 1; y++) {
-      for (let x = 1; x < W - 1; x++) {
-        const i = y * W + x
-        const d = density[biome[i]]
-        if (!d || e[i] <= 0) continue
-        // 陡坡与高海拔少树
-        const sl = Math.hypot(e[i + 1] - e[i - 1], e[i + W] - e[i - W]) / (2 * w.kmPerCell)
-        let dens = d[1] * (1 - Math.min(1, sl * 3)) * (e[i] > 2.4 ? 0.3 : 1)
-        while (dens > 0) {
-          if (rnd() > dens) break
-          dens -= 1
-          const px = (x + rnd() - 0.5) * cell - SX / 2
-          const pz = (y + rnd() - 0.5) * (this.SZ / (H - 1)) - this.SZ / 2
-          const hy = this.heightAt(px, pz)
-          if (hy <= 0.01 * vs) continue
-          const isC = rnd() < d[0]
-          const sz = cell * (0.55 + rnd() * 0.5)
-          p.set(px, hy, pz)
-          q.setFromAxisAngle(up, rnd() * Math.PI * 2)
-          if (isC) s.set(sz * 0.5, sz * (1.3 + rnd() * 0.5), sz * 0.5)
-          else s.set(sz * 0.62, sz * (0.62 + rnd() * 0.2), sz * 0.62)
-          const pal = colors[biome[i]] ?? fallback
-          const c = pal[Math.floor(rnd() * pal.length)].clone().multiplyScalar(1.0 + rnd() * 0.35)
-          ;(isC ? conif : broad).push({ m: new THREE.Matrix4().compose(p, q, s), c })
-        }
-      }
-    }
-    const out: THREE.InstancedMesh[] = []
-    const cone = new THREE.ConeGeometry(1, 1, 6).translate(0, 0.5, 0)
-    const blob = new THREE.IcosahedronGeometry(1, 1).translate(0, 0.9, 0)
-    for (const [list, geo] of [
-      [conif, cone],
-      [broad, blob],
-    ] as const) {
-      const n = Math.min(limit, list.length)
-      if (!n) continue
-      const mat = new THREE.MeshStandardMaterial({ roughness: 0.95, flatShading: true })
-      const im = new THREE.InstancedMesh(geo, mat, n)
-      for (let k = 0; k < n; k++) {
-        im.setMatrixAt(k, list[k].m)
-        im.setColorAt(k, list[k].c)
-      }
-      im.castShadow = true
-      im.receiveShadow = true
-      im.instanceMatrix.needsUpdate = true
-      if (im.instanceColor) im.instanceColor.needsUpdate = true
-      out.push(im)
-    }
-    return out
   }
 
   private buildLabels() {
