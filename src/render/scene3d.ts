@@ -8,6 +8,7 @@ import { PostPipeline } from './aerial/post'
 import { Diorama } from './aerial/diorama'
 import { TerrainBake } from './aerial/bake'
 import { RoadMask } from './aerial/roads3d'
+import { buildBridges } from './aerial/bridges'
 import { placeName, t, worldTitle } from '../i18n'
 import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
@@ -287,6 +288,7 @@ export class Scene3D {
   private applyLook() {
     this.diorama.stage.visible = this.opts.stage
     const roadsOn = this.opts.roads && !!this.roadMask ? 1 : 0
+    for (const c of this.group.children) if (c.userData.bridge) c.visible = !!roadsOn
     if (this.terrainU) this.terrainU.uRoadOn.value = roadsOn
     if (this.waterMat) this.waterMat.uniforms.uRoadOn.value = roadsOn
     const cloudsOn = this.opts.clouds && !!this.clouds
@@ -473,6 +475,18 @@ export class Scene3D {
     const rv = createRiverMesh(w, this.riverList, SX, this.SZ, this.riverMat)
     rv.mesh.userData.river = true
     this.group.add(rv.mesh)
+    // 桥：道路过河处（高度随垂直夸张变，跟河流一起重建）
+    for (const c of [...this.group.children]) if (c.userData.bridge) {
+      this.group.remove(c)
+      const m = c as THREE.Mesh
+      m.geometry.dispose()
+      ;(m.material as THREE.Material).dispose()
+    }
+    const bridges = buildBridges(w, this.riverList, SX, this.SZ, (x, z) => this.heightAt(x, z))
+    if (bridges) {
+      bridges.userData.bridge = true
+      this.group.add(bridges)
+    }
     this.carve?.dispose()
     this.carve = new RiverCarve(w.W, w.H, new THREE.Vector2(SX, this.SZ))
     this.carve.render(this.renderer, rv.carveGeometry)
