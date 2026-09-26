@@ -20,36 +20,43 @@
           <p>程序化世界地图生成器</p>
         </header>
         <div class="scroll">
-          <section>
-            <h2>世界</h2>
-            <div class="row seed">
-              <label for="seed">种子</label>
-              <div class="seed-box">
-                <input id="seed" spellcheck="false" autocomplete="off" />
-                <button id="dice" class="ghost" title="随机种子">随机</button>
-              </div>
+          <section class="gen">
+            <div class="seed-box">
+              <input id="seed" spellcheck="false" autocomplete="off" placeholder="输入种子" title="同一种子总是生成同一个世界" />
+              <button id="dice" title="随机种子并生成（R）">随机</button>
             </div>
             <div class="presets" id="presets"></div>
-            <div id="world-controls"></div>
             <button id="generate" class="primary">生成世界</button>
+            <details id="advanced">
+              <summary>高级参数</summary>
+              <div id="world-controls"></div>
+              <button id="reset" class="link">恢复默认参数</button>
+            </details>
           </section>
-          <section>
-            <h2>视图</h2>
-            <div id="view-controls"></div>
-            <div class="export-row"><button id="export" class="ghost">导出 PNG</button><button id="export-svg" class="ghost" title="纸质地图的矢量版本，可无损放大">导出 SVG</button></div>
+          <section id="info" class="hidden">
+            <div class="world-name" id="world-name"></div>
+            <div class="stats" id="stats"></div>
           </section>
-          <section>
-            <h2>统计</h2>
-            <dl id="stats"></dl>
+          <section id="ctl-3d">
+            <h2>沙盘</h2>
+            <div id="view-3d"></div>
+          </section>
+          <section id="ctl-2d" class="hidden">
+            <h2>纸图风格</h2>
+            <div id="view-2d"></div>
           </section>
         </div>
+        <footer class="export">
+          <button id="export" title="导出当前视图的图片">导出 PNG</button>
+          <button id="export-svg" class="hidden" title="纸图的矢量版本，可无损放大">导出 SVG</button>
+        </footer>
       </aside>
       <main id="stage">
         <div id="view3d" class="view"></div>
         <div id="view2d" class="view hidden"></div>
         <div class="switch" id="switch">
           <button data-view="3d" class="on">3D 沙盘</button>
-          <button data-view="2d">制图</button>
+          <button data-view="2d">纸图</button>
         </div>
         <div id="probe" class="hidden"></div>
         <div id="hint">拖动旋转 · 右键平移 · 滚轮缩放 · P 性能</div>

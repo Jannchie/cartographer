@@ -16,7 +16,6 @@ const params: WorldParams = { ...DEFAULT_PARAMS, ...readHash() }
 const view3d: View3DOptions = { exaggeration: 28, trees: false, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true }
 const atlasOpts = { labels: true, contours: true, graticule: true }
 let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
-/** 每种风格缓存一份 SVG 源码（预览与导出共用） */
 /** 每种风格缓存一份矢量显示列表（预览、SVG 导出、PNG 导出共用） */
 const atlasCache = new Map<string, DisplayList>()
 let world: World | null = null
@@ -30,7 +29,6 @@ if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__scene 
 
 // —— 控件 ——
 interface SliderSpec {
-  key: string
   label: string
   min: number
   max: number
@@ -38,9 +36,9 @@ interface SliderSpec {
   fmt: (v: number) => string
   get: () => number
   set: (v: number) => void
-  live?: boolean
 }
 
+const sliders: (() => void)[] = []
 function slider(host: HTMLElement, s: SliderSpec) {
   const row = document.createElement('div')
   row.className = 'row'
@@ -60,167 +58,7 @@ function slider(host: HTMLElement, s: SliderSpec) {
   sync()
   host.appendChild(row)
   sliders.push(sync)
-  return row
 }
-const sliders: (() => void)[] = []
-
-const pct = (v: number) => `${Math.round(v * 100)}%`
-const x100 = (v: number) => v.toFixed(2)
-const wc = $('#world-controls')
-
-const resRow = document.createElement('div')
-resRow.className = 'row'
-resRow.style.gridTemplateColumns = '76px 1fr'
-resRow.innerHTML = `<label>分辨率</label><select id="res">
-  <option value="768x480">768 × 480 · 快</option>
-  <option value="1024x640">1024 × 640 · 标准</option>
-  <option value="1536x960">1536 × 960 · 精细</option>
-</select>`
-wc.appendChild(resRow)
-const resSel = $<HTMLSelectElement>('#res')
-resSel.value = `${params.width}x${params.height}`
-if (!resSel.value) resSel.value = '1024x640'
-resSel.addEventListener('change', () => {
-  const [w, h] = resSel.value.split('x').map(Number)
-  params.width = w
-  params.height = h
-})
-
-const worldSliders: Omit<SliderSpec, 'get' | 'set'>[] = [
-  { key: 'landRatio', label: '陆地比例', min: 0.12, max: 0.65, step: 0.01, fmt: pct },
-  { key: 'plates', label: '板块数量', min: 4, max: 30, step: 1, fmt: (v) => String(v) },
-  { key: 'mountains', label: '造山强度', min: 0, max: 2, step: 0.05, fmt: x100 },
-  { key: 'coastRoughness', label: '海岸破碎', min: 0, max: 1, step: 0.05, fmt: x100 },
-  { key: 'erosion', label: '侵蚀风化', min: 0, max: 2, step: 0.05, fmt: x100 },
-  { key: 'rainfall', label: '降水倍率', min: 0.3, max: 2, step: 0.05, fmt: x100 },
-  { key: 'temperature', label: '气温偏移', min: -15, max: 12, step: 0.5, fmt: (v) => `${v > 0 ? '+' : ''}${v}°` },
-  { key: 'latNorth', label: '北缘纬度', min: -60, max: 88, step: 1, fmt: latFmt },
-  { key: 'latSouth', label: '南缘纬度', min: -88, max: 60, step: 1, fmt: latFmt },
-]
-for (const s of worldSliders) {
-  const k = s.key as keyof WorldParams
-  slider(wc, { ...s, get: () => params[k] as number, set: (v) => ((params as unknown as Record<string, number>)[k] = v) })
-}
-
-function latFmt(v: number) {
-  return `${Math.abs(v)}°${v > 0 ? 'N' : v < 0 ? 'S' : ''}`
-}
-
-const seedInput = $<HTMLInputElement>('#seed')
-seedInput.value = params.seed
-seedInput.addEventListener('input', () => (params.seed = seedInput.value.trim() || 'world'))
-seedInput.addEventListener('keydown', (e) => e.key === 'Enter' && generate())
-
-const SYL = ['ar', 'en', 'is', 'or', 'ul', 'va', 'mi', 'ko', 'ra', 'the', 'lo', 'san', 'dra', 'nor', 'eth', 'wyn', 'ka', 'mel']
-$('#dice').addEventListener('click', () => {
-  let s = ''
-  const n = 2 + Math.floor(Math.random() * 2)
-  for (let i = 0; i < n; i++) s += SYL[Math.floor(Math.random() * SYL.length)]
-  params.seed = s
-  seedInput.value = s
-  generate()
-})
-
-// 预设
-const presets: { name: string; p: Partial<WorldParams> }[] = [
-  { name: '大陆', p: { landRatio: 0.36, plates: 14, mountains: 1, coastRoughness: 0.55, rainfall: 1, temperature: 0, latNorth: 64, latSouth: 14 } },
-  { name: '群岛', p: { landRatio: 0.2, plates: 22, mountains: 1.2, coastRoughness: 0.85, rainfall: 1.2, temperature: 3, latNorth: 30, latSouth: -30 } },
-  { name: '泛大陆', p: { landRatio: 0.56, plates: 9, mountains: 1.3, coastRoughness: 0.4, rainfall: 0.85, temperature: 1, latNorth: 55, latSouth: -40 } },
-  { name: '冰封北境', p: { landRatio: 0.4, plates: 12, mountains: 1.1, coastRoughness: 0.9, rainfall: 0.9, temperature: -9, latNorth: 82, latSouth: 42 } },
-  { name: '沙海', p: { landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
-]
-for (const pr of presets) {
-  const b = document.createElement('button')
-  b.textContent = pr.name
-  b.addEventListener('click', () => {
-    Object.assign(params, pr.p)
-    sliders.forEach((f) => f())
-    generate()
-  })
-  $('#presets').appendChild(b)
-}
-
-// —— 视图控件 ——
-const vc = $('#view-controls')
-const sub3d = document.createElement('div')
-sub3d.innerHTML = `<div class="sub">3D 沙盘</div>`
-vc.appendChild(sub3d)
-slider(sub3d, {
-  key: 'ex',
-  label: '垂直夸张',
-  min: 4,
-  max: 60,
-  step: 1,
-  fmt: (v) => `×${v}`,
-  get: () => view3d.exaggeration,
-  set: (v) => {
-    view3d.exaggeration = v
-    scheduleExaggeration()
-  },
-})
-slider(sub3d, {
-  key: 'az',
-  label: '太阳方位',
-  min: 0,
-  max: 360,
-  step: 1,
-  fmt: (v) => `${v}°`,
-  get: () => view3d.sunAzimuth,
-  set: (v) => {
-    view3d.sunAzimuth = v
-    scene.setOptions({ sunAzimuth: v })
-  },
-})
-slider(sub3d, {
-  key: 'el',
-  label: '太阳高度',
-  min: 2,
-  max: 88,
-  step: 1,
-  fmt: (v) => `${v}°`,
-  get: () => view3d.sunElevation,
-  set: (v) => {
-    view3d.sunElevation = v
-    scene.setOptions({ sunElevation: v })
-  },
-})
-toggles(sub3d, [
-  {
-    label: '航拍写实',
-    get: () => view3d.look === 'aerial',
-    set: (v) => scene.setOptions({ look: (view3d.look = v ? 'aerial' : 'model') }),
-  },
-  { label: '云层', get: () => view3d.clouds, set: (v) => scene.setOptions({ clouds: (view3d.clouds = v) }) },
-  { label: '植被', get: () => view3d.trees, set: (v) => scene.setOptions({ trees: (view3d.trees = v) }) },
-  { label: '地名', get: () => view3d.labels, set: (v) => scene.setOptions({ labels: (view3d.labels = v) }) },
-])
-const sub2d = document.createElement('div')
-sub2d.innerHTML = `<div class="sub">制图风格</div>`
-vc.appendChild(sub2d)
-{
-  const grid = document.createElement('div')
-  grid.className = 'styles'
-  for (const t of THEMES) {
-    const b = document.createElement('button')
-    b.className = 'style-card' + (t.id === atlasStyle ? ' on' : '')
-    b.dataset.id = t.id
-    b.innerHTML = `<i style="background:rgb(${t.paper.join(',')})"><b style="border-color:${t.ink}"></b></i><span>${t.name}</span><em>${t.desc}</em>`
-    b.addEventListener('click', () => {
-      atlasStyle = t.id
-      localStorageSet('atlasStyle', t.id)
-      for (const x of grid.querySelectorAll('button')) x.classList.toggle('on', x === b)
-      if (mode !== '2d') setMode('2d')
-      else refreshAtlas()
-    })
-    grid.appendChild(b)
-  }
-  sub2d.appendChild(grid)
-}
-toggles(sub2d, [
-  { label: '注记', get: () => atlasOpts.labels, set: (v) => ((atlasOpts.labels = v), atlasCache.clear(), refreshAtlas()) },
-  { label: '等高线', get: () => atlasOpts.contours, set: (v) => ((atlasOpts.contours = v), atlasCache.clear(), refreshAtlas()) },
-  { label: '经纬网', get: () => atlasOpts.graticule, set: (v) => ((atlasOpts.graticule = v), atlasCache.clear(), refreshAtlas()) },
-])
 
 function toggles(host: HTMLElement, list: { label: string; get: () => boolean; set: (v: boolean) => void }[]) {
   const box = document.createElement('div')
@@ -238,6 +76,217 @@ function toggles(host: HTMLElement, list: { label: string; get: () => boolean; s
   host.appendChild(box)
 }
 
+/** 分段单选 */
+function segmented<T extends string>(host: HTMLElement, items: [T, string][], get: () => T, set: (v: T) => void) {
+  const box = document.createElement('div')
+  box.className = 'segmented'
+  for (const [v, label] of items) {
+    const b = document.createElement('button')
+    b.textContent = label
+    b.classList.toggle('on', get() === v)
+    b.addEventListener('click', () => {
+      set(v)
+      for (const x of box.children) x.classList.toggle('on', x === b)
+    })
+    box.appendChild(b)
+  }
+  host.appendChild(box)
+}
+
+const pct = (v: number) => `${Math.round(v * 100)}%`
+const x100 = (v: number) => v.toFixed(2)
+
+// —— 世界参数 ——
+/** 参数改了但还没重新生成：生成按钮给出提示 */
+function markDirty(dirty = true) {
+  $('#generate').classList.toggle('dirty', dirty)
+  $('#generate').textContent = dirty ? '按新参数生成' : '生成世界'
+  if (dirty) for (const b of $('#presets').children) b.classList.remove('on')
+}
+
+const wc = $('#world-controls')
+const resRow = document.createElement('div')
+resRow.className = 'row'
+resRow.innerHTML = `<label>分辨率</label><select id="res">
+  <option value="768x480">768 × 480 · 快</option>
+  <option value="1024x640">1024 × 640 · 标准</option>
+  <option value="1536x960">1536 × 960 · 精细</option>
+</select>`
+wc.appendChild(resRow)
+const resSel = $<HTMLSelectElement>('#res')
+const syncRes = () => {
+  resSel.value = `${params.width}x${params.height}`
+  if (!resSel.value) resSel.value = '1024x640'
+}
+syncRes()
+resSel.addEventListener('change', () => {
+  ;[params.width, params.height] = resSel.value.split('x').map(Number)
+  markDirty()
+})
+
+type NumKey = Exclude<keyof WorldParams, 'seed'>
+const worldSliders: (Omit<SliderSpec, 'get' | 'set'> & { key: NumKey })[] = [
+  { key: 'landRatio', label: '陆地比例', min: 0.12, max: 0.65, step: 0.01, fmt: pct },
+  { key: 'plates', label: '板块数量', min: 4, max: 30, step: 1, fmt: (v) => String(v) },
+  { key: 'mountains', label: '造山强度', min: 0, max: 2, step: 0.05, fmt: x100 },
+  { key: 'coastRoughness', label: '海岸破碎', min: 0, max: 1, step: 0.05, fmt: x100 },
+  { key: 'erosion', label: '侵蚀风化', min: 0, max: 2, step: 0.05, fmt: x100 },
+  { key: 'rainfall', label: '降水倍率', min: 0.3, max: 2, step: 0.05, fmt: x100 },
+  { key: 'temperature', label: '气温偏移', min: -15, max: 12, step: 0.5, fmt: (v) => `${v > 0 ? '+' : ''}${v}°` },
+  { key: 'latNorth', label: '北缘纬度', min: -60, max: 88, step: 1, fmt: latFmt },
+  { key: 'latSouth', label: '南缘纬度', min: -88, max: 60, step: 1, fmt: latFmt },
+]
+for (const s of worldSliders) {
+  slider(wc, {
+    ...s,
+    get: () => params[s.key],
+    set: (v) => {
+      params[s.key] = v
+      markDirty()
+    },
+  })
+}
+const syncParams = () => {
+  sliders.forEach((f) => f())
+  syncRes()
+}
+$('#reset').addEventListener('click', () => {
+  Object.assign(params, { ...DEFAULT_PARAMS, seed: params.seed })
+  syncParams()
+  markDirty()
+})
+{
+  const adv = $<HTMLDetailsElement>('#advanced')
+  adv.open = localStorageGet('advanced') === '1'
+  adv.addEventListener('toggle', () => localStorageSet('advanced', adv.open ? '1' : '0'))
+}
+
+function latFmt(v: number) {
+  return `${Math.abs(v)}°${v > 0 ? 'N' : v < 0 ? 'S' : ''}`
+}
+
+const seedInput = $<HTMLInputElement>('#seed')
+seedInput.value = params.seed
+seedInput.addEventListener('input', () => {
+  params.seed = seedInput.value.trim() || 'world'
+  markDirty()
+})
+seedInput.addEventListener('keydown', (e) => e.key === 'Enter' && generate())
+
+const SYL = ['ar', 'en', 'is', 'or', 'ul', 'va', 'mi', 'ko', 'ra', 'the', 'lo', 'san', 'dra', 'nor', 'eth', 'wyn', 'ka', 'mel']
+function randomSeed() {
+  let s = ''
+  const n = 2 + Math.floor(Math.random() * 2)
+  for (let i = 0; i < n; i++) s += SYL[Math.floor(Math.random() * SYL.length)]
+  params.seed = s
+  seedInput.value = s
+  generate()
+}
+$('#dice').addEventListener('click', randomSeed)
+window.addEventListener('keydown', (e) => {
+  const t = e.target as HTMLElement
+  if (e.ctrlKey || e.metaKey || e.altKey || t.matches('input, select, textarea')) return
+  if (e.key === 'r' || e.key === 'R') randomSeed()
+})
+
+// 预设：一键换一类世界
+const presets: { name: string; p: Partial<WorldParams> }[] = [
+  { name: '大陆', p: { landRatio: 0.36, plates: 14, mountains: 1, coastRoughness: 0.55, rainfall: 1, temperature: 0, latNorth: 64, latSouth: 14 } },
+  { name: '群岛', p: { landRatio: 0.2, plates: 22, mountains: 1.2, coastRoughness: 0.85, rainfall: 1.2, temperature: 3, latNorth: 30, latSouth: -30 } },
+  { name: '泛大陆', p: { landRatio: 0.56, plates: 9, mountains: 1.3, coastRoughness: 0.4, rainfall: 0.85, temperature: 1, latNorth: 55, latSouth: -40 } },
+  { name: '冰原', p: { landRatio: 0.4, plates: 12, mountains: 1.1, coastRoughness: 0.9, rainfall: 0.9, temperature: -9, latNorth: 82, latSouth: 42 } },
+  { name: '沙海', p: { landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
+]
+for (const pr of presets) {
+  const b = document.createElement('button')
+  b.textContent = pr.name
+  b.addEventListener('click', () => {
+    Object.assign(params, pr.p)
+    syncParams()
+    generate()
+    b.classList.add('on')
+  })
+  $('#presets').appendChild(b)
+}
+
+// —— 3D 沙盘控件 ——
+const v3 = $('#view-3d')
+segmented(
+  v3,
+  [
+    ['aerial', '航拍写实'],
+    ['model', '地形模型'],
+  ],
+  () => view3d.look,
+  (v) => scene.setOptions({ look: (view3d.look = v) }),
+)
+toggles(v3, [
+  { label: '云层', get: () => view3d.clouds, set: (v) => scene.setOptions({ clouds: (view3d.clouds = v) }) },
+  { label: '植被', get: () => view3d.trees, set: (v) => scene.setOptions({ trees: (view3d.trees = v) }) },
+  { label: '地名', get: () => view3d.labels, set: (v) => scene.setOptions({ labels: (view3d.labels = v) }) },
+])
+slider(v3, {
+  label: '垂直夸张',
+  min: 4,
+  max: 60,
+  step: 1,
+  fmt: (v) => `×${v}`,
+  get: () => view3d.exaggeration,
+  set: (v) => {
+    view3d.exaggeration = v
+    scheduleExaggeration()
+  },
+})
+slider(v3, {
+  label: '太阳方位',
+  min: 0,
+  max: 360,
+  step: 1,
+  fmt: (v) => `${v}°`,
+  get: () => view3d.sunAzimuth,
+  set: (v) => scene.setOptions({ sunAzimuth: (view3d.sunAzimuth = v) }),
+})
+slider(v3, {
+  label: '太阳高度',
+  min: 2,
+  max: 88,
+  step: 1,
+  fmt: (v) => `${v}°`,
+  get: () => view3d.sunElevation,
+  set: (v) => scene.setOptions({ sunElevation: (view3d.sunElevation = v) }),
+})
+
+// —— 纸图控件 ——
+const v2 = $('#view-2d')
+{
+  const grid = document.createElement('div')
+  grid.className = 'styles'
+  for (const t of THEMES) {
+    const b = document.createElement('button')
+    b.className = 'style-card' + (t.id === atlasStyle ? ' on' : '')
+    b.title = t.desc
+    b.innerHTML = `<i style="background:rgb(${t.paper.join(',')})"><b style="border-color:${t.ink}"></b></i><span>${t.name}</span>`
+    b.addEventListener('click', () => {
+      atlasStyle = t.id
+      localStorageSet('atlasStyle', t.id)
+      for (const x of grid.children) x.classList.toggle('on', x === b)
+      refreshAtlas()
+    })
+    grid.appendChild(b)
+  }
+  v2.appendChild(grid)
+}
+const atlasToggle = (label: string, key: keyof typeof atlasOpts) => ({
+  label,
+  get: () => atlasOpts[key],
+  set: (v: boolean) => {
+    atlasOpts[key] = v
+    atlasCache.clear()
+    refreshAtlas()
+  },
+})
+toggles(v2, [atlasToggle('注记', 'labels'), atlasToggle('等高线', 'contours'), atlasToggle('经纬网', 'graticule')])
+
 let exTimer = 0
 function scheduleExaggeration() {
   clearTimeout(exTimer)
@@ -254,7 +303,10 @@ function setMode(m: '3d' | '2d') {
   $('#view3d').classList.toggle('hidden', m !== '3d')
   $('#view2d').classList.toggle('hidden', m !== '2d')
   scene.active = m === '3d'
-  $('#hint').textContent = m === '3d' ? '拖动旋转 · 右键平移 · 滚轮缩放 · P 性能' : '拖动平移 · 滚轮缩放 · 双击复位'
+  $('#ctl-3d').classList.toggle('hidden', m !== '3d')
+  $('#ctl-2d').classList.toggle('hidden', m !== '2d')
+  $('#export-svg').classList.toggle('hidden', m !== '2d')
+  $('#hint').textContent = m === '3d' ? '拖动旋转 · 右键平移 · 滚轮缩放 · R 随机 · P 性能' : '拖动平移 · 滚轮缩放 · 双击复位 · R 随机'
   if (m === '2d' && world) refreshAtlas()
 }
 
@@ -266,6 +318,7 @@ function generate() {
   const id = ++jobId
   params.seed = seedInput.value.trim() || 'world'
   writeHash()
+  markDirty(false)
   loading.classList.remove('hidden')
   $<HTMLButtonElement>('#generate').disabled = true
   worker.postMessage({ id, params: { ...params } })
@@ -344,17 +397,18 @@ async function refreshAtlas() {
 
 function showStats(w: World) {
   const s = w.stats
-  const rows: [string, string][] = [
-    ['世界', w.worldName],
+  const m = (km: number) => `${Math.round(km * 1000).toLocaleString()} m`
+  const tiles: [string, string][] = [
     ['陆地', pct(s.land)],
-    ['最高峰', `${Math.round(s.peak * 1000).toLocaleString()} m`],
-    ['最深处', `${Math.round(s.trench * 1000).toLocaleString()} m`],
-    ['湖泊', String(s.lakes)],
+    ['最高峰', m(s.peak)],
+    ['最深处', m(s.trench)],
     ['河流', String(s.rivers)],
-    ['地图跨度', `${Math.round(w.W * w.kmPerCell).toLocaleString()} km`],
-    ['生成耗时', `${(s.ms / 1000).toFixed(2)} s`],
+    ['湖泊', String(s.lakes)],
+    ['跨度', `${Math.round(w.W * w.kmPerCell).toLocaleString()} km`],
   ]
-  $('#stats').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')
+  $('#world-name').innerHTML = `${w.worldName}<small>${(s.ms / 1000).toFixed(1)} s</small>`
+  $('#stats').innerHTML = tiles.map(([k, v]) => `<div><b>${v}</b><span>${k}</span></div>`).join('')
+  $('#info').classList.remove('hidden')
 }
 
 // —— 2D 平移缩放 ——
