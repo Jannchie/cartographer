@@ -386,7 +386,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   atlasCanvas = null
   atlasCache.clear()
   if (mode === '2d') await refreshAtlas()
-  showStats(world)
+  showStats(world, m.cached)
   loading.classList.add('hidden')
   $('#edit-status').classList.add('hidden')
   $<HTMLButtonElement>('#generate').disabled = false
@@ -429,7 +429,7 @@ async function refreshAtlas() {
   else applyMap()
 }
 
-function showStats(w: World) {
+function showStats(w: World, cached = false) {
   const s = w.stats
   const m = (km: number) => `${Math.round(km * 1000).toLocaleString()} m`
   const tiles: [string, string][] = [
@@ -440,7 +440,7 @@ function showStats(w: World) {
     ['湖泊', String(s.lakes)],
     ['跨度', `${Math.round(w.W * w.kmPerCell).toLocaleString()} km`],
   ]
-  $('#world-name').innerHTML = `${w.worldName}<small>${(s.ms / 1000).toFixed(1)} s</small>`
+  $('#world-name').innerHTML = `${w.worldName}<small>${cached ? '缓存' : `${(s.ms / 1000).toFixed(1)} s`}</small>`
   $('#stats').innerHTML = tiles.map(([k, v]) => `<div><b>${v}</b><span>${k}</span></div>`).join('')
   $('#info').classList.remove('hidden')
 }
