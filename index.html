@@ -12,12 +12,37 @@
     />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
-  <body>
+  <body data-module="home">
+    <div id="home">
+      <div class="home-inner">
+        <div class="home-brand">
+          <h1>Cartographer</h1>
+          <p>为你的世界观绘制地图：从整片大陆的山川气候，到一座城镇的街巷。</p>
+        </div>
+        <div class="home-cards">
+          <button class="home-card" data-go="world">
+            <div class="hc-art hc-world"></div>
+            <div class="hc-body">
+              <div class="hc-title">世界地图</div>
+              <div class="hc-desc">板块造山、侵蚀水系、气候与群系。3D 沙盘、六种纸图风格，并可在编辑视图里改地形、气候、大洲与地点。</div>
+            </div>
+          </button>
+          <button class="home-card" data-go="settlement">
+            <div class="hc-art hc-town"></div>
+            <div class="hc-body">
+              <div class="hc-title">聚落地图 <span class="hc-tag">开发中</span></div>
+              <div class="hc-desc">为一座城市、镇子或村庄生成街区级平面图：城墙、街道、街区、地块与地标，可继承世界地图上的地形。</div>
+            </div>
+          </button>
+        </div>
+        <div class="home-foot"><button id="home-open">打开项目文件…</button></div>
+      </div>
+    </div>
     <div id="app">
       <aside id="panel">
         <header class="brand">
           <div class="brand-top">
-            <h1>Cartographer</h1>
+            <h1 id="go-home" title="回到首页">Cartographer</h1>
             <div class="file">
               <button id="open" title="打开项目文件">打开</button>
               <button id="save" title="保存种子、参数与全部编辑">保存</button>
@@ -25,8 +50,8 @@
             </div>
           </div>
           <nav class="modules" id="modules">
-            <button data-mod="world" class="on">世界</button>
-            <button data-mod="settlement">聚落</button>
+            <button data-mod="world" class="on">世界地图</button>
+            <button data-mod="settlement">聚落地图</button>
           </nav>
         </header>
         <div class="scroll">
@@ -54,7 +79,27 @@
           <section id="ctl-edit" class="hidden">
             <h2>编辑</h2>
             <div class="tool-grid" id="edit-tools"></div>
+            <div class="row">
+              <label>底图</label>
+              <select id="edit-view">
+                <option value="auto">随画笔切换</option>
+                <option value="relief">地貌</option>
+                <option value="elevation">海拔 · 等高线</option>
+                <option value="temperature">气温</option>
+                <option value="rain">降水</option>
+                <option value="regions">大洲</option>
+              </select>
+            </div>
             <div id="brush-opts"></div>
+            <div id="region-panel" class="hidden">
+              <div id="region-neck"></div>
+              <button id="region-auto" class="wide" title="在窄于「地峡宽度」的地方把陆地切开，每块大陆核心各成一洲">自动划分大洲</button>
+              <div id="region-insp" class="hidden">
+                <div class="row"><label>中文名</label><input id="region-zh" spellcheck="false" /></div>
+                <div class="row"><label>原名</label><input id="region-name" spellcheck="false" /></div>
+                <button id="region-delete" class="danger">删除这个大洲</button>
+              </div>
+            </div>
             <label class="check"><input type="checkbox" id="edit-names" checked /> 显示地名</label>
             <div class="edit-actions">
               <button id="edit-undo" title="撤销（Ctrl+Z）">撤销</button>

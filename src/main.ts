@@ -1,6 +1,7 @@
 import { latitudeOf } from './gen/climate'
 import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from './app/project'
-import { EditorView, type EditTool } from './editor/editor'
+import { EditorView, type EditTool, type EditView } from './editor/editor'
+import { autoContinents, floodLand, regionAnchor } from './editor/layers'
 import { BIOME_NAMES, DEFAULT_PARAMS, type Label, type World, type WorldEdits, type WorldParams } from './gen/types'
 import { THEMES, ensureFonts, type StyleId } from './render/atlas'
 import type { DisplayList } from './render/atlas/svg/displayList'
@@ -32,6 +33,9 @@ let editsSize = { W: params.width, H: params.height, seed: params.seed }
 let lastTex: { color: HTMLCanvasElement; roughness: HTMLCanvasElement } | null = null
 let sceneStale = false
 let editor: EditorView | null = null
+/** 生成当前世界时发给 Worker 的编辑（编辑视图的预览只叠加之后新画的部分） */
+let genEdits: WorldEdits = {}
+let sentEdits: WorldEdits = {}
 
 const scene = new Scene3D($('#view3d'), view3d)
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__scene = scene
@@ -304,7 +308,7 @@ function setMode(m: '3d' | '2d' | 'edit') {
   if (m === '2d' && world) refreshAtlas()
   if (m === 'edit') {
     ensureEditor()
-    if (world && lastTex) editor!.setWorld(world, lastTex.color, edits)
+    if (world && lastTex) editor!.setWorld(world, lastTex.color, edits, genEdits)
   }
 }
 
@@ -337,6 +341,7 @@ function generate(quiet = false) {
     $('#edit-status').textContent = '演算中…'
   } else loading.classList.remove('hidden')
   $<HTMLButtonElement>('#generate').disabled = true
+  sentEdits = snapshotEdits(edits)
   worker.postMessage({ id, params: { ...params }, edits: { ...edits } })
 }
 let quietJob = false
@@ -362,12 +367,16 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   try {
     const tex = buildPhysicalTexture(world, rivers, 2)
     lastTex = tex
+    homeThumb(tex.color)
     // 编辑视图里不重建 3D（较慢），切回 3D 时再建
     if (mode === '3d' || !editor) {
       scene.setWorld(world, tex.color, tex.roughness, rivers)
       sceneStale = false
     } else sceneStale = true
-    editor?.setWorld(world, tex.color, edits)
+    genEdits = sentEdits
+    // 大洲名随区域走（重算后的地点列表里补回）
+    if (edits.regions) syncContinentLabels()
+    editor?.setWorld(world, tex.color, edits, genEdits)
   } catch (err) {
     console.error(err)
     $('#load-stage').textContent = '绘制失败：' + (err instanceof Error ? err.message : String(err))
@@ -638,6 +647,12 @@ function ensureEditor() {
   editor = new EditorView($('#viewEdit'), {
     onBeforeEdit: pushUndo,
     onCommit: (kind) => {
+      // 大洲只影响标注，不必重算
+      if (kind === 'regions') {
+        syncContinentLabels()
+        editor?.draw()
+        return
+      }
       if (kind === 'labels' && world) {
         edits.labels = world.labels.map((l) => ({ ...l }))
         // 地点改动立即反映到纸图与 3D 地名，政区在重算后更新
@@ -647,6 +662,7 @@ function ensureEditor() {
       scheduleRegen()
     },
     onSelect: showInspector,
+    onRegionSelect: showRegionInspector,
   })
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__editor = editor
 }
@@ -663,6 +679,9 @@ function ensureEditor() {
     ['cool', '降温', '降低气温'],
     ['wet', '增雨', '增加降水'],
     ['dry', '减雨', '减少降水'],
+    ['region', '大洲', '点选陆块建立大洲，或选中已有大洲'],
+    ['regionAdd', '划入', '画笔把陆地划入选中的大洲'],
+    ['regionErase', '移出', '画笔把陆地移出选中的大洲'],
   ]
   const box = $('#edit-tools')
   for (const [id, label, tip] of tools) {
@@ -673,9 +692,11 @@ function ensureEditor() {
     b.classList.toggle('on', id === 'select')
     b.addEventListener('click', () => {
       ensureEditor()
-      editor!.tool = id
+      if (id.startsWith('region')) ensureRegions()
+      editor!.setTool(id)
       for (const x of box.children) x.classList.toggle('on', x === b)
-      $('#brush-opts').classList.toggle('dim', id === 'select' || id === 'place')
+      $('#brush-opts').classList.toggle('dim', id === 'select' || id === 'place' || id === 'region')
+      $('#region-panel').classList.toggle('hidden', !id.startsWith('region'))
     })
     box.appendChild(b)
   }
@@ -829,14 +850,139 @@ $<HTMLInputElement>('#open-file').addEventListener('change', async (e) => {
   }
 })
 
-// —— 模块：世界 / 聚落 ——
-for (const b of document.querySelectorAll<HTMLButtonElement>('#modules button')) {
-  b.addEventListener('click', () => {
-    const m = b.dataset.mod
-    for (const x of document.querySelectorAll('#modules button')) x.classList.toggle('on', x === b)
-    document.body.dataset.module = m
-    scene.active = m === 'world' && mode === '3d'
+// —— 首页与模块：世界地图 / 聚落地图 ——
+/** 首页卡片用当前世界的缩略图 */
+function homeThumb(color: HTMLCanvasElement) {
+  const c = document.createElement('canvas')
+  c.width = 560
+  c.height = Math.round((560 * color.height) / color.width)
+  c.getContext('2d')!.drawImage(color, 0, 0, c.width, c.height)
+  const art = $('.hc-world')
+  art.style.background = `url(${c.toDataURL('image/jpeg', 0.85)}) center / cover`
+}
+function setModule(m: 'home' | 'world' | 'settlement') {
+  document.body.dataset.module = m
+  for (const x of document.querySelectorAll<HTMLButtonElement>('#modules button')) x.classList.toggle('on', x.dataset.mod === m)
+  scene.active = m === 'world' && mode === '3d'
+  localStorageSet('module', m)
+}
+for (const b of document.querySelectorAll<HTMLButtonElement>('#modules button')) b.addEventListener('click', () => setModule(b.dataset.mod as 'world' | 'settlement'))
+for (const b of document.querySelectorAll<HTMLButtonElement>('.home-card')) b.addEventListener('click', () => setModule(b.dataset.go as 'world' | 'settlement'))
+$('#go-home').addEventListener('click', () => setModule('home'))
+$('#home-open').addEventListener('click', () => {
+  setModule('world')
+  $<HTMLInputElement>('#open-file').click()
+})
+// 分享链接（带参数）直接进世界地图；否则回到上次所在的模块，首次打开显示首页
+setModule(location.hash.length > 1 ? 'world' : ((localStorageGet('module') as 'home' | 'world' | 'settlement' | null) ?? 'home'))
+
+// —— 底图 ——
+$<HTMLSelectElement>('#edit-view').addEventListener('change', (e) => {
+  ensureEditor()
+  const v = (e.target as HTMLSelectElement).value
+  editor!.setView(v === 'auto' ? null : (v as EditView))
+})
+
+// —— 大洲 ——
+/** 还没有大洲数据时：按现有的大洲名，把各自所在的连通陆地建成区域 */
+function ensureRegions() {
+  if (edits.regions || !world || !editor) return
+  const { W, H } = world
+  const reg = new Int16Array(W * H).fill(-1)
+  const meta: { name: string; zh: string }[] = []
+  const land = editor.landMask()
+  for (const l of world.labels) {
+    if (l.kind !== 'continent') continue
+    const i = Math.min(H - 1, Math.max(0, Math.round(l.y))) * W + Math.min(W - 1, Math.max(0, Math.round(l.x)))
+    if (!land[i] || reg[i] >= 0) continue
+    const id = meta.length
+    meta.push({ name: l.name, zh: l.zh })
+    for (const j of floodLand(land, reg, W, H, i, -1)) reg[j] = id
+  }
+  pushUndo()
+  edits.regions = reg
+  edits.regionMeta = meta
+  editor.refreshEdits(edits)
+}
+
+/** 大洲名放到各区域最宽阔处；地点列表原地替换（编辑视图持有同一个数组） */
+function syncContinentLabels() {
+  const w = world
+  const reg = edits.regions
+  if (!w || !reg || reg.length !== w.W * w.H) return
+  const others = w.labels.filter((l) => l.kind !== 'continent')
+  const conts: Label[] = []
+  ;(edits.regionMeta ?? []).forEach((m, id) => {
+    const a = regionAnchor(reg, w.W, w.H, id)
+    if (!a) return
+    conts.push({ kind: 'continent', name: m.name, zh: m.zh, x: a.x, y: a.y, angle: 0, weight: 1000 + a.area / 20, span: a.span })
+  })
+  w.labels.splice(0, w.labels.length, ...conts, ...others)
+  edits.labels = w.labels.map((l) => ({ ...l }))
+  atlasCache.clear()
+  scene.refreshLabels()
+}
+
+let neck = 10
+slider($('#region-neck'), {
+  label: '地峡宽度',
+  min: 2,
+  max: 40,
+  step: 1,
+  fmt: (v) => `${Math.round(v)} 格`,
+  get: () => neck,
+  set: (v) => (neck = v),
+})
+$('#region-auto').addEventListener('click', () => {
+  if (!world || !editor) return
+  const { W, H } = world
+  const land = editor.landMask()
+  let landN = 0
+  for (const v of land) landN += v
+  const reg = autoContinents(land, world.coastDist, W, H, neck * (W / 1024), Math.max(400, landN * 0.02))
+  // 沿用原大洲名：新区域里若有旧的大洲名标注，就继承它
+  const old = world.labels.filter((l) => l.kind === 'continent')
+  let n = 0
+  for (const v of reg) n = Math.max(n, v + 1)
+  const meta = Array.from({ length: n }, (_, id) => {
+    const hit = old.find((l) => reg[Math.min(H - 1, Math.round(l.y)) * W + Math.min(W - 1, Math.round(l.x))] === id)
+    return hit ? { name: hit.name, zh: hit.zh } : { name: `Terra ${id + 1}`, zh: `新大洲${id + 1}` }
+  })
+  pushUndo()
+  edits.regions = reg
+  edits.regionMeta = meta
+  syncContinentLabels()
+  editor.selectRegion(-1)
+  editor.refreshEdits(edits)
+})
+function showRegionInspector(id: number) {
+  const m = edits.regionMeta?.[id]
+  $('#region-insp').classList.toggle('hidden', !m)
+  if (!m) return
+  $<HTMLInputElement>('#region-zh').value = m.zh
+  $<HTMLInputElement>('#region-name').value = m.name
+}
+for (const [sel, key] of [
+  ['#region-zh', 'zh'],
+  ['#region-name', 'name'],
+] as const) {
+  $<HTMLInputElement>(sel).addEventListener('input', (e) => {
+    const m = edits.regionMeta?.[editor?.selectedRegion ?? -1]
+    if (!m) return
+    m[key] = (e.target as HTMLInputElement).value
+    syncContinentLabels()
+    editor?.draw()
   })
 }
+$('#region-delete').addEventListener('click', () => {
+  const id = editor?.selectedRegion ?? -1
+  const reg = edits.regions
+  if (!reg || id < 0) return
+  pushUndo()
+  for (let i = 0; i < reg.length; i++) if (reg[i] === id) reg[i] = -1
+  syncContinentLabels()
+  editor!.selectRegion(-1)
+})
+
 
 generate()

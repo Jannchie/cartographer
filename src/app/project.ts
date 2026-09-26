@@ -14,6 +14,8 @@ export interface ProjectDoc {
       temp?: string
       rain?: string
       labels?: Label[]
+      regions?: string
+      regionMeta?: { name: string; zh: string }[]
       worldName?: string
       worldNameZh?: string
     }
@@ -43,6 +45,8 @@ export async function serializeProject(params: WorldParams, edits: WorldEdits): 
   if (edits.temp) e.temp = await packF32(edits.temp)
   if (edits.rain) e.rain = await packF32(edits.rain)
   if (edits.labels) e.labels = edits.labels.map((l) => ({ ...l }))
+  if (edits.regions) e.regions = await packF32(Float32Array.from(edits.regions))
+  e.regionMeta = edits.regionMeta
   e.worldName = edits.worldName
   e.worldNameZh = edits.worldNameZh
   return JSON.stringify(doc)
@@ -60,6 +64,8 @@ export async function parseProject(text: string): Promise<{ params: WorldParams;
   if (e.temp) edits.temp = await unpackF32(e.temp)
   if (e.rain) edits.rain = await unpackF32(e.rain)
   if (e.labels) edits.labels = e.labels
+  if (e.regions) edits.regions = Int16Array.from(await unpackF32(e.regions))
+  edits.regionMeta = e.regionMeta
   edits.worldName = e.worldName
   edits.worldNameZh = e.worldNameZh
   return { params: doc.world.params, edits }
@@ -91,6 +97,8 @@ export function resampleEdits(edits: WorldEdits, W0: number, H0: number, W: numb
     temp: rs(edits.temp),
     rain: rs(edits.rain),
     labels: edits.labels?.map((l) => ({ ...l, x: l.x * sx, y: l.y * sy, span: l.span * sx })),
+    regions: edits.regions && edits.regions.length === W0 * H0 ? resampleNearest(edits.regions, W0, H0, W, H) : undefined,
+    regionMeta: edits.regionMeta,
     worldName: edits.worldName,
     worldNameZh: edits.worldNameZh,
     terrainRev: (edits.terrainRev ?? 0) + 1,
@@ -98,7 +106,7 @@ export function resampleEdits(edits: WorldEdits, W0: number, H0: number, W: numb
 }
 
 export function hasEdits(e: WorldEdits) {
-  return !!(e.terrain || e.temp || e.rain || e.labels)
+  return !!(e.terrain || e.temp || e.rain || e.labels || e.regions)
 }
 
 /** 撤销用的快照（数组复制一份） */
@@ -108,8 +116,19 @@ export function snapshotEdits(e: WorldEdits): WorldEdits {
     temp: e.temp && Float32Array.from(e.temp),
     rain: e.rain && Float32Array.from(e.rain),
     labels: e.labels?.map((l) => ({ ...l })),
+    regions: e.regions && Int16Array.from(e.regions),
+    regionMeta: e.regionMeta?.map((m) => ({ ...m })),
     worldName: e.worldName,
     worldNameZh: e.worldNameZh,
     terrainRev: e.terrainRev,
   }
+}
+
+function resampleNearest(a: Int16Array, W0: number, H0: number, W: number, H: number) {
+  const out = new Int16Array(W * H)
+  for (let y = 0; y < H; y++) {
+    const sy = Math.min(H0 - 1, Math.round((y / (H - 1)) * (H0 - 1)))
+    for (let x = 0; x < W; x++) out[y * W + x] = a[sy * W0 + Math.min(W0 - 1, Math.round((x / (W - 1)) * (W0 - 1)))]
+  }
+  return out
 }

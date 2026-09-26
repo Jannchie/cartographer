@@ -1,28 +1,48 @@
 import type { Label, World, WorldEdits } from '../gen/types'
+import { ELEV_RAMP, RAIN_RAMP, REGION_COLORS, TEMP_RAMP, floodLand, isolines, rampColor, type IsoGroup, type Ramp } from './layers'
 
 /**
- * 世界编辑视图：俯视的地形底图 + 编辑增量叠色 + 地点，支持
+ * 世界编辑视图：专题底图 + 编辑增量 + 地点，支持
  *  - 地形画笔（抬升 / 下沉 / 抹平）：改的是侵蚀前的"地形意图"，松手后重新演算侵蚀、水系与气候；
  *  - 气候画笔（升温 / 降温 / 增雨 / 减雨）；
+ *  - 大洲：点选陆块建立大洲，画笔加入 / 移出；
  *  - 地点：选中后改名、改类型、拖动、删除，或点击空白处新增。
- * 画笔实时预览：编辑增量叠色 + 按"高度 + 增量"重算的山体阴影。
+ * 底图随画笔切换：地形 → 分层设色 + 等高线，气温 / 降水 → 热力图 + 等值线，大洲 → 区域着色。
  */
 
-export type EditTool = 'select' | 'raise' | 'lower' | 'smooth' | 'warm' | 'cool' | 'wet' | 'dry' | 'place'
+export type EditTool = 'select' | 'raise' | 'lower' | 'smooth' | 'warm' | 'cool' | 'wet' | 'dry' | 'place' | 'region' | 'regionAdd' | 'regionErase'
+export type EditView = 'relief' | 'elevation' | 'temperature' | 'rain' | 'regions'
 
 export interface EditorCallbacks {
   /** 一笔画完（或地点增删改完）：kind 决定需要重算到哪一步 */
-  onCommit: (kind: 'terrain' | 'climate' | 'labels') => void
+  onCommit: (kind: 'terrain' | 'climate' | 'labels' | 'regions') => void
   /** 一笔开始前：用于撤销 */
   onBeforeEdit: () => void
   onSelect: (label: Label | null) => void
+  onRegionSelect: (id: number) => void
+}
+
+/** 每种画笔默认对应的底图 */
+const TOOL_VIEW: Record<EditTool, EditView> = {
+  select: 'relief',
+  place: 'relief',
+  raise: 'elevation',
+  lower: 'elevation',
+  smooth: 'elevation',
+  warm: 'temperature',
+  cool: 'temperature',
+  wet: 'rain',
+  dry: 'rain',
+  region: 'regions',
+  regionAdd: 'regions',
+  regionErase: 'regions',
 }
 
 /** 每种地点在编辑图上的样式 */
 const KIND_STYLE: Record<Label['kind'], { font: string; color: string; dot?: number }> = {
   capital: { font: '600 13px', color: '#fff', dot: 4.5 },
   city: { font: '500 12px', color: '#f1ede4', dot: 3 },
-  continent: { font: '600 16px', color: 'rgba(255,255,255,0.8)' },
+  continent: { font: '600 17px', color: 'rgba(255,255,255,0.9)' },
   island: { font: 'italic 12px', color: 'rgba(255,255,255,0.85)' },
   ocean: { font: 'italic 15px', color: 'rgba(200,225,240,0.85)' },
   sea: { font: 'italic 13px', color: 'rgba(200,225,240,0.85)' },
@@ -33,26 +53,41 @@ const KIND_STYLE: Record<Label['kind'], { font: string; color: string; dot?: num
   forest: { font: 'italic 11px', color: 'rgba(225,245,215,0.85)' },
 }
 
+/** 图例：配色带与刻度 */
+const LEGENDS: Partial<Record<EditView, { title: string; ramp: Ramp; ticks: [number, string][]; min: number; max: number }>> = {
+  elevation: { title: '海拔', ramp: ELEV_RAMP, min: -4, max: 5, ticks: [[-4, '-4 km'], [0, '0'], [2, '2'], [5, '5 km']] },
+  temperature: { title: '年均温', ramp: TEMP_RAMP, min: -30, max: 35, ticks: [[-30, '-30°'], [0, '0°'], [15, '15°'], [35, '35 °C']] },
+  rain: { title: '年降水', ramp: RAIN_RAMP, min: 0, max: 4000, ticks: [[0, '0'], [1000, '1000'], [2000, '2000'], [4000, '4000 mm']] },
+}
+
 export class EditorView {
   readonly canvas = document.createElement('canvas')
   private ctx = this.canvas.getContext('2d')!
+  private legend = document.createElement('div')
   private world: World | null = null
   private edits: WorldEdits = {}
-  /** 底图：地表色 × 山体阴影（W×H 像素，放大绘制） */
+  /** 生成当前世界时用的编辑（预览只叠加之后新画的部分） */
+  private genEdits: WorldEdits = {}
+  /** 底图：W×H 像素，放大绘制 */
   private base = document.createElement('canvas')
   private baseCtx = this.base.getContext('2d')!
   private color: ImageData | null = null
-  /** 编辑增量叠色 */
+  /** 编辑增量 / 区域叠色 */
   private over = document.createElement('canvas')
   private overCtx = this.over.getContext('2d')!
+  private iso: IsoGroup[] = []
+  private isoTimer = 0
   private view = { x: 0, y: 0, k: 1 }
   private raf = 0
   private mouse = { x: -1, y: -1, inside: false }
   private drag: { mode: 'pan' | 'paint' | 'move'; x: number; y: number; vx: number; vy: number; label?: Label } | null = null
   private dirty = { x0: 1e9, y0: 1e9, x1: -1, y1: -1 }
   tool: EditTool = 'select'
+  /** 手动指定的底图；null 表示随画笔自动切换 */
+  viewOverride: EditView | null = null
   brush = { radius: 18, strength: 0.5 }
   selected: Label | null = null
+  selectedRegion = -1
   showNames = true
 
   constructor(
@@ -61,17 +96,28 @@ export class EditorView {
   ) {
     container.appendChild(this.canvas)
     this.canvas.className = 'editor-canvas'
+    this.legend.className = 'edit-legend'
+    container.appendChild(this.legend)
     new ResizeObserver(() => this.resize()).observe(container)
     this.bind()
   }
 
-  /** 换世界或演算完成后调用；edits 是主线程持有的同一个对象（原地修改） */
-  setWorld(world: World, color: HTMLCanvasElement, edits: WorldEdits) {
+  get viewMode(): EditView {
+    return this.viewOverride ?? TOOL_VIEW[this.tool]
+  }
+
+  /**
+   * 换世界或演算完成后调用；edits 是主线程持有的同一个对象（原地修改），
+   * genEdits 是生成这个世界时发给 Worker 的那份。
+   */
+  setWorld(world: World, color: HTMLCanvasElement, edits: WorldEdits, genEdits: WorldEdits) {
     const first = !this.world || this.world.W !== world.W || this.world.H !== world.H
+    const selIdx = this.selected && this.world ? this.world.labels.indexOf(this.selected) : -1
     this.world = world
     this.edits = edits
+    this.genEdits = genEdits
     const { W, H } = world
-    // 地表色缩到 W×H，与高度图一一对应，方便局部重算阴影
+    // 地表色缩到 W×H，与高度图一一对应，方便局部重算
     const tmp = document.createElement('canvas')
     tmp.width = W
     tmp.height = H
@@ -80,20 +126,32 @@ export class EditorView {
     this.color = tc.getImageData(0, 0, W, H)
     this.base.width = this.over.width = W
     this.base.height = this.over.height = H
-    this.markDirty(0, 0, W - 1, H - 1)
-    this.refresh()
     if (first) this.fit()
-    if (this.selected && !world.labels.includes(this.selected)) this.select(null)
-    this.draw()
+    // 地点被重新生成（固定后是同一份列表的副本），按下标找回选中项
+    if (this.selected) {
+      const l = selIdx >= 0 ? world.labels[selIdx] : undefined
+      if (l && l.name === this.selected.name) this.selected = l
+      else this.select(null)
+    }
+    this.full()
   }
 
-  /** 编辑数据被外部替换（撤销、清除、打开项目）后重画 */
+  /** 编辑数据被外部替换（撤销、清除、打开项目、自动划分）后重画 */
   refreshEdits(edits: WorldEdits) {
     this.edits = edits
-    if (!this.world) return
-    this.markDirty(0, 0, this.world.W - 1, this.world.H - 1)
-    this.refresh()
-    this.draw()
+    this.full()
+  }
+
+  setTool(t: EditTool) {
+    const before = this.viewMode
+    this.tool = t
+    if (this.viewMode !== before) this.full()
+    else this.draw()
+  }
+
+  setView(v: EditView | null) {
+    this.viewOverride = v
+    this.full()
   }
 
   fit() {
@@ -109,6 +167,12 @@ export class EditorView {
     this.selected = l
     this.cb.onSelect(l)
     this.draw()
+  }
+
+  selectRegion(id: number) {
+    this.selectedRegion = id
+    this.cb.onRegionSelect(id)
+    this.full()
   }
 
   /** 屏幕坐标 → 格坐标 */
@@ -127,6 +191,15 @@ export class EditorView {
     this.draw()
   }
 
+  /** 整幅重算底图、叠色、等值线与图例 */
+  private full() {
+    if (!this.world) return
+    this.markDirty(0, 0, this.world.W - 1, this.world.H - 1)
+    this.refresh()
+    this.updateLegend()
+    this.draw()
+  }
+
   private markDirty(x0: number, y0: number, x1: number, y1: number) {
     const d = this.dirty
     d.x0 = Math.min(d.x0, x0)
@@ -135,14 +208,39 @@ export class EditorView {
     d.y1 = Math.max(d.y1, y1)
   }
 
-  /** 重算脏矩形里的底图（阴影按"高度 + 地形增量"）与增量叠色 */
+  /** 当前高度 = 世界高度 + 上次演算之后新增的地形编辑 */
+  private liveElevation(): Float32Array {
+    const w = this.world!
+    const t = this.edits.terrain
+    const g = this.genEdits.terrain
+    if (!t) return w.elevation
+    const out = new Float32Array(w.elevation)
+    for (let i = 0; i < out.length; i++) out[i] += t[i] - (g ? g[i] : 0)
+    return out
+  }
+
+  private liveField(kind: 'temp' | 'rain'): Float32Array {
+    const w = this.world!
+    const base = kind === 'temp' ? w.temperature : w.precipitation
+    const a = this.edits[kind]
+    const g = this.genEdits[kind]
+    if (!a) return base
+    const out = new Float32Array(base)
+    for (let i = 0; i < out.length; i++) {
+      const d = a[i] - (g ? g[i] : 0)
+      out[i] = kind === 'temp' ? out[i] + d : out[i] * Math.exp(d)
+    }
+    return out
+  }
+
+  /** 重算脏矩形里的底图与叠色 */
   private refresh() {
     const w = this.world
     const c = this.color
     const d = this.dirty
     if (!w || !c || d.x1 < d.x0) return
-    const { W, H, elevation: e } = w
-    const t = this.edits.terrain
+    const { W, H, elevation: e0 } = w
+    const mode = this.viewMode
     const x0 = Math.max(0, d.x0 - 1)
     const y0 = Math.max(0, d.y0 - 1)
     const x1 = Math.min(W - 1, d.x1 + 1)
@@ -151,13 +249,19 @@ export class EditorView {
     const bh = y1 - y0 + 1
     const img = this.baseCtx.createImageData(bw, bh)
     const ov = this.overCtx.createImageData(bw, bh)
+    const t = this.edits.terrain
+    const gt = this.genEdits.terrain
     const hAt = (x: number, y: number) => {
       const i = Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))
-      return e[i] + (t ? t[i] : 0)
+      return e0[i] + (t ? t[i] - (gt ? gt[i] : 0) : 0)
     }
-    const k = 22 / w.kmPerCell
     const tp = this.edits.temp
+    const gtp = this.genEdits.temp
     const rn = this.edits.rain
+    const grn = this.genEdits.rain
+    const regions = this.edits.regions
+    const k = 22 / w.kmPerCell
+    const rgb = [0, 0, 0]
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const i = y * W + x
@@ -167,18 +271,49 @@ export class EditorView {
         // 西北光照的山体阴影
         const sh = h > 0 ? Math.max(0.35, Math.min(1.35, 1 + (-dx * 0.7 - dy * 0.7) / Math.sqrt(1 + dx * dx + dy * dy))) : 1
         const o = ((y - y0) * bw + (x - x0)) * 4
-        let r = c.data[i * 4]
-        let g = c.data[i * 4 + 1]
-        let b = c.data[i * 4 + 2]
-        // 画笔把海里抬出陆地、把陆地压成海时，底色跟着变
-        const orig = e[i]
-        if (orig <= 0 && h > 0) [r, g, b] = [150, 160, 110]
-        else if (orig > 0 && h <= 0) [r, g, b] = [60, 110, 150]
-        img.data[o] = r * sh
-        img.data[o + 1] = g * sh
-        img.data[o + 2] = b * sh
+        let r: number
+        let g: number
+        let b: number
+        let s = sh
+        if (mode === 'elevation') {
+          rampColor(ELEV_RAMP, h, rgb)
+          s = 0.72 + 0.28 * sh
+        } else if (mode === 'temperature') {
+          rampColor(TEMP_RAMP, w.temperature[i] + (tp ? tp[i] - (gtp ? gtp[i] : 0) : 0), rgb)
+          s = h > 0 ? 0.85 + 0.15 * sh : 0.78
+        } else if (mode === 'rain') {
+          if (h > 0) {
+            rampColor(RAIN_RAMP, w.precipitation[i] * Math.exp(rn ? rn[i] - (grn ? grn[i] : 0) : 0), rgb)
+            s = 0.85 + 0.15 * sh
+          } else {
+            rgb[0] = 38
+            rgb[1] = 52
+            rgb[2] = 66
+            s = 1
+          }
+        } else {
+          rgb[0] = c.data[i * 4]
+          rgb[1] = c.data[i * 4 + 1]
+          rgb[2] = c.data[i * 4 + 2]
+          // 画笔把海里抬出陆地、把陆地压成海时，底色跟着变
+          if (e0[i] <= 0 && h > 0) [rgb[0], rgb[1], rgb[2]] = [150, 160, 110]
+          else if (e0[i] > 0 && h <= 0) [rgb[0], rgb[1], rgb[2]] = [60, 110, 150]
+          if (mode === 'regions') {
+            // 淡化，让区域色更醒目
+            const l = (rgb[0] + rgb[1] + rgb[2]) / 3
+            rgb[0] = l + (rgb[0] - l) * 0.35
+            rgb[1] = l + (rgb[1] - l) * 0.35
+            rgb[2] = l + (rgb[2] - l) * 0.35
+          }
+        }
+        r = rgb[0] * s
+        g = rgb[1] * s
+        b = rgb[2] * s
+        img.data[o] = r
+        img.data[o + 1] = g
+        img.data[o + 2] = b
         img.data[o + 3] = 255
-        // 增量叠色：地形红（抬）蓝（压），气温橙/青，降水绿/褐
+        // 叠色
         let cr = 0
         let cg = 0
         let cb = 0
@@ -190,9 +325,20 @@ export class EditorView {
           cb = (cb * ca + bb * a) / (ca + a)
           ca = Math.min(1, ca + a)
         }
-        if (t && t[i] !== 0) add(t[i] > 0 ? 235 : 70, t[i] > 0 ? 90 : 140, t[i] > 0 ? 60 : 235, Math.min(0.5, 0.08 + Math.abs(t[i]) * 2))
-        if (tp && tp[i] !== 0) add(tp[i] > 0 ? 255 : 80, tp[i] > 0 ? 160 : 210, tp[i] > 0 ? 40 : 255, Math.min(0.45, 0.08 + Math.abs(tp[i]) / 10))
-        if (rn && rn[i] !== 0) add(rn[i] > 0 ? 60 : 190, rn[i] > 0 ? 200 : 140, rn[i] > 0 ? 110 : 60, Math.min(0.45, 0.08 + Math.abs(rn[i]) / 1.2))
+        if (mode === 'regions') {
+          const id = regions ? regions[i] : -1
+          if (id >= 0) {
+            const col = REGION_COLORS[id % REGION_COLORS.length]
+            const border = x > 0 && x < W - 1 && y > 0 && y < H - 1 && (regions![i - 1] !== id || regions![i + 1] !== id || regions![i - W] !== id || regions![i + W] !== id)
+            const a = border ? 0.95 : id === this.selectedRegion ? 0.55 : 0.32
+            add(col[0], col[1], col[2], a)
+          }
+        } else if (mode === 'relief') {
+          // 地貌底图上用叠色标出编辑：地形红抬蓝压，气温橙 / 青，降水绿 / 褐
+          if (t && t[i] !== 0) add(t[i] > 0 ? 235 : 70, t[i] > 0 ? 90 : 140, t[i] > 0 ? 60 : 235, Math.min(0.5, 0.08 + Math.abs(t[i]) * 2))
+          if (tp && tp[i] !== 0) add(tp[i] > 0 ? 255 : 80, tp[i] > 0 ? 160 : 210, tp[i] > 0 ? 40 : 255, Math.min(0.45, 0.08 + Math.abs(tp[i]) / 10))
+          if (rn && rn[i] !== 0) add(rn[i] > 0 ? 60 : 190, rn[i] > 0 ? 200 : 140, rn[i] > 0 ? 110 : 60, Math.min(0.45, 0.08 + Math.abs(rn[i]) / 1.2))
+        }
         ov.data[o] = cr
         ov.data[o + 1] = cg
         ov.data[o + 2] = cb
@@ -202,6 +348,70 @@ export class EditorView {
     this.baseCtx.putImageData(img, x0, y0)
     this.overCtx.putImageData(ov, x0, y0)
     this.dirty = { x0: 1e9, y0: 1e9, x1: -1, y1: -1 }
+    this.scheduleIso()
+  }
+
+  /** 等值线较慢：画笔停顿后再算（期间沿用旧线） */
+  private scheduleIso() {
+    clearTimeout(this.isoTimer)
+    this.isoTimer = window.setTimeout(() => {
+      this.iso = this.computeIso()
+      this.draw()
+    }, this.drag ? 400 : 60)
+  }
+
+  private computeIso(): IsoGroup[] {
+    const w = this.world
+    if (!w) return []
+    const { W, H } = w
+    const mode = this.viewMode
+    if (mode === 'elevation') {
+      const f = this.liveElevation()
+      const lv: [number, string, number][] = []
+      for (const d of [-4, -3, -2, -1, -0.2]) lv.push([d, 'rgba(10,30,55,0.45)', 0.7])
+      lv.push([0.0005, 'rgba(15,20,25,0.95)', 1.3])
+      for (let h = 0.25; h <= 7; h += 0.25) {
+        const major = Math.abs(h - Math.round(h)) < 1e-6
+        lv.push([h, major ? 'rgba(55,35,20,0.8)' : 'rgba(55,35,20,0.38)', major ? 1.1 : 0.6])
+      }
+      return isolines(f, W, H, lv)
+    }
+    if (mode === 'temperature') {
+      const f = this.liveField('temp')
+      const lv: [number, string, number][] = []
+      for (let t = -30; t <= 35; t += 5) lv.push([t, t === 0 ? 'rgba(20,40,90,0.85)' : 'rgba(40,30,30,0.35)', t === 0 ? 1.3 : 0.7])
+      const out = isolines(f, W, H, lv)
+      out.push(...isolines(this.liveElevation(), W, H, [[0.0005, 'rgba(15,20,25,0.7)', 1]]))
+      return out
+    }
+    if (mode === 'rain') {
+      const f = this.liveField('rain')
+      // 海上不画等降水量线
+      const e = this.liveElevation()
+      const g = new Float32Array(f)
+      for (let i = 0; i < g.length; i++) if (e[i] <= 0) g[i] = -1
+      const lv: [number, string, number][] = [250, 500, 1000, 1500, 2000, 3000].map((v) => [v, v === 1000 ? 'rgba(20,50,40,0.75)' : 'rgba(30,40,30,0.4)', v === 1000 ? 1.2 : 0.7])
+      const out = isolines(g, W, H, lv)
+      out.push(...isolines(e, W, H, [[0.0005, 'rgba(210,225,235,0.6)', 1]]))
+      return out
+    }
+    return []
+  }
+
+  private updateLegend() {
+    const lg = LEGENDS[this.viewMode]
+    if (!lg) {
+      this.legend.style.display = 'none'
+      return
+    }
+    this.legend.style.display = ''
+    const stops = lg.ramp
+      .filter(([v]) => v >= lg.min - 1e-6 && v <= lg.max + 1e-6)
+      .map(([v, r, g, b]) => `rgb(${r},${g},${b}) ${(((v - lg.min) / (lg.max - lg.min)) * 100).toFixed(1)}%`)
+      .join(',')
+    this.legend.innerHTML =
+      `<div class="lg-title">${lg.title}</div><div class="lg-bar" style="background:linear-gradient(to right,${stops})"></div>` +
+      `<div class="lg-ticks">${lg.ticks.map(([v, t]) => `<span style="left:${((v - lg.min) / (lg.max - lg.min)) * 100}%">${t}</span>`).join('')}</div>`
   }
 
   draw() {
@@ -222,13 +432,28 @@ export class EditorView {
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(this.base, x, y, w.W * k, w.H * k)
     ctx.drawImage(this.over, x, y, w.W * k, w.H * k)
+    // 等值线（格坐标的矢量路径，放大也清晰）
+    if (this.iso.length) {
+      ctx.save()
+      ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * x, dpr * y)
+      ctx.lineJoin = 'round'
+      for (const g of this.iso) {
+        ctx.strokeStyle = g.color
+        ctx.lineWidth = g.width / k
+        ctx.stroke(g.path)
+      }
+      ctx.restore()
+    }
     ctx.strokeStyle = 'rgba(0,0,0,0.5)'
     ctx.lineWidth = 1
     ctx.strokeRect(x - 0.5, y - 0.5, w.W * k + 1, w.H * k + 1)
     // 地点
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
+    const regionMode = this.viewMode === 'regions'
     for (const l of w.labels) {
+      // 大洲视图只显示大洲名；其余视图照常
+      if (regionMode && l.kind !== 'continent') continue
       const st = KIND_STYLE[l.kind]
       const sx = x + l.x * k
       const sy = y + l.y * k
@@ -242,7 +467,7 @@ export class EditorView {
         ctx.strokeStyle = l.kind === 'capital' ? '#f4f1ea' : '#1b1b1b'
         ctx.stroke()
       }
-      if (this.showNames || sel) {
+      if (this.showNames || sel || regionMode) {
         ctx.font = `${st.font} 'Noto Serif SC', serif`
         const text = l.zh || l.name
         const ty = st.dot ? sy - st.dot - 9 : sy
@@ -275,7 +500,7 @@ export class EditorView {
   }
 
   private isBrush() {
-    return this.tool !== 'select' && this.tool !== 'place'
+    return this.tool !== 'select' && this.tool !== 'place' && this.tool !== 'region'
   }
 
   /** 屏幕点附近的地点（像素距离 14 以内，取最近） */
@@ -294,6 +519,44 @@ export class EditorView {
     return best
   }
 
+  /** 当前（含未演算的地形编辑）的陆地掩码 */
+  landMask(): Uint8Array {
+    const e = this.liveElevation()
+    const m = new Uint8Array(e.length)
+    for (let i = 0; i < e.length; i++) m[i] = e[i] > 0 ? 1 : 0
+    return m
+  }
+
+  /** 大洲工具：点选陆块。已有大洲则选中；否则把这片连通陆地（未归属的部分）建成新大洲 */
+  private pickRegion(sx: number, sy: number) {
+    const w = this.world
+    if (!w) return
+    const c = this.toCell(sx, sy)
+    const cx = Math.floor(c.x)
+    const cy = Math.floor(c.y)
+    if (cx < 0 || cy < 0 || cx >= w.W || cy >= w.H) return
+    const i = cy * w.W + cx
+    const regions = this.edits.regions
+    if (regions && regions[i] >= 0) {
+      this.selectRegion(regions[i])
+      return
+    }
+    const land = this.landMask()
+    if (!land[i]) {
+      this.selectRegion(-1)
+      return
+    }
+    this.cb.onBeforeEdit()
+    const reg = this.edits.regions ?? new Int16Array(w.W * w.H).fill(-1)
+    this.edits.regions = reg
+    const meta = (this.edits.regionMeta ??= [])
+    const id = meta.length
+    meta.push({ name: 'Nova Terra', zh: '新大洲' })
+    for (const j of floodLand(land, reg, w.W, w.H, i, -1)) reg[j] = id
+    this.selectRegion(id)
+    this.cb.onCommit('regions')
+  }
+
   private stamp(sx: number, sy: number, dt: number) {
     const w = this.world
     if (!w) return
@@ -301,18 +564,37 @@ export class EditorView {
     const N = W * H
     const c = this.toCell(sx, sy)
     const R = this.brush.radius
-    // 按时间积分：强度 1 时地形每秒约 ±3 km、气温 ±20 °C、降水倍率 e^±2
-    const s = this.brush.strength * Math.min(0.1, dt)
-    const tool = this.tool
-    const key: 'terrain' | 'temp' | 'rain' = tool === 'raise' || tool === 'lower' || tool === 'smooth' ? 'terrain' : tool === 'warm' || tool === 'cool' ? 'temp' : 'rain'
-    let arr = this.edits[key]
-    if (!arr || arr.length !== N) arr = this.edits[key] = new Float32Array(N)
     const x0 = Math.max(0, Math.floor(c.x - R))
     const x1 = Math.min(W - 1, Math.ceil(c.x + R))
     const y0 = Math.max(0, Math.floor(c.y - R))
     const y1 = Math.min(H - 1, Math.ceil(c.y + R))
     if (x1 < x0 || y1 < y0) return
+    const tool = this.tool
+    if (tool === 'regionAdd' || tool === 'regionErase') {
+      const reg = this.edits.regions
+      const sel = this.selectedRegion
+      if (!reg || sel < 0) return
+      const e = w.elevation
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          if ((x - c.x) ** 2 + (y - c.y) ** 2 >= R * R) continue
+          const i = y * W + x
+          if (tool === 'regionAdd' && e[i] > 0) reg[i] = sel
+          else if (tool === 'regionErase' && reg[i] === sel) reg[i] = -1
+        }
+      }
+      this.markDirty(x0, y0, x1, y1)
+      this.refresh()
+      this.draw()
+      return
+    }
+    // 按时间积分：强度 1 时地形每秒约 ±3 km、气温 ±20 °C、降水倍率 e^±2
+    const s = this.brush.strength * Math.min(0.1, dt)
+    const key: 'terrain' | 'temp' | 'rain' = tool === 'raise' || tool === 'lower' || tool === 'smooth' ? 'terrain' : tool === 'warm' || tool === 'cool' ? 'temp' : 'rain'
+    let arr = this.edits[key]
+    if (!arr || arr.length !== N) arr = this.edits[key] = new Float32Array(N)
     const e = w.elevation
+    const g = this.genEdits.terrain
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const d2 = ((x - c.x) ** 2 + (y - c.y) ** 2) / (R * R)
@@ -328,7 +610,7 @@ export class EditorView {
             arr[i] -= 3 * s * f
             break
           case 'smooth': {
-            // 向邻域平均靠拢（作用在"高度 + 增量"上）
+            // 向邻域平均靠拢（作用在当前高度上）
             let sum = 0
             let n = 0
             for (let oy = -2; oy <= 2; oy++) {
@@ -336,11 +618,11 @@ export class EditorView {
                 const xx = Math.min(W - 1, Math.max(0, x + ox * 2))
                 const yy = Math.min(H - 1, Math.max(0, y + oy * 2))
                 const j = yy * W + xx
-                sum += e[j] + arr[j]
+                sum += e[j] + arr[j] - (g ? g[j] : 0)
                 n++
               }
             }
-            const cur = e[i] + arr[i]
+            const cur = e[i] + arr[i] - (g ? g[i] : 0)
             arr[i] += (sum / n - cur) * Math.min(1, 12 * s * f)
             break
           }
@@ -382,12 +664,18 @@ export class EditorView {
       } catch {
         // 合成事件没有活动指针，忽略
       }
-      // 右键或中键、或按住空格：平移
+      // 右键、中键或按住 Shift：平移
       if (e.button !== 0 || e.shiftKey) {
         this.drag = { mode: 'pan', x: p.x, y: p.y, vx: this.view.x, vy: this.view.y }
         return
       }
+      if (this.tool === 'region') {
+        this.pickRegion(p.x, p.y)
+        this.drag = { mode: 'pan', x: p.x, y: p.y, vx: this.view.x, vy: this.view.y }
+        return
+      }
       if (this.isBrush()) {
+        if ((this.tool === 'regionAdd' || this.tool === 'regionErase') && this.selectedRegion < 0) return
         this.cb.onBeforeEdit()
         this.drag = { mode: 'paint', x: p.x, y: p.y, vx: 0, vy: 0 }
         last = performance.now()
@@ -396,7 +684,7 @@ export class EditorView {
         const tick = () => {
           if (this.drag?.mode !== 'paint') return
           const now = performance.now()
-          this.stamp(this.mouse.x, this.mouse.y, (now - last) / 1000)
+          if (this.tool !== 'regionAdd' && this.tool !== 'regionErase') this.stamp(this.mouse.x, this.mouse.y, (now - last) / 1000)
           last = now
           paintTimer = window.setTimeout(tick, 33)
         }
@@ -455,7 +743,8 @@ export class EditorView {
       if (!d) return
       if (d.mode === 'paint') {
         const t = this.tool
-        this.cb.onCommit(t === 'raise' || t === 'lower' || t === 'smooth' ? 'terrain' : 'climate')
+        this.cb.onCommit(t === 'raise' || t === 'lower' || t === 'smooth' ? 'terrain' : t === 'regionAdd' || t === 'regionErase' ? 'regions' : 'climate')
+        this.scheduleIso()
       } else if (d.mode === 'move' && d.label && (d.label.x !== d.vx || d.label.y !== d.vy)) this.cb.onCommit('labels')
     }
     el.addEventListener('pointerup', end)

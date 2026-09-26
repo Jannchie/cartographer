@@ -129,6 +129,10 @@ export interface WorldEdits {
   rain?: Float32Array
   /** 地点：编辑后的完整列表，替换生成的标注 */
   labels?: Label[]
+  /** 大洲区域：每格所属大洲序号，-1 为不属于任何大洲 */
+  regions?: Int16Array
+  /** 大洲名称（下标即区域序号） */
+  regionMeta?: { name: string; zh: string }[]
   /** 世界名（编辑后固定，不随重算变化） */
   worldName?: string
   worldNameZh?: string
