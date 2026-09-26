@@ -9,6 +9,7 @@ import { AtlasViewer } from './render/atlas/svg/viewer'
 import { smoothRivers, type SmoothRiver } from './render/rivers'
 import { Scene3D, type View3DOptions } from './render/scene3d'
 import { buildPhysicalTexture } from './render/texture'
+import { initSettlement } from './settlement/ui'
 import type { WorkerOut } from './worker'
 import GenWorker from './worker?worker'
 import { bindStatic, lang, LANGS, onLang, placeName, setLang, t, tr, worldTitle, type Lang } from './i18n'
@@ -910,6 +911,8 @@ $('#home-open').addEventListener('click', () => {
   setModule('world')
   $<HTMLInputElement>('#open-file').click()
 })
+// 聚落地图：可继承当前世界里某座城镇的环境
+initSettlement(() => world)
 // 分享链接（带参数）直接进世界地图；否则回到上次所在的模块，首次打开显示首页
 setModule(location.hash.length > 1 ? 'world' : ((localStorageGet('module') as 'home' | 'world' | 'settlement' | null) ?? 'home'))
 
