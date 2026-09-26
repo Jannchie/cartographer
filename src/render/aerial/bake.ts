@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { NOISE_GLSL } from './glsl'
 import { HEIGHT_GLSL } from './heightGLSL'
+import { CARVE_GLSL } from './rivers3d'
 
 /**
  * 地形烘焙：把"B 样条高度 + 侵蚀噪声位移 + 解析坡度"一次性算进一张浮点纹理
@@ -42,6 +43,10 @@ export class TerrainBake {
         uVScale: { value: 1 },
         uGSize: { value: new THREE.Vector2(GW, GH) },
         uRegion: { value: new THREE.Vector4(0, 0, mapSize.x, mapSize.y) },
+        uCarve: { value: null as THREE.Texture | null },
+        uCarveMap: { value: mapSize },
+        uCarveTexel: { value: new THREE.Vector2(1, 1) },
+        uCarveOn: { value: 0 },
         uOct: { value: 4 },
       },
       vertexShader: /* glsl */ `
@@ -53,6 +58,9 @@ export class TerrainBake {
         uniform vec2 uGSize;
         uniform vec4 uRegion;
         uniform int uOct;
+        uniform vec2 uCarveTexel;
+        uniform float uCarveOn;
+        ${CARVE_GLSL}
         ${NOISE_GLSL}
         ${HEIGHT_GLSL}
         void main() {
@@ -71,7 +79,20 @@ export class TerrainBake {
             // 细层按常规衰减太弱，放大一倍，近看才有清晰的小冲沟与刃脊
             er += (erosionNoise(xz, gB * uVScale, uOct, 2.3) - er) * w * 2.2;
           }
-          gl_FragColor = vec4(b0 + amp * (er.x - 0.15), gB + amp * er.yz, er.x);
+          float hh = b0 + amp * (er.x - 0.15);
+          vec2 gg = gB + amp * er.yz;
+          if (uCarveOn > 0.5) {
+            // 河谷下切（高度与坡度都要减去）
+            vec2 cuv = xz / uCarveMap + 0.5;
+            vec2 tx = vec2(uCarveTexel.x, 0.0), tz = vec2(0.0, uCarveTexel.y);
+            float c = texture(uCarve, cuv).r;
+            float cx = texture(uCarve, cuv + tx).r - texture(uCarve, cuv - tx).r;
+            float cz = texture(uCarve, cuv + tz).r - texture(uCarve, cuv - tz).r;
+            vec2 wt = uCarveTexel * uCarveMap * 2.0;
+            hh -= c;
+            gg -= vec2(cx / wt.x, cz / wt.y);
+          }
+          gl_FragColor = vec4(hh, gg, er.x);
         }
       `,
     })
@@ -80,6 +101,14 @@ export class TerrainBake {
     const mesh = new THREE.Mesh(tri, this.mat)
     mesh.frustumCulled = false
     this.scene.add(mesh)
+  }
+
+  /** 河谷下切深度图（烘焙时从高度中减去） */
+  setCarve(tex: THREE.Texture, w: number, h: number) {
+    const u = this.mat.uniforms
+    u.uCarve.value = tex
+    u.uCarveTexel.value.set(1 / w, 1 / h)
+    u.uCarveOn.value = 1
   }
 
   /** 烘焙区域（世界坐标中心与尺寸）与侵蚀层数 */

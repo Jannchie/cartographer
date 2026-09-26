@@ -4,9 +4,10 @@ import { riverThreshold } from '../../gen/world'
 import type { SmoothRiver } from '../rivers'
 
 /**
- * 河流几何：沿平滑河道生成带状网格（宽度随流量），顶点高度取烘焙地形，
- * 与细分后的地表严丝合缝；着色与海水、湖水共用同一个水体着色器（见 water.ts 的 RIVER 变体）。
- * 与贴图分辨率无关，拉近看始终是清晰的河道。
+ * 河流几何，两张网格：
+ *  - 下切网格（carve）：比河面宽，渲染进"河谷下切深度图"，烘焙地形时减去——河流有了自己的河床与两岸；
+ *  - 水面网格：落在河谷里（中线原地面以下一点），着色与海水、湖水共用同一个水体着色器（water.ts 的 RIVER 变体），
+ *    两岸由真实地形与水面的交线决定；入海处河谷切到海平面以下，海水自己灌进河口。
  */
 export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number, SZ: number, mat: THREE.Material) {
   const { W, H } = world
@@ -16,7 +17,11 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
   const side: number[] = []
   const mouth: number[] = []
   const floorY: number[] = []
+  const center: number[] = []
   const idx: number[] = []
+  const cPos: number[] = []
+  const cSide: number[] = []
+  const cDepth: number[] = []
   const toX = (gx: number) => ((gx - 0.5) / (W - 1) - 0.5) * SX
   const toZ = (gy: number) => ((gy - 0.5) / (H - 1) - 0.5) * SZ
   for (const r0 of rivers) {
@@ -42,8 +47,17 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
       const w = cell * Math.min(0.55, 0.05 + 0.11 * Math.log2(1 + f))
       const x = toX(r.xs[k])
       const z = toZ(r.ys[k])
-      pos.push(x - tz * w, 0, z + tx * w, x + tz * w, 0, z - tx * w)
+      // 水面网格比河道宽三成，真正的水边由河岸地形与水面的交线截出
+      const wg = w * 1.3
+      pos.push(x - tz * wg, 0, z + tx * wg, x + tz * wg, 0, z - tx * wg)
       side.push(-1, 1)
+      center.push(x, z, x, z)
+      // 河谷：比河面宽约四成（至少 0.3 格，细流也能切出沟），深度随流量（km）
+      const cw = Math.max(w * 1.4, cell * 0.3)
+      cPos.push(x - tz * cw, 0, z + tx * cw, x + tz * cw, 0, z - tx * cw)
+      cSide.push(-1, 1)
+      const cd = Math.min(0.035, 0.008 + 0.007 * Math.log2(1 + f))
+      cDepth.push(cd, cd)
       // 河口：进入水域后按水深渐隐、向水色过渡；河带贴在水面上（湖面或海面）
       const wd = waterDepth(world, r.xs[k], r.ys[k])
       const m = Math.max(smooth01((wd.depth - 0.01) / 0.025), coastal ? 1 - smooth01(toEnd[k] / 1.5) : 0)
@@ -60,14 +74,103 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
   g.setAttribute('side', new THREE.Float32BufferAttribute(side, 1))
   g.setAttribute('aMouth', new THREE.Float32BufferAttribute(mouth, 1))
   g.setAttribute('aFloor', new THREE.Float32BufferAttribute(floorY, 1))
+  g.setAttribute('aCenter', new THREE.Float32BufferAttribute(center, 2))
   g.setIndex(idx)
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Math.hypot(SX, SZ))
   const mesh = new THREE.Mesh(g, mat)
   // 画在水面之后，河口才能盖在水上渐隐
   mesh.renderOrder = 3
   mesh.frustumCulled = false
-  return mesh
+  const cg = new THREE.BufferGeometry()
+  cg.setAttribute('position', new THREE.Float32BufferAttribute(cPos, 3))
+  cg.setAttribute('side', new THREE.Float32BufferAttribute(cSide, 1))
+  cg.setAttribute('aDepth', new THREE.Float32BufferAttribute(cDepth, 1))
+  cg.setIndex(idx)
+  return { mesh, carveGeometry: cg }
 }
+
+/**
+ * 河谷下切深度图：把下切网格正交投影到整张地图，横断面是抛物线（中间最深），
+ * 多条河重叠处取最大值。烘焙地形时减去这张图。
+ */
+export class RiverCarve {
+  readonly rt: THREE.WebGLRenderTarget
+  private scene = new THREE.Scene()
+  private cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+  private mat: THREE.ShaderMaterial
+
+  constructor(W: number, H: number, mapSize: THREE.Vector2) {
+    const cw = Math.min(4096, W * 4)
+    const ch = Math.round((cw * H) / W)
+    this.rt = new THREE.WebGLRenderTarget(cw, ch, {
+      type: THREE.HalfFloatType,
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: false,
+    })
+    this.mat = new THREE.ShaderMaterial({
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.MaxEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneFactor,
+      uniforms: { uMap: { value: mapSize } },
+      vertexShader: /* glsl */ `
+        uniform vec2 uMap;
+        attribute float side;
+        attribute float aDepth;
+        varying float vSide;
+        varying float vDepth;
+        void main() {
+          vSide = side;
+          vDepth = aDepth;
+          gl_Position = vec4(position.x / uMap.x * 2.0, position.z / uMap.y * 2.0, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying float vSide;
+        varying float vDepth;
+        void main() {
+          float s = clamp(abs(vSide), 0.0, 1.0);
+          gl_FragColor = vec4(vDepth * (1.0 - s * s), 0.0, 0.0, 1.0);
+        }
+      `,
+    })
+  }
+
+  render(renderer: THREE.WebGLRenderer, geo: THREE.BufferGeometry) {
+    const mesh = new THREE.Mesh(geo, this.mat)
+    mesh.frustumCulled = false
+    this.scene.clear()
+    this.scene.add(mesh)
+    const prev = renderer.getRenderTarget()
+    const cc = renderer.getClearColor(new THREE.Color())
+    const ca = renderer.getClearAlpha()
+    renderer.setRenderTarget(this.rt)
+    renderer.setClearColor(0x000000, 0)
+    renderer.clear(true, false, false)
+    renderer.render(this.scene, this.cam)
+    renderer.setRenderTarget(prev)
+    renderer.setClearColor(cc, ca)
+  }
+
+  dispose() {
+    this.rt.dispose()
+    this.mat.dispose()
+  }
+}
+
+/** 着色器里读取下切深度（km），世界坐标 → 下切图 */
+export const CARVE_GLSL = /* glsl */ `
+uniform sampler2D uCarve;
+uniform vec2 uCarveMap;
+float carveAt(vec2 xz) {
+  return texture(uCarve, xz / uCarveMap + 0.5).r;
+}
+`
 
 /**
  * 入海口 / 入湖口：河道点列止于最后一个陆地格，离水边还差一段。

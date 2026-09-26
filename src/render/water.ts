@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { NOISE_GLSL } from './aerial/glsl'
 import { BAKED_GLSL } from './aerial/bake'
+import { CARVE_GLSL } from './aerial/rivers3d'
 
 /**
  * 水体着色器（按光学吸收建模）：
@@ -46,6 +47,8 @@ export function createWaterMaterial(
       uCloudRect: { value: new THREE.Vector4(-100, -100, 200, 200) },
       uCloudY: { value: 3 },
       uCloudOn: { value: 0 },
+      uCarve: { value: null as THREE.Texture | null },
+      uCarveMap: { value: size },
     },
     vertexShader: WATER_VERT,
     fragmentShader: WATER_FRAG,
@@ -68,13 +71,17 @@ const RIVER_VERT = /* glsl */ `
   attribute float side;
   attribute float aMouth;
   attribute float aFloor;
+  attribute vec2 aCenter;
   ${BAKED_GLSL}
+  ${CARVE_GLSL}
   varying vec3 vWorld;
   varying float vSide;
   varying float vMouth;
   void main() {
-    float h = bakedAt(position.xz).x;
-    vec3 p = vec3(position.x, max(h, aFloor) * uVScale + 0.004, position.z);
+    // 水面：中线处原地面（烘焙高度 + 下切）往下 55% 的下切深度；横向水平，两岸由地形决定
+    float c = carveAt(aCenter);
+    float h = bakedAt(aCenter).x + c * 0.45;
+    vec3 p = vec3(position.x, max(h, aFloor) * uVScale + 0.0008, position.z);
     vSide = side;
     vMouth = aMouth;
     vWorld = p;
@@ -238,7 +245,7 @@ const WATER_FRAG = /* glsl */ `
         alpha = max(alpha, foam);
         #ifdef RIVER
         // 河岸柔边；入海后与下面的海水叠在一起，逐渐隐去
-        alpha *= 1.0 - smoothstep(0.55, 1.0, abs(vSide));
+        alpha *= 1.0 - smoothstep(0.85, 1.0, abs(vSide));
         alpha *= 1.0 - smoothstep(0.35, 1.0, vMouth);
         #endif
 

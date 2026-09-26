@@ -6,7 +6,7 @@ import { createSky } from './aerial/sky'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
 import { TerrainBake } from './aerial/bake'
-import { createRiverMesh } from './aerial/rivers3d'
+import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
 import { createRiverWaterMaterial, createWaterMaterial } from './water'
 
@@ -61,6 +61,7 @@ export class Scene3D {
   private clouds: VolumetricClouds | null = null
   private bake: TerrainBake | null = null
   private riverMat: THREE.ShaderMaterial | null = null
+  private carve: RiverCarve | null = null
   private riverList: SmoothRiver[] = []
   private lastInteract = 0
   private frame = 0
@@ -432,21 +433,28 @@ export class Scene3D {
       this.bake?.dispose()
       this.bake = new TerrainBake(GW, GH, this.heightTex!, new THREE.Vector2(w.W, w.H), new THREE.Vector2(SX, this.SZ))
     }
+    // 河流：先建网格并渲染河谷下切图，烘焙时从地形里减去
+    for (const c of [...this.group.children]) if (c.userData.river) {
+      this.group.remove(c)
+      ;(c as THREE.Mesh).geometry.dispose()
+    }
+    if (!this.riverMat) this.riverMat = createRiverWaterMaterial(this.waterMat!)
+    const rv = createRiverMesh(w, this.riverList, SX, this.SZ, this.riverMat)
+    rv.mesh.userData.river = true
+    this.group.add(rv.mesh)
+    this.carve?.dispose()
+    this.carve = new RiverCarve(w.W, w.H, new THREE.Vector2(SX, this.SZ))
+    this.carve.render(this.renderer, rv.carveGeometry)
+    rv.carveGeometry.dispose()
+    const ct = this.carve.rt
+    this.bake.setCarve(ct.texture, ct.width, ct.height)
+    this.patch?.bake.setCarve(ct.texture, ct.width, ct.height)
+    this.waterMat!.uniforms.uCarve.value = ct.texture
     this.bake.bake(this.renderer, vs)
     for (const u of [this.terrainU!, this.waterMat!.uniforms as unknown as TerrainUniforms]) {
       u.uBaked.value = this.bake.rt.texture
       u.uGSize.value.set(GW, GH)
     }
-    // 河流几何（跟随烘焙地形）
-    for (const c of [...this.group.children]) if (c.userData.river) {
-      this.group.remove(c)
-      ;(c as THREE.Mesh).geometry.dispose()
-    }
-    // 河流与水面共用 uniform（烘焙纹理、日照、天色、时间都随水面一起更新）
-    if (!this.riverMat) this.riverMat = createRiverWaterMaterial(this.waterMat!)
-    const rv = createRiverMesh(w, this.riverList, SX, this.SZ, this.riverMat)
-    rv.userData.river = true
-    this.group.add(rv)
     this.renderer.shadowMap.needsUpdate = true
     this.water!.geometry.dispose()
     this.water!.geometry = this.waterGeometry(w, vs)
