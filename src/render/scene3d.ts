@@ -2,9 +2,10 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { World } from '../gen/types'
 import { buildDetailMask, buildMaterialMask } from './aerial/mask'
-import { createSky } from './aerial/sky'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
+import { PostPipeline } from './aerial/post'
+import { Diorama } from './aerial/diorama'
 import { TerrainBake } from './aerial/bake'
 import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
@@ -15,15 +16,19 @@ export interface View3DOptions {
   labels: boolean
   sunAzimuth: number
   sunElevation: number
-  /** 航拍写实 / 沙盘模型 */
-  look: 'aerial' | 'model'
   /** 空气感：远景霾与低空薄雾 */
   haze: boolean
   clouds: boolean
+  /** 移轴景深强度 0~1（0 关闭）：对焦在旋转中心，前后虚化出微缩模型感 */
+  dof: number
+  /** 展台：桌面与展厅背景（关掉时沙盘浮在页面上） */
+  stage: boolean
 }
 
 const SKY_TOP = new THREE.Color('#3b6ea8')
 const HAZE = new THREE.Color('#a9c6e4')
+/** 云里远处的淡出（空气透视） */
+const CLOUD_FOG = 0.0036
 
 const SX = 100
 
@@ -59,6 +64,15 @@ export class Scene3D {
     vs: number
   } | null = null
   private clouds: VolumetricClouds | null = null
+  private post = new PostPipeline()
+  private diorama: Diorama
+  /** 对焦点（世界坐标）：鼠标指向的地面；为空时对焦旋转中心 */
+  private focusPoint: THREE.Vector3 | null = null
+  private focusDist = 0
+  /** 鼠标在画布上的位置（离开画布为空）；dirty 表示需要重新取焦点 */
+  private pointer: { x: number; y: number; dirty: boolean } | null = null
+  private pickRay = new THREE.Raycaster()
+  private pickNdc = new THREE.Vector2()
   private bake: TerrainBake | null = null
   private riverMat: THREE.ShaderMaterial | null = null
   private carve: RiverCarve | null = null
@@ -67,9 +81,9 @@ export class Scene3D {
   private frame = 0
   /** 性能读数（按 P 开关）：帧率、GPU 耗时（EXT_disjoint_timer_query_webgl2） */
   private perf: { el: HTMLDivElement; ext: any; pending: WebGLQuery[]; gpu: number; frames: number; t0: number } | null = null
-  private sky = createSky()
-  private outer: THREE.Mesh | null = null
-  private fog = new THREE.FogExp2(HAZE.getHex(), 0.0036)
+  /** 天色（随太阳高度变化），水面反射、云、空气透视共用 */
+  private skyTop = new THREE.Color()
+  private skyHorizon = new THREE.Color()
   private clock = new THREE.Clock()
   private opts: View3DOptions
   private labelLayer: HTMLDivElement
@@ -81,9 +95,10 @@ export class Scene3D {
   constructor(private container: HTMLElement, opts: View3DOptions) {
     this.opts = { ...opts }
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
-    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio))
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.05
+    // 后期管线有 HDR 目标 + 多重采样，高 DPI 屏上限制像素比
+    this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio))
+    // 色调映射与调色在后期管线的终合成里做
+    this.renderer.toneMapping = THREE.NoToneMapping
     this.renderer.shadowMap.enabled = true
     // 地形是静态的：阴影只在太阳或地形变化时重绘
     this.renderer.shadowMap.autoUpdate = false
@@ -106,10 +121,10 @@ export class Scene3D {
     this.sun.castShadow = true
     this.sun.shadow.mapSize.set(4096, 4096)
     const sc = this.sun.shadow.camera
-    sc.left = -62
-    sc.right = 62
-    sc.top = 62
-    sc.bottom = -62
+    sc.left = -70
+    sc.right = 70
+    sc.top = 70
+    sc.bottom = -70
     sc.near = 1
     sc.far = 400
     this.sun.shadow.bias = -0.0004
@@ -120,7 +135,8 @@ export class Scene3D {
     this.hemi = new THREE.HemisphereLight(0xc4d7ea, 0x5b4a3a, 0.9)
     this.scene.add(this.hemi)
     this.scene.add(this.group)
-    this.scene.add(this.sky.mesh)
+    this.diorama = new Diorama(this.renderer)
+    this.scene.add(this.diorama.group)
 
     this.labelLayer = document.createElement('div')
     this.labelLayer.className = 'labels3d'
@@ -131,9 +147,19 @@ export class Scene3D {
     this.updateSun()
     // 交互检测：镜头静止 1.5 秒后降到 30 fps（水波、云的缓慢变化看不出差别）
     const touch = () => (this.lastInteract = performance.now())
+    // 镜头的变化由后期管线自己比对矩阵发现，这里只管降帧
     this.controls.addEventListener('change', touch)
     this.renderer.domElement.addEventListener('pointerdown', touch)
     this.renderer.domElement.addEventListener('wheel', touch, { passive: true })
+    // 对焦跟随鼠标：悬停处的地面就是焦点；拖动时焦点不跟着跑，离开画布回到旋转中心
+    this.renderer.domElement.addEventListener('pointermove', (e) => {
+      if (e.buttons) return
+      this.pointer = { x: e.clientX, y: e.clientY, dirty: true }
+    })
+    this.renderer.domElement.addEventListener('pointerleave', () => {
+      this.pointer = null
+      this.focusPoint = null
+    })
     const loop = () => {
       this.raf = requestAnimationFrame(loop)
       if (!this.active) return
@@ -149,6 +175,8 @@ export class Scene3D {
       }
       const t = this.clock.getElapsedTime()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = t
+      if (this.clouds) this.clouds.time = t
+      this.diorama.time = t
       this.updatePatch()
       this.renderFrame()
       if (pf) {
@@ -202,14 +230,27 @@ export class Scene3D {
     return (SX / (w.W * w.kmPerCell)) * this.opts.exaggeration
   }
 
-  /** 航拍且开云时走体积云管线（场景 → 云 → 合成），否则直接渲染 */
+  private viewDir = new THREE.Vector3()
+  /** 场景 → 云 → 空气透视合成 → 景深 → 累积 → 泛光与调色（见 aerial/post.ts） */
   private renderFrame() {
-    // 航拍：后处理管线（空气透视 + 体积云）；沙盘模型：直接渲染
-    // 云和空气感都关掉时直接渲染，省掉后处理
-    if (this.opts.look === 'aerial' && this.clouds && (this.opts.clouds || this.opts.haze)) {
-      this.clouds.march.uniforms.uEnabled.value = this.opts.clouds ? 1 : 0
-      this.clouds.render(this.renderer, this.scene, this.camera, this.clock.getElapsedTime())
-    } else this.renderer.render(this.scene, this.camera)
+    const cam = this.camera
+    const moved = this.post.cameraChanged(cam)
+    cam.getWorldDirection(this.viewDir)
+    // 重新取焦点：鼠标移动后，或镜头停下后（运动中焦点跟着镜头平移，不逐帧步进高度场）
+    if (this.pointer && moved) this.pointer.dirty = true
+    if (this.pointer?.dirty && !moved && this.world) {
+      this.focusPoint = this.pickWorld(this.pointer.x, this.pointer.y)
+      this.pointer.dirty = false
+    }
+    const fp = this.focusPoint ?? this.controls.target
+    const want = Math.max(cam.near * 4, this.tmp.copy(fp).sub(cam.position).dot(this.viewDir))
+    // 换焦点时平滑追过去（像手动拉焦）；镜头在动时直接跟上，不拖泥带水
+    const prevFocus = this.focusDist
+    this.focusDist = prevFocus > 0 && !moved ? prevFocus + (want - prevFocus) * 0.18 : want
+    const focus = this.focusDist
+    // 焦点越近弥散圆越大（固定镜头拍更小的物体），拉近时微缩感更强
+    const aperture = this.opts.dof * 22 * Math.min(1.8, Math.sqrt(60 / focus))
+    this.post.render(this.renderer, this.scene, cam, focus, aperture, this.opts.clouds ? this.clouds : null)
   }
 
   private resize() {
@@ -218,6 +259,7 @@ export class Scene3D {
     this.renderer.setSize(w, h, false)
     const pr = this.renderer.getPixelRatio()
     this.clouds?.setSize(Math.round(w * pr), Math.round(h * pr))
+    this.post.setSize(Math.round(w * pr), Math.round(h * pr))
     this.renderer.domElement.style.width = w + 'px'
     this.renderer.domElement.style.height = h + 'px'
     this.camera.aspect = w / Math.max(1, h)
@@ -228,38 +270,27 @@ export class Scene3D {
     const prev = this.opts
     this.opts = { ...this.opts, ...o }
     if (o.exaggeration !== undefined && o.exaggeration !== prev.exaggeration && this.world) this.rebuildGeometry()
-    this.lastInteract = performance.now()
-    if (o.sunAzimuth !== undefined || o.sunElevation !== undefined) this.updateSun()
     if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
-    if (o.look !== undefined || o.clouds !== undefined || o.haze !== undefined) this.applyLook()
+    // 地名是 DOM，其余选项都改变画面
+    if (Object.keys(o).some((k) => k !== 'labels')) {
+      this.lastInteract = performance.now()
+      this.applyLook()
+    }
   }
 
-  /** 航拍：天空、空气透视、延伸到地平线的外海、云；沙盘：悬浮的立体模型 */
+  /** 云层、空气感、展台开关与光照 */
   private applyLook() {
-    const aerial = this.opts.look === 'aerial'
-    // 两种观感都是切出来的方块沙盘：四周是地层与海水剖面，不再延伸无尽外海
-    this.sky.mesh.visible = false
-    this.scene.fog = null
-    if (this.outer) this.outer.visible = false
-    for (const c of this.group.children) if (c.userData.skirt) c.visible = true
-    const cloudsOn = this.opts.clouds && aerial && !!this.clouds
+    this.diorama.stage.visible = this.opts.stage
+    const cloudsOn = this.opts.clouds && !!this.clouds
     if (this.terrainU) this.terrainU.uCloudOn.value = cloudsOn ? 1 : 0
-    if (this.waterMat) {
-      this.waterMat.uniforms.uCloudOn.value = cloudsOn ? 1 : 0
-      this.waterMat.uniforms.uFogDensity.value = 0
-    }
-    this.renderer.toneMappingExposure = aerial ? 1.0 : 1.05
-    // 航拍管线有 HDR 目标 + 多重采样，高 DPI 屏上限制像素比
-    const pr = Math.min(aerial ? 1.5 : 2, window.devicePixelRatio)
-    if (this.renderer.getPixelRatio() !== pr) {
-      this.renderer.setPixelRatio(pr)
-      this.resize()
-    }
+    if (this.waterMat) this.waterMat.uniforms.uCloudOn.value = cloudsOn ? 1 : 0
     this.updateSun()
   }
 
+  /** 光照变了（太阳、天色、空气感）：阴影与累积的历史都要重来 */
   private updateSun() {
     this.renderer.shadowMap.needsUpdate = true
+    this.post.reset()
     const az = (this.opts.sunAzimuth * Math.PI) / 180
     const el = (this.opts.sunElevation * Math.PI) / 180
     const d = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az))
@@ -269,44 +300,40 @@ export class Scene3D {
     const warm = 1 - Math.min(1, Math.max(0, (this.opts.sunElevation - 4) / 40))
     this.sun.color.setRGB(1, 0.95 - 0.2 * warm, 0.86 - 0.36 * warm)
     const k = Math.min(1, Math.max(0.15, Math.sin(el) * 2.2))
-    const aerial = this.opts.look === 'aerial'
-    // 航拍：天光弱、日光强，地形明暗对比更像真实照片
-    this.sun.intensity = (aerial ? 3.8 : 3.2) * k
-    this.hemi.intensity = (aerial ? 0.42 : 0.55) + (aerial ? 0.3 : 0.45) * k
+    // 天光弱、日光强，地形明暗对比更像真实照片
+    this.sun.intensity = 3.8 * k
+    this.hemi.intensity = 0.42 + 0.3 * k
     if (this.waterMat) {
       this.waterMat.uniforms.uSunDir.value.copy(d)
       this.waterMat.uniforms.uSunColor.value.copy(this.sun.color)
       this.waterMat.uniforms.uLight.value = 0.45 + 0.55 * k
     }
-    this.sky.mat.uniforms.uSun.value.copy(d)
-    this.sky.mat.uniforms.uSunColor.value.copy(this.sun.color)
+    this.diorama.setLight(0.45 + 0.55 * k, this.sun.color)
     // 天空随太阳高度变暗、偏暖
-    this.sky.mat.uniforms.uTop.value.copy(SKY_TOP).multiplyScalar(0.35 + 0.65 * k)
-    this.sky.mat.uniforms.uHorizon.value.copy(HAZE).lerp(new THREE.Color('#f0c59a'), warm * 0.45).multiplyScalar(0.45 + 0.55 * k)
-    this.fog.color.copy(this.sky.mat.uniforms.uHorizon.value)
+    this.skyTop.copy(SKY_TOP).multiplyScalar(0.35 + 0.65 * k)
+    this.skyHorizon.copy(HAZE).lerp(new THREE.Color('#f0c59a'), warm * 0.45).multiplyScalar(0.45 + 0.55 * k)
     if (this.waterMat) {
-      this.waterMat.uniforms.uFogColor.value.copy(this.fog.color)
-      this.waterMat.uniforms.uSkyTop.value.copy(this.sky.mat.uniforms.uTop.value)
-      this.waterMat.uniforms.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
+      this.waterMat.uniforms.uSkyTop.value.copy(this.skyTop)
+      this.waterMat.uniforms.uSkyHorizon.value.copy(this.skyHorizon)
     }
     if (this.terrainU) this.terrainU.uSun.value.copy(d)
     if (this.clouds) {
       const u = this.clouds.march.uniforms
       u.uSun.value.copy(d)
       u.uSunColor.value.copy(this.sun.color).multiplyScalar(0.35 + 0.65 * k)
-      u.uSkyTop.value.copy(this.sky.mat.uniforms.uTop.value)
-      u.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
-      u.uFogColor.value.copy(this.fog.color)
-      u.uFogDensity.value = this.opts.haze ? this.fog.density : 0
-      // 空气感：霾色随天空，顺光方向有太阳散射光晕；低空薄雾高度约 0.9 km
-      const c = this.clouds.comp.uniforms
-      c.uSun.value.copy(d)
-      c.uSunColor.value.copy(this.sun.color).multiplyScalar(0.25 + 0.35 * k)
-      c.uHaze.value.copy(this.fog.color).multiplyScalar(0.9)
-      c.uFogHeight.value = this.vScale * 0.9
-      c.uHazeDensity.value = this.opts.haze ? 0.0026 : 0
-      c.uFogDensity.value = this.opts.haze ? 0.035 : 0
+      u.uSkyTop.value.copy(this.skyTop)
+      u.uSkyHorizon.value.copy(this.skyHorizon)
+      u.uFogColor.value.copy(this.skyHorizon)
+      u.uFogDensity.value = this.opts.haze ? CLOUD_FOG : 0
     }
+    // 空气感：霾色随天空，顺光方向有太阳散射光晕；低空薄雾高度约 0.9 km
+    const c = this.post.comp.uniforms
+    c.uSun.value.copy(d)
+    c.uSunColor.value.copy(this.sun.color).multiplyScalar(0.25 + 0.35 * k)
+    c.uHaze.value.copy(this.skyHorizon).multiplyScalar(0.9)
+    c.uFogHeight.value = this.vScale * 0.9
+    c.uHazeDensity.value = this.opts.haze ? 0.0026 : 0
+    c.uFogDensity.value = this.opts.haze ? 0.035 : 0
   }
 
   setWorld(world: World, color: HTMLCanvasElement, rough: HTMLCanvasElement, rivers: SmoothRiver[] = []) {
@@ -385,18 +412,13 @@ export class Scene3D {
     this.water = new THREE.Mesh(new THREE.BufferGeometry(), this.waterMat)
     this.water.renderOrder = 2
     this.group.add(this.water)
-    // 地图外一直延伸到地平线的外海（四块围住地图）
-    const R = 3000
-    const ring = [
-      [0, -(R + this.SZ / 2) / 2, R * 2, R - this.SZ / 2],
-      [0, (R + this.SZ / 2) / 2, R * 2, R - this.SZ / 2],
-      [-(R + SX / 2) / 2, 0, R - SX / 2, this.SZ],
-      [(R + SX / 2) / 2, 0, R - SX / 2, this.SZ],
-    ].map(([x, z, w, h]) => new THREE.PlaneGeometry(w, h, 1, 1).rotateX(-Math.PI / 2).translate(x, 0, z))
-    const merged = mergeGeoms(ring)
-    this.outer = new THREE.Mesh(merged, this.waterMat)
-    this.outer.renderOrder = 2
-    this.group.add(this.outer)
+    this.post.comp.uniforms.uBox.value.set(-SX / 2, -this.SZ / 2, SX / 2, this.SZ / 2)
+    this.diorama.build({
+      SX,
+      SZ: this.SZ,
+      title: world.worldName,
+      subtitle: `${world.worldNameZh ?? ''}  ·  ${Math.round(world.W * world.kmPerCell).toLocaleString('en-US')} km  ·  seed ${world.params.seed}`,
+    })
 
     this.rebuildGeometry()
     this.updateSun()
@@ -412,7 +434,7 @@ export class Scene3D {
     // 积云：云底约 1.6 km、云顶约 4.5 km（随垂直夸张一起缩放）
     const base = this.vScale * 1.6 + 0.4
     const top = this.vScale * 4.5 + 0.9
-    this.clouds = new VolumetricClouds(seed, SX, this.SZ, base, top, 0.28)
+    this.clouds = new VolumetricClouds(seed, SX, this.SZ, base, top, 0.28, this.post.sceneRT.depthTexture!)
     const pr = this.renderer.getPixelRatio()
     this.clouds.setSize(Math.round(this.container.clientWidth * pr), Math.round(this.container.clientHeight * pr))
     for (const u of [this.terrainU!, this.waterMat!.uniforms as unknown as TerrainUniforms]) {
@@ -461,12 +483,17 @@ export class Scene3D {
     this.waterMat!.uniforms.uVScale.value = vs
     this.terrainU!.uVScale.value = vs
     // 侧面剖面
-    for (const c of [...this.group.children]) if (c.userData.skirt) this.group.remove(c)
-    this.group.add(...this.skirts(w, vs))
+    for (const c of [...this.group.children]) if (c.userData.skirt) {
+      this.group.remove(c)
+      ;(c as THREE.Mesh).geometry.dispose()
+    }
+    // 岩层剖面底面随垂直夸张变化，底座与桌面跟着平移
+    const base = -4.8 * vs - 1.2
+    this.group.add(...this.skirts(w, vs, base))
+    this.diorama.setBase(base)
     for (const l of this.labelEls) l.pos.y = this.labelY(l.kind, l.pos.x, l.pos.z)
     this.buildClouds()
     this.applyLook()
-    this.updateSun()
   }
 
   /** 世界坐标 → 格坐标 */
@@ -507,6 +534,7 @@ export class Scene3D {
     p.u.uBOrigin.value.set(cx, cz)
     p.u.uBMapSize.value.set(S, S)
     u.uPatch.value.set(cx, cz, S, 1)
+    this.post.reset()
     Object.assign(p, { cx, cz, S, vs })
     p.mesh.visible = true
   }
@@ -601,14 +629,13 @@ export class Scene3D {
     return g
   }
 
-  /** 沙盘四周的剖面：岩层 + 海水截面 */
-  private skirts(w: World, vs: number): THREE.Object3D[] {
+  /** 沙盘四周的剖面：岩层 + 海水截面（aTop 为该列地表 / 海床高度），岩层底面在 base */
+  private skirts(w: World, vs: number, base: number): THREE.Object3D[] {
     const { W, H, elevation: e } = w
-    const base = -4.8 * vs - 1.2
     const rockPos: number[] = []
-    const rockCol: number[] = []
+    const rockTop: number[] = []
     const seaPos: number[] = []
-    const seaCol: number[] = []
+    const seaTop: number[] = []
     const edges: [number, number][][] = [
       Array.from({ length: W }, (_, x) => [x, 0]),
       Array.from({ length: W }, (_, x) => [W - 1 - x, H - 1]),
@@ -617,10 +644,6 @@ export class Scene3D {
     ]
     const dx = SX / (W - 1)
     const dz = this.SZ / (H - 1)
-    const top = new THREE.Color('#5a4a3c')
-    const bot = new THREE.Color('#1f1b19')
-    const seaTop = new THREE.Color('#2f7f93')
-    const seaBot = new THREE.Color('#0b2a44')
     for (const edge of edges) {
       for (let k = 0; k < edge.length - 1; k++) {
         const [x0, y0] = edge[k]
@@ -629,36 +652,27 @@ export class Scene3D {
         const X1 = x1 * dx - SX / 2, Z1 = y1 * dz - this.SZ / 2
         const h0 = e[y0 * W + x0] * vs
         const h1 = e[y1 * W + x1] * vs
-        quad(rockPos, rockCol, [X0, h0, Z0], [X1, h1, Z1], [X1, base, Z1], [X0, base, Z0], top, top, bot, bot)
+        quad(rockPos, rockTop, [X0, h0, Z0], [X1, h1, Z1], [X1, base, Z1], [X0, base, Z0], h0, h1)
         if (h0 < 0 || h1 < 0) {
-          quad(seaPos, seaCol, [X0, 0, Z0], [X1, 0, Z1], [X1, Math.min(h1, 0), Z1], [X0, Math.min(h0, 0), Z0], seaTop, seaTop, seaBot, seaBot)
+          quad(seaPos, seaTop, [X0, 0, Z0], [X1, 0, Z1], [X1, Math.min(h1, 0), Z1], [X0, Math.min(h0, 0), Z0], h0, h1)
         }
       }
     }
-    const mk = (p: number[], c: number[], mat: THREE.Material) => {
+    const mk = (p: number[], top: number[], mat: THREE.Material) => {
       const g = new THREE.BufferGeometry()
       g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3))
-      g.setAttribute('color', new THREE.Float32BufferAttribute(c, 3))
+      g.setAttribute('aTop', new THREE.Float32BufferAttribute(top, 1))
       g.computeVertexNormals()
       const m = new THREE.Mesh(g, mat)
       m.userData.skirt = true
       return m
     }
-    const rock = mk(rockPos, rockCol, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide }))
-    const sea = mk(
-      seaPos,
-      seaCol,
-      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.82, side: THREE.DoubleSide, depthWrite: false }),
-    )
+    const rock = mk(rockPos, rockTop, this.diorama.strata.mat)
+    rock.castShadow = true
+    rock.receiveShadow = true
+    const sea = mk(seaPos, seaTop, this.diorama.seaSection.mat)
     sea.renderOrder = 3
-    // 底板
-    const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(SX, this.SZ).rotateX(Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: '#1a1716', roughness: 1, side: THREE.DoubleSide }),
-    )
-    plate.position.y = base
-    plate.userData.skirt = true
-    return [rock, sea, plate]
+    return [rock, sea]
   }
 
   /** 地点被编辑后重建 3D 地名 */
@@ -726,13 +740,21 @@ export class Scene3D {
     }
   }
 
-  /** 屏幕坐标 → 格坐标（沿视线在高度场上步进求交） */
+  /** 屏幕坐标 → 格坐标 */
   pick(clientX: number, clientY: number): { x: number; y: number } | null {
+    const p = this.pickWorld(clientX, clientY)
+    if (!p) return null
+    const { gx, gy } = this.toCell(p.x, p.z)
+    return { x: Math.round(gx), y: Math.round(gy) }
+  }
+
+  /** 屏幕坐标 → 地表（海面）上的世界坐标（沿视线在高度场上步进求交） */
+  pickWorld(clientX: number, clientY: number): THREE.Vector3 | null {
     if (!this.world) return null
     const r = this.renderer.domElement.getBoundingClientRect()
-    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1)
-    const ray = new THREE.Raycaster()
-    ray.setFromCamera(ndc, this.camera)
+    this.pickNdc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1)
+    const ray = this.pickRay
+    ray.setFromCamera(this.pickNdc, this.camera)
     const o = ray.ray.origin
     const d = ray.ray.direction
     if (d.y >= 0) return null
@@ -749,10 +771,7 @@ export class Scene3D {
         continue
       }
       const h = Math.max(0, this.heightAt(x, z))
-      if (y <= h) {
-        const { gx, gy } = this.toCell(x, z)
-        return { x: Math.round(gx), y: Math.round(gy) }
-      }
+      if (y <= h) return new THREE.Vector3(x, h, z)
       t += step
     }
     return null
@@ -842,35 +861,7 @@ function gridIndex(W: number, H: number) {
   return new THREE.BufferAttribute(idx, 1)
 }
 
-function quad(
-  pos: number[],
-  col: number[],
-  a: number[],
-  b: number[],
-  c: number[],
-  d: number[],
-  ca: THREE.Color,
-  cb: THREE.Color,
-  cc: THREE.Color,
-  cd: THREE.Color,
-) {
+function quad(pos: number[], top: number[], a: number[], b: number[], c: number[], d: number[], ta: number, tb: number) {
   pos.push(...a, ...b, ...c, ...a, ...c, ...d)
-  for (const x of [ca, cb, cc, ca, cc, cd]) col.push(x.r, x.g, x.b)
-}
-
-function mergeGeoms(list: THREE.BufferGeometry[]) {
-  const pos: number[] = []
-  const idx: number[] = []
-  for (const g of list) {
-    const base = pos.length / 3
-    const p = g.getAttribute('position').array
-    for (let i = 0; i < p.length; i++) pos.push(p[i])
-    const ix = g.getIndex()!.array
-    for (let i = 0; i < ix.length; i++) idx.push(ix[i] + base)
-    g.dispose()
-  }
-  const out = new THREE.BufferGeometry()
-  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-  out.setIndex(idx)
-  return out
+  top.push(ta, tb, tb, ta, tb, ta)
 }

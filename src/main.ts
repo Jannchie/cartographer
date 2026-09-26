@@ -16,7 +16,7 @@ const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySele
 
 // —— 状态 ——
 const params: WorldParams = { ...DEFAULT_PARAMS, ...readHash() }
-const view3d: View3DOptions = { exaggeration: 28, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true, haze: true }
+const view3d: View3DOptions = { exaggeration: 28, labels: true, sunAzimuth: 225, sunElevation: 32, clouds: true, haze: true, dof: 0.25, stage: true }
 const atlasOpts = { labels: true, contours: true, graticule: true }
 let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
 /** 每种风格缓存一份矢量显示列表（预览、SVG 导出、PNG 导出共用） */
@@ -210,6 +210,7 @@ const v3 = $('#view-3d')
 toggles(v3, [
   { label: '云层', get: () => view3d.clouds, set: (v) => scene.setOptions({ clouds: (view3d.clouds = v) }) },
   { label: '空气感', get: () => view3d.haze, set: (v) => scene.setOptions({ haze: (view3d.haze = v) }) },
+  { label: '展台', get: () => view3d.stage, set: (v) => scene.setOptions({ stage: (view3d.stage = v) }) },
   { label: '地名', get: () => view3d.labels, set: (v) => scene.setOptions({ labels: (view3d.labels = v) }) },
 ])
 slider(v3, {
@@ -223,6 +224,15 @@ slider(v3, {
     view3d.exaggeration = v
     scheduleExaggeration()
   },
+})
+slider(v3, {
+  label: '移轴景深',
+  min: 0,
+  max: 100,
+  step: 1,
+  fmt: (v) => (v ? `${v}%` : '关'),
+  get: () => Math.round(view3d.dof * 100),
+  set: (v) => scene.setOptions({ dof: (view3d.dof = v / 100) }),
 })
 slider(v3, {
   label: '太阳方位',
