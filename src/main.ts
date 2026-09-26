@@ -1,5 +1,7 @@
 import { latitudeOf } from './gen/climate'
-import { BIOME_NAMES, DEFAULT_PARAMS, type World, type WorldParams } from './gen/types'
+import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from './app/project'
+import { EditorView, type EditTool } from './editor/editor'
+import { BIOME_NAMES, DEFAULT_PARAMS, type Label, type World, type WorldEdits, type WorldParams } from './gen/types'
 import { THEMES, ensureFonts, type StyleId } from './render/atlas'
 import type { DisplayList } from './render/atlas/svg/displayList'
 import { AtlasViewer } from './render/atlas/svg/viewer'
@@ -22,7 +24,14 @@ let world: World | null = null
 let rivers: SmoothRiver[] = []
 /** 当前预览的纸图尺寸（像素，与导出一致） */
 let atlasCanvas: { width: number; height: number } | null = null
-let mode: '3d' | '2d' = '3d'
+let mode: '3d' | '2d' | 'edit' = '3d'
+/** 用户对当前世界的编辑（与 params.width/height 对应） */
+let edits: WorldEdits = {}
+let editsSize = { W: params.width, H: params.height, seed: params.seed }
+/** 最近一次生成的地表贴图：编辑视图里改完后 3D 延迟到切回时再重建 */
+let lastTex: { color: HTMLCanvasElement; roughness: HTMLCanvasElement } | null = null
+let sceneStale = false
+let editor: EditorView | null = null
 
 const scene = new Scene3D($('#view3d'), view3d)
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__scene = scene
@@ -271,38 +280,73 @@ function scheduleExaggeration() {
 for (const b of document.querySelectorAll<HTMLButtonElement>('#switch button')) {
   b.addEventListener('click', () => setMode(b.dataset.view as '3d' | '2d'))
 }
-function setMode(m: '3d' | '2d') {
+function setMode(m: '3d' | '2d' | 'edit') {
   mode = m
   for (const b of document.querySelectorAll<HTMLButtonElement>('#switch button')) b.classList.toggle('on', b.dataset.view === m)
   $('#view3d').classList.toggle('hidden', m !== '3d')
   $('#view2d').classList.toggle('hidden', m !== '2d')
+  $('#viewEdit').classList.toggle('hidden', m !== 'edit')
   scene.active = m === '3d'
   $('#ctl-3d').classList.toggle('hidden', m !== '3d')
   $('#ctl-2d').classList.toggle('hidden', m !== '2d')
+  $('#ctl-edit').classList.toggle('hidden', m !== 'edit')
   $('#export-svg').classList.toggle('hidden', m !== '2d')
-  $('#hint').textContent = m === '3d' ? '拖动旋转 · 右键平移 · 滚轮缩放 · R 随机 · P 性能' : '拖动平移 · 滚轮缩放 · 双击复位 · R 随机'
+  $('#hint').textContent =
+    m === '3d'
+      ? '拖动旋转 · 右键平移 · 滚轮缩放 · R 随机 · P 性能'
+      : m === '2d'
+        ? '拖动平移 · 滚轮缩放 · 双击复位 · R 随机'
+        : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销'
+  if (m === '3d' && sceneStale && world && lastTex) {
+    scene.setWorld(world, lastTex.color, lastTex.roughness, rivers)
+    sceneStale = false
+  }
   if (m === '2d' && world) refreshAtlas()
+  if (m === 'edit') {
+    ensureEditor()
+    if (world && lastTex) editor!.setWorld(world, lastTex.color, edits)
+  }
 }
 
 // —— 生成 ——
 const worker = new GenWorker()
 let jobId = 0
 const loading = $('#loading')
-function generate() {
+/** quiet：编辑后的自动重算，不遮挡画面，只在角落显示进度 */
+function generate(quiet = false) {
   const id = ++jobId
   params.seed = seedInput.value.trim() || 'world'
+  // 换了种子：编辑是针对旧世界的，询问后清除
+  if (params.seed !== editsSize.seed && hasEdits(edits)) {
+    if (!window.confirm('换种子会生成一个全新的世界，当前的编辑将被清除。继续吗？')) {
+      params.seed = editsSize.seed
+      seedInput.value = params.seed
+      return
+    }
+    edits = {}
+    undoStack.length = 0
+  }
+  // 换了分辨率：编辑按比例重采样
+  if ((params.width !== editsSize.W || params.height !== editsSize.H) && hasEdits(edits)) edits = resampleEdits(edits, editsSize.W, editsSize.H, params.width, params.height)
+  editsSize = { W: params.width, H: params.height, seed: params.seed }
   writeHash()
   markDirty(false)
-  loading.classList.remove('hidden')
+  quietJob = quiet
+  if (quiet) {
+    $('#edit-status').classList.remove('hidden')
+    $('#edit-status').textContent = '演算中…'
+  } else loading.classList.remove('hidden')
   $<HTMLButtonElement>('#generate').disabled = true
-  worker.postMessage({ id, params: { ...params } })
+  worker.postMessage({ id, params: { ...params }, edits: { ...edits } })
 }
+let quietJob = false
 worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   const m = ev.data
   if (m.id !== jobId) return
   if (m.type === 'progress') {
     $('#load-stage').textContent = m.stage
     $('#load-bar').style.width = `${Math.round(m.frac * 100)}%`
+    if (quietJob) $('#edit-status').textContent = `演算中 · ${m.stage}`
     return
   }
   if (m.type === 'error') {
@@ -317,7 +361,13 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   rivers = smoothRivers(world)
   try {
     const tex = buildPhysicalTexture(world, rivers, 2)
-    scene.setWorld(world, tex.color, tex.roughness, rivers)
+    lastTex = tex
+    // 编辑视图里不重建 3D（较慢），切回 3D 时再建
+    if (mode === '3d' || !editor) {
+      scene.setWorld(world, tex.color, tex.roughness, rivers)
+      sceneStale = false
+    } else sceneStale = true
+    editor?.setWorld(world, tex.color, edits)
   } catch (err) {
     console.error(err)
     $('#load-stage').textContent = '绘制失败：' + (err instanceof Error ? err.message : String(err))
@@ -329,9 +379,10 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   if (mode === '2d') await refreshAtlas()
   showStats(world)
   loading.classList.add('hidden')
+  $('#edit-status').classList.add('hidden')
   $<HTMLButtonElement>('#generate').disabled = false
 }
-$('#generate').addEventListener('click', generate)
+$('#generate').addEventListener('click', () => generate())
 
 let atlasJob = 0
 let viewer: AtlasViewer | null = null
@@ -445,7 +496,11 @@ function probeAt(clientX: number, clientY: number) {
   if (!world) return
   let cell: { x: number; y: number } | null = null
   if (mode === '3d') cell = scene.pick(clientX, clientY)
-  else if (atlasCanvas) {
+  else if (mode === 'edit' && editor) {
+    const r = $('#viewEdit').getBoundingClientRect()
+    const c = editor.toCell(clientX - r.left, clientY - r.top)
+    cell = { x: Math.floor(c.x), y: Math.floor(c.y) }
+  } else if (atlasCanvas) {
     const r = $('#view2d').getBoundingClientRect()
     const M = (atlasCanvas.width - world.W * 2) / 2
     const px = (clientX - r.left - map.x) / map.k - M
@@ -549,6 +604,239 @@ function readHash(): Partial<WorldParams> {
     out[k] = typeof (DEFAULT_PARAMS as unknown as Record<string, unknown>)[k] === 'number' ? Number(v) : v
   }
   return out as Partial<WorldParams>
+}
+
+
+// —— 编辑视图 ——
+const undoStack: WorldEdits[] = []
+let regenTimer = 0
+/** 编辑完成后稍等再重算，连续几笔只算一次 */
+function scheduleRegen() {
+  clearTimeout(regenTimer)
+  regenTimer = window.setTimeout(() => generate(true), 350)
+}
+function pushUndo() {
+  undoStack.push(snapshotEdits({ ...edits, labels: world ? world.labels.map((l) => ({ ...l })) : edits.labels }))
+  if (undoStack.length > 30) undoStack.shift()
+  // 一开始编辑就把现有地点钉住：之后改地形、改气候重算时，城镇与地名不会整体洗牌
+  if (!edits.labels && world) {
+    edits.labels = world.labels.map((l) => ({ ...l }))
+    edits.worldName = world.worldName
+    edits.worldNameZh = world.worldNameZh
+  }
+}
+function undo() {
+  const prev = undoStack.pop()
+  if (!prev) return
+  edits = prev
+  edits.terrainRev = (edits.terrainRev ?? 0) + 1
+  editor?.refreshEdits(edits)
+  scheduleRegen()
+}
+function ensureEditor() {
+  if (editor) return
+  editor = new EditorView($('#viewEdit'), {
+    onBeforeEdit: pushUndo,
+    onCommit: (kind) => {
+      if (kind === 'labels' && world) {
+        edits.labels = world.labels.map((l) => ({ ...l }))
+        // 地点改动立即反映到纸图与 3D 地名，政区在重算后更新
+        atlasCache.clear()
+        scene.refreshLabels()
+      }
+      scheduleRegen()
+    },
+    onSelect: showInspector,
+  })
+  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__editor = editor
+}
+
+// 工具与画笔
+{
+  const tools: [EditTool, string, string][] = [
+    ['select', '选取', '选取、拖动地点；空白处拖动平移'],
+    ['place', '新增地点', '点击地图添加城镇'],
+    ['raise', '抬升', '抬高地形：海里画出陆地、平原上堆出山'],
+    ['lower', '下沉', '压低地形：挖出海湾、湖盆'],
+    ['smooth', '抹平', '让地形变平缓'],
+    ['warm', '升温', '提高气温'],
+    ['cool', '降温', '降低气温'],
+    ['wet', '增雨', '增加降水'],
+    ['dry', '减雨', '减少降水'],
+  ]
+  const box = $('#edit-tools')
+  for (const [id, label, tip] of tools) {
+    const b = document.createElement('button')
+    b.textContent = label
+    b.title = tip
+    b.dataset.tool = id
+    b.classList.toggle('on', id === 'select')
+    b.addEventListener('click', () => {
+      ensureEditor()
+      editor!.tool = id
+      for (const x of box.children) x.classList.toggle('on', x === b)
+      $('#brush-opts').classList.toggle('dim', id === 'select' || id === 'place')
+    })
+    box.appendChild(b)
+  }
+  $('#brush-opts').classList.add('dim')
+  const bo = $('#brush-opts')
+  slider(bo, {
+    label: '画笔大小',
+    min: 3,
+    max: 100,
+    step: 1,
+    fmt: (v) => `${Math.round(v)}`,
+    get: () => editor?.brush.radius ?? 18,
+    set: (v) => {
+      ensureEditor()
+      editor!.brush.radius = v
+    },
+  })
+  slider(bo, {
+    label: '画笔强度',
+    min: 0.05,
+    max: 1,
+    step: 0.05,
+    fmt: (v) => v.toFixed(2),
+    get: () => editor?.brush.strength ?? 0.5,
+    set: (v) => {
+      ensureEditor()
+      editor!.brush.strength = v
+    },
+  })
+  $('#edit-undo').addEventListener('click', undo)
+  $('#edit-clear').addEventListener('click', () => {
+    if (!hasEdits(edits) || !window.confirm('清除全部编辑，恢复为程序生成的原样？')) return
+    pushUndo()
+    edits = { terrainRev: (edits.terrainRev ?? 0) + 1 }
+    editor?.refreshEdits(edits)
+    scheduleRegen()
+  })
+  window.addEventListener('keydown', (e) => {
+    if (mode !== 'edit' || (e.target as HTMLElement).matches('input, select, textarea')) return
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault()
+      undo()
+    }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && editor?.selected) deleteSelected()
+  })
+}
+
+// 地点检查器
+const KIND_NAMES: [Label['kind'], string][] = [
+  ['capital', '首都'],
+  ['city', '城镇'],
+  ['continent', '大陆'],
+  ['island', '岛屿'],
+  ['ocean', '大洋'],
+  ['sea', '海'],
+  ['lake', '湖泊'],
+  ['range', '山脉'],
+  ['basin', '盆地'],
+  ['desert', '沙漠'],
+  ['forest', '森林'],
+]
+{
+  const sel = $<HTMLSelectElement>('#insp-kind')
+  sel.innerHTML = KIND_NAMES.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')
+  const commit = () => {
+    edits.labels = world ? world.labels.map((l) => ({ ...l })) : edits.labels
+    atlasCache.clear()
+    scene.refreshLabels()
+    editor?.draw()
+  }
+  let editing = false
+  const begin = () => {
+    if (!editing) pushUndo()
+    editing = true
+  }
+  $<HTMLInputElement>('#insp-zh').addEventListener('input', (e) => {
+    const l = editor?.selected
+    if (!l) return
+    begin()
+    l.zh = (e.target as HTMLInputElement).value
+    commit()
+  })
+  $<HTMLInputElement>('#insp-name').addEventListener('input', (e) => {
+    const l = editor?.selected
+    if (!l) return
+    begin()
+    l.name = (e.target as HTMLInputElement).value
+    commit()
+  })
+  for (const id of ['#insp-zh', '#insp-name']) $(id).addEventListener('change', () => (editing = false))
+  sel.addEventListener('change', () => {
+    const l = editor?.selected
+    if (!l) return
+    pushUndo()
+    l.kind = sel.value as Label['kind']
+    commit()
+    scheduleRegen()
+  })
+  $('#insp-delete').addEventListener('click', deleteSelected)
+}
+function deleteSelected() {
+  const l = editor?.selected
+  if (!l || !world) return
+  pushUndo()
+  world.labels.splice(world.labels.indexOf(l), 1)
+  editor!.select(null)
+  edits.labels = world.labels.map((x) => ({ ...x }))
+  atlasCache.clear()
+  scene.refreshLabels()
+  scheduleRegen()
+}
+function showInspector(l: Label | null) {
+  $('#inspector').classList.toggle('hidden', !l)
+  if (!l) return
+  $<HTMLInputElement>('#insp-zh').value = l.zh
+  $<HTMLInputElement>('#insp-name').value = l.name
+  $<HTMLSelectElement>('#insp-kind').value = l.kind
+}
+$<HTMLInputElement>('#edit-names').addEventListener('change', (e) => {
+  ensureEditor()
+  editor!.showNames = (e.target as HTMLInputElement).checked
+  editor!.draw()
+})
+
+// —— 项目：保存 / 打开 ——
+$('#save').addEventListener('click', async () => {
+  const text = await serializeProject(params, { ...edits, labels: edits.labels })
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${(world?.worldName ?? 'world').toLowerCase()}-${params.seed}.cartographer.json`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 5000)
+})
+$('#open').addEventListener('click', () => $<HTMLInputElement>('#open-file').click())
+$<HTMLInputElement>('#open-file').addEventListener('change', async (e) => {
+  const f = (e.target as HTMLInputElement).files?.[0]
+  ;(e.target as HTMLInputElement).value = ''
+  if (!f) return
+  try {
+    const doc = await parseProject(await f.text())
+    Object.assign(params, doc.params)
+    seedInput.value = params.seed
+    edits = doc.edits
+    editsSize = { W: params.width, H: params.height, seed: params.seed }
+    undoStack.length = 0
+    syncParams()
+    generate()
+  } catch (err) {
+    window.alert('无法打开：' + (err instanceof Error ? err.message : String(err)))
+  }
+})
+
+// —— 模块：世界 / 聚落 ——
+for (const b of document.querySelectorAll<HTMLButtonElement>('#modules button')) {
+  b.addEventListener('click', () => {
+    const m = b.dataset.mod
+    for (const x of document.querySelectorAll('#modules button')) x.classList.toggle('on', x === b)
+    document.body.dataset.module = m
+    scene.active = m === 'world' && mode === '3d'
+  })
 }
 
 generate()

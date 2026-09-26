@@ -116,6 +116,26 @@ export interface River {
   flow: Float32Array
 }
 
+/**
+ * 用户对生成结果的编辑。所有增量图都是 W×H（与 params.width/height 对应）。
+ * 生成流程会把它们叠加进对应阶段，于是改完参数重新生成时编辑不会丢。
+ */
+export interface WorldEdits {
+  /** 地形意图：侵蚀前叠加的高度增量（km）。侵蚀与水系会顺着新地形重新演算 */
+  terrain?: Float32Array
+  /** 气温偏移（°C） */
+  temp?: Float32Array
+  /** 降水倍率的自然对数（0 为不变，ln2 为翻倍） */
+  rain?: Float32Array
+  /** 地点：编辑后的完整列表，替换生成的标注 */
+  labels?: Label[]
+  /** 世界名（编辑后固定，不随重算变化） */
+  worldName?: string
+  worldNameZh?: string
+  /** 地形编辑的版本号：变了才需要重算侵蚀 */
+  terrainRev?: number
+}
+
 export interface World {
   params: WorldParams
   W: number

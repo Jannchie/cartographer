@@ -16,8 +16,18 @@
     <div id="app">
       <aside id="panel">
         <header class="brand">
-          <h1>Cartographer</h1>
-          <p>程序化世界地图生成器</p>
+          <div class="brand-top">
+            <h1>Cartographer</h1>
+            <div class="file">
+              <button id="open" title="打开项目文件">打开</button>
+              <button id="save" title="保存种子、参数与全部编辑">保存</button>
+              <input id="open-file" type="file" accept=".json,application/json" hidden />
+            </div>
+          </div>
+          <nav class="modules" id="modules">
+            <button data-mod="world" class="on">世界</button>
+            <button data-mod="settlement">聚落</button>
+          </nav>
         </header>
         <div class="scroll">
           <section class="gen">
@@ -41,6 +51,23 @@
             <h2>沙盘</h2>
             <div id="view-3d"></div>
           </section>
+          <section id="ctl-edit" class="hidden">
+            <h2>编辑</h2>
+            <div class="tool-grid" id="edit-tools"></div>
+            <div id="brush-opts"></div>
+            <label class="check"><input type="checkbox" id="edit-names" checked /> 显示地名</label>
+            <div class="edit-actions">
+              <button id="edit-undo" title="撤销（Ctrl+Z）">撤销</button>
+              <button id="edit-clear" title="清除全部编辑">清除编辑</button>
+            </div>
+            <div id="inspector" class="hidden">
+              <h2>地点</h2>
+              <div class="row"><label>中文名</label><input id="insp-zh" spellcheck="false" /></div>
+              <div class="row"><label>原名</label><input id="insp-name" spellcheck="false" /></div>
+              <div class="row"><label>类型</label><select id="insp-kind"></select></div>
+              <button id="insp-delete" class="danger" title="删除（Delete）">删除地点</button>
+            </div>
+          </section>
           <section id="ctl-2d" class="hidden">
             <h2>纸图风格</h2>
             <div id="view-2d"></div>
@@ -54,9 +81,12 @@
       <main id="stage">
         <div id="view3d" class="view"></div>
         <div id="view2d" class="view hidden"></div>
+        <div id="viewEdit" class="view hidden"></div>
+        <div id="edit-status" class="hidden"></div>
         <div class="switch" id="switch">
           <button data-view="3d" class="on">3D 沙盘</button>
           <button data-view="2d">纸图</button>
+          <button data-view="edit">编辑</button>
         </div>
         <div id="probe" class="hidden"></div>
         <div id="hint">拖动旋转 · 右键平移 · 滚轮缩放 · P 性能</div>
@@ -66,6 +96,13 @@
             <div class="load-stage" id="load-stage">…</div>
             <div class="bar"><i id="load-bar"></i></div>
           </div>
+        </div>
+      </main>
+      <main id="settlement">
+        <div class="placeholder">
+          <div class="ph-title">聚落地图</div>
+          <p>为一座城市、镇子或村庄生成街区级的平面图：城墙与城门、街道与街区、地块与房屋、广场与地标。</p>
+          <p class="ph-note">正在开发中。完成后可以单独使用，也可以从世界地图上选一个地点，继承那里的地形、河流与海岸。</p>
         </div>
       </main>
     </div>

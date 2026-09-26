@@ -7,7 +7,7 @@ import { buildRealms } from './realms'
 import { Noise } from './noise'
 import { RNG, hashString } from './rng'
 import { buildTerrain } from './terrain'
-import { Biome, type Label, type River, type World, type WorldParams } from './types'
+import { Biome, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
 import { blur, edt, neighbors8 } from './util'
 
 export type Progress = (stage: string, frac: number) => void
@@ -18,7 +18,19 @@ const MAP_KM = 6000
 /** 侵蚀调参（离线脚本可覆盖） */
 export const TUNE = { cBase: 1.3, cIters: 80, ckf: 0.14, cUplift: 0.07, cDiff: 0.02, spIters: 6, kf: 0.0028, uplift: 0.012, diffusion: 0.015, drops: 0.45 }
 
-export function generateWorld(p: WorldParams, progress: Progress = () => {}): World {
+/** 侵蚀结束时的地形（缓存它，只改气候或地点时不必重跑最慢的造山与侵蚀） */
+export interface TerrainStage {
+  key: string
+  elev: Float32Array
+  basins: { x: number; y: number; r: number }[]
+}
+
+/** 影响地形阶段的参数与地形编辑版本 */
+export function terrainKey(p: WorldParams, edits?: WorldEdits) {
+  return JSON.stringify([p.seed, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, edits?.terrain ? edits.terrainRev ?? 1 : 0])
+}
+
+export function generateWorld(p: WorldParams, progress: Progress = () => {}, edits: WorldEdits = {}, cache?: { stage?: TerrainStage }): World {
   const t0 = performance.now()
   const W = p.width
   const H = p.height
@@ -31,66 +43,15 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
   const rNames = rng.fork()
   const rPlace = rng.fork()
 
-  progress('板块运动与造山', 0.02)
-  const terr = buildTerrain(p, rTerrain, kmPerCell)
-  const elev = terr.elev
-
-  // —— 侵蚀 ——
-  progress('填平噪声洼地', 0.18)
-  fillSmallDepressions(elev, W, H, 60, 0.06)
-
-  const cIters = Math.round(TUNE.cIters * Math.min(1.5, p.erosion))
-  if (cIters > 0) {
-    // 整个大陆都在缓慢抬升（均衡），造山带抬升更快
-    const up = new Float32Array(N)
-    for (let i = 0; i < N; i++) up[i] = elev[i] > 0 ? terr.uplift[i] + TUNE.cBase * elev[i] : 0
-    coarseErosion(
-      elev,
-      up,
-      W,
-      H,
-      Math.max(2, Math.round(W / 256)),
-      cIters,
-      { kf: TUNE.ckf, m: 0.5, upliftRate: TUNE.cUplift, diffusion: TUNE.cDiff },
-      (i) => progress('构造抬升与流水下切', 0.2 + 0.15 * (i / cIters)),
-    )
-  }
-  // 抬升-侵蚀平衡后的高度偏高：按分位数把最高峰压回合理范围
-  {
-    let mx = 0
-    const land: number[] = []
-    for (let i = 0; i < N; i += 7) if (elev[i] > 0) land.push(elev[i])
-    land.sort((a, b) => a - b)
-    mx = land[Math.floor(land.length * 0.998)] ?? 1
-    const target = 5.0 * (0.55 + 0.45 * p.mountains)
-    if (mx > target) {
-      const k = target / mx
-      for (let i = 0; i < N; i++) if (elev[i] > 0) elev[i] = Math.max(0.002, elev[i] * k)
-    }
-  }
-  const iters = Math.round(TUNE.spIters * p.erosion)
-  if (iters > 0) {
-    streamPowerErosion(
-      elev,
-      terr.uplift,
-      W,
-      H,
-      iters,
-      { kf: TUNE.kf, m: 0.5, upliftRate: TUNE.uplift, diffusion: TUNE.diffusion },
-      (i) => progress('流水下切 · 树枝状水系', 0.35 + 0.15 * (i / iters)),
-    )
-  }
-  progress('雨滴冲刷与沉积', 0.5)
-  // 记住大型洼地的地形：雨滴沉积会把湖盆填平，之后恢复湖底
-  const protect = protectedBasins(elev, W, H)
-  const drops = Math.round(N * TUNE.drops * p.erosion)
-  if (drops > 0) dropletErosion(elev, W, H, drops, rErode, 0.12, (f) => progress('雨滴冲刷与沉积', 0.5 + 0.18 * f))
-  progress('热力风化', 0.68)
-  thermalErosion(elev, W, H, Math.round(12 * p.erosion) + 2, 0.9 * (kmPerCell / 5.86), 0.3)
-
-  for (const [c, h] of protect) if (elev[c] > h) elev[c] = h
-  // 侵蚀可能挖出的新小坑再填一次
-  fillSmallDepressions(elev, W, H, 80, 0.06)
+  const key = terrainKey(p, edits)
+  let stage = cache?.stage?.key === key ? cache.stage : undefined
+  if (!stage) {
+    stage = terrainStage(p, progress, edits, W, H, kmPerCell, rTerrain, rErode, key)
+    if (cache) cache.stage = stage
+  } else progress('沿用已演算的地形', 0.72)
+  // 后续阶段会改动高度（河道下切），缓存要保持原样
+  const elev = Float32Array.from(stage.elev)
+  const terr = { basins: stage.basins }
 
   // —— 海岸距离（有符号） ——
   progress('海岸线与大陆架', 0.72)
@@ -100,6 +61,9 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
   progress('大气环流与降水', 0.75)
   const temperature = temperatureField(p, elev, coastDist, W, H, rClimate.fork())
   const precipitation = precipitationField(p, elev, temperature, W, H, kmPerCell, rClimate.fork())
+  // 气候编辑：气温偏移、降水倍率
+  if (edits.temp && edits.temp.length === N) for (let i = 0; i < N; i++) temperature[i] += edits.temp[i]
+  if (edits.rain && edits.rain.length === N) for (let i = 0; i < N; i++) precipitation[i] *= Math.exp(edits.rain[i])
 
   // —— 水文 ——
   progress('汇流、湖泊与内流盆地', 0.82)
@@ -182,10 +146,13 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
   progress('命名与标注', 0.95)
   const lang = new Language(rNames)
   const zh = new ZhNamer(p.seed)
-  const labels = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, lang, rPlace, terr.basins)
-  for (const l of labels) l.zh = zh.name(l.kind, l.name)
+  const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, lang, rPlace, terr.basins)
+  for (const l of generated) l.zh = zh.name(l.kind, l.name)
+  // 地点编辑：用户改过的列表整体替换生成结果（政区按新的都城重算）
+  const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || zh.name(l.kind, l.name) })) : generated
   const { realm, realms } = buildRealms(elev, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W), lang, zh, rPlace.fork())
-  const worldName = lang.word()
+  const genName = lang.word()
+  const worldName = edits.worldName ?? genName
 
   let land = 0
   let peak = -Infinity
@@ -212,7 +179,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
     realm,
     realms,
     worldName,
-    worldNameZh: zh.name('world', worldName),
+    worldNameZh: edits.worldNameZh ?? zh.name('world', worldName),
     kmPerCell,
     stats: {
       land: land / N,
@@ -223,6 +190,92 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
       ms: performance.now() - t0,
     },
   }
+}
+
+/** 造山 + 地形编辑 + 各级侵蚀，得到侵蚀结束时的地形 */
+function terrainStage(
+  p: WorldParams,
+  progress: Progress,
+  edits: WorldEdits,
+  W: number,
+  H: number,
+  kmPerCell: number,
+  rTerrain: RNG,
+  rErode: RNG,
+  key: string,
+): TerrainStage {
+  const N = W * H
+  progress('板块运动与造山', 0.02)
+  const terr = buildTerrain(p, rTerrain, kmPerCell)
+  const elev = terr.elev
+  // 地形编辑：在侵蚀之前叠加"意图"，抬高的地方同时获得构造抬升，侵蚀后仍能保持山体
+  if (edits.terrain && edits.terrain.length === N) {
+    for (let i = 0; i < N; i++) {
+      const d = edits.terrain[i]
+      if (d === 0) continue
+      elev[i] += d
+      if (d > 0) terr.uplift[i] += d * 0.6
+    }
+  }
+
+  // —— 侵蚀 ——
+  progress('填平噪声洼地', 0.18)
+  fillSmallDepressions(elev, W, H, 60, 0.06)
+
+  const cIters = Math.round(TUNE.cIters * Math.min(1.5, p.erosion))
+  if (cIters > 0) {
+    // 整个大陆都在缓慢抬升（均衡），造山带抬升更快
+    const up = new Float32Array(N)
+    for (let i = 0; i < N; i++) up[i] = elev[i] > 0 ? terr.uplift[i] + TUNE.cBase * elev[i] : 0
+    coarseErosion(
+      elev,
+      up,
+      W,
+      H,
+      Math.max(2, Math.round(W / 256)),
+      cIters,
+      { kf: TUNE.ckf, m: 0.5, upliftRate: TUNE.cUplift, diffusion: TUNE.cDiff },
+      (i) => progress('构造抬升与流水下切', 0.2 + 0.15 * (i / cIters)),
+    )
+  }
+  // 抬升-侵蚀平衡后的高度偏高：按分位数把最高峰压回合理范围
+  {
+    let mx = 0
+    const land: number[] = []
+    for (let i = 0; i < N; i += 7) if (elev[i] > 0) land.push(elev[i])
+    land.sort((a, b) => a - b)
+    mx = land[Math.floor(land.length * 0.998)] ?? 1
+    const target = 5.0 * (0.55 + 0.45 * p.mountains)
+    if (mx > target) {
+      const k = target / mx
+      for (let i = 0; i < N; i++) if (elev[i] > 0) elev[i] = Math.max(0.002, elev[i] * k)
+    }
+  }
+  const iters = Math.round(TUNE.spIters * p.erosion)
+  if (iters > 0) {
+    streamPowerErosion(
+      elev,
+      terr.uplift,
+      W,
+      H,
+      iters,
+      { kf: TUNE.kf, m: 0.5, upliftRate: TUNE.uplift, diffusion: TUNE.diffusion },
+      (i) => progress('流水下切 · 树枝状水系', 0.35 + 0.15 * (i / iters)),
+    )
+  }
+  progress('雨滴冲刷与沉积', 0.5)
+  // 记住大型洼地的地形：雨滴沉积会把湖盆填平，之后恢复湖底
+  const protect = protectedBasins(elev, W, H)
+  const drops = Math.round(N * TUNE.drops * p.erosion)
+  if (drops > 0) dropletErosion(elev, W, H, drops, rErode, 0.12, (f) => progress('雨滴冲刷与沉积', 0.5 + 0.18 * f))
+  progress('热力风化', 0.68)
+  thermalErosion(elev, W, H, Math.round(12 * p.erosion) + 2, 0.9 * (kmPerCell / 5.86), 0.3)
+
+  for (const [c, h] of protect) if (elev[c] > h) elev[c] = h
+  // 侵蚀可能挖出的新小坑再填一次
+  fillSmallDepressions(elev, W, H, 80, 0.06)
+
+  return { key, elev, basins: terr.basins }
 }
 
 function protectedBasins(elev: Float32Array, W: number, H: number): Map<number, number> {

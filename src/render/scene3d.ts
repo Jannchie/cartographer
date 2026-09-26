@@ -661,6 +661,11 @@ export class Scene3D {
     return [rock, sea, plate]
   }
 
+  /** 地点被编辑后重建 3D 地名 */
+  refreshLabels() {
+    if (this.world) this.buildLabels()
+  }
+
   private buildLabels() {
     const w = this.world!
     this.labelLayer.innerHTML = ''
