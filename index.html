@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cartographer · 世界地图生成器</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="panel">
+        <header class="brand">
+          <h1>Cartographer</h1>
+          <p>程序化世界地图生成器</p>
+        </header>
+        <div class="scroll">
+          <section>
+            <h2>世界</h2>
+            <div class="row seed">
+              <label for="seed">种子</label>
+              <div class="seed-box">
+                <input id="seed" spellcheck="false" autocomplete="off" />
+                <button id="dice" class="ghost" title="随机种子">随机</button>
+              </div>
+            </div>
+            <div class="presets" id="presets"></div>
+            <div id="world-controls"></div>
+            <button id="generate" class="primary">生成世界</button>
+          </section>
+          <section>
+            <h2>视图</h2>
+            <div id="view-controls"></div>
+            <button id="export" class="ghost wide">导出 PNG</button>
+          </section>
+          <section>
+            <h2>统计</h2>
+            <dl id="stats"></dl>
+          </section>
+        </div>
+      </aside>
+      <main id="stage">
+        <div id="view3d" class="view"></div>
+        <div id="view2d" class="view hidden"><div id="map-wrap"></div></div>
+        <div class="switch" id="switch">
+          <button data-view="3d" class="on">3D 沙盘</button>
+          <button data-view="2d">制图</button>
+        </div>
+        <div id="probe" class="hidden"></div>
+        <div id="hint">拖动旋转 · 右键平移 · 滚轮缩放</div>
+        <div id="loading">
+          <div class="load-card">
+            <div class="load-title">正在塑造世界</div>
+            <div class="load-stage" id="load-stage">…</div>
+            <div class="bar"><i id="load-bar"></i></div>
+          </div>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
