@@ -19,7 +19,11 @@ export interface WorldParams {
   latSouth: number
   /** 海岸破碎度 0 ~ 1 */
   coastRoughness: number
+  /** 命名世界观（auto 按种子挑） */
+  naming: NamingStyle
 }
+
+export type NamingStyle = 'auto' | 'fantasy' | 'epic' | 'eastern' | 'wa'
 
 export const DEFAULT_PARAMS: WorldParams = {
   seed: 'aurelia',
@@ -34,6 +38,7 @@ export const DEFAULT_PARAMS: WorldParams = {
   latNorth: 64,
   latSouth: 14,
   coastRoughness: 0.55,
+  naming: 'auto',
 }
 
 export const Biome = {
@@ -99,6 +104,7 @@ export interface Label {
 export interface Realm {
   name: string
   zh: string
+  ja?: string
   /** 调色板序号 0~7（相邻国家不同） */
   color: number
   /** 国名标注位置（格） */

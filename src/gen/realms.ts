@@ -1,5 +1,4 @@
-import type { Language } from './names'
-import type { ZhNamer } from './names_zh'
+import type { Namer } from './naming'
 import { RNG } from './rng'
 import type { Label, Realm } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
@@ -16,8 +15,7 @@ export function buildRealms(
   H: number,
   kmPerCell: number,
   riverThr: number,
-  lang: Language,
-  zh: ZhNamer,
+  namer: Namer,
   rng: RNG,
 ): { realm: Int16Array; realms: Realm[] } {
   const N = W * H
@@ -120,23 +118,13 @@ export function buildRealms(
     cnt[r]++
     if (pole[r] < 0 || inner[i] > inner[pole[r]]) pole[r] = i
   }
-  const forms: [string, string][] = [
-    ['Kingdom of #', '王国'],
-    ['# Empire', '帝国'],
-    ['Duchy of #', '公国'],
-    ['Principality of #', '公国'],
-    ['# Republic', '共和国'],
-    ['Grand Duchy of #', '大公国'],
-    ['# Dominion', '领'],
-    ['Khanate of #', '汗国'],
-  ]
   const realms: Realm[] = seeds.map((s, id) => {
     const best = pole[id] >= 0 ? pole[id] : Math.floor(s.y) * W + Math.floor(s.x)
-    const base = lang.word()
-    const [form, suffix] = rng.pick(forms)
+    const n = namer.name('realm', rng.next())
     return {
-      name: form.replace('#', base),
-      zh: zh.name('realm', base, suffix),
+      name: n.en,
+      zh: n.zh,
+      ja: n.ja,
       color: color[id],
       x: best % W,
       y: Math.floor(best / W),

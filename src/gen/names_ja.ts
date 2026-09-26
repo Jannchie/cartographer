@@ -81,6 +81,9 @@ export function katakana(word: string): string {
     // 拼写规整：l→r、c→k/s、q→k、x→ks、th→s、ph→f、ck→k
     .replace(/th/g, 's')
     .replace(/ph/g, 'f')
+    .replace(/[kg]h/g, 'h')
+    .replace(/rh/g, 'r')
+    .replace(/zh/g, 'j')
     .replace(/ck/g, 'k')
     .replace(/qu/g, 'kw')
     .replace(/q/g, 'k')

@@ -32,7 +32,7 @@ export async function ensureFonts(world: World, id: StyleId) {
   let text: string | undefined
   if (lang !== 'en') {
     for (const f of [cjkFont(lang), cjkFont(lang, true)]) fams.add(f.split(',')[0].trim())
-    text = [...world.labels.map((l) => placeName(l)), worldTitle(world), tr('{name}舆地全图', { name: '' }), tr('种子 {seed}', { seed: '' }), tr('公里'), tr('海拔（米）')].join('') + world.params.seed
+    text = [...world.labels.map((l) => placeName(l)), ...world.realms.map((r) => placeName(r)), worldTitle(world), tr('{name}舆地全图', { name: '' }), tr('种子 {seed}', { seed: '' }), tr('公里'), tr('海拔（米）')].join('') + world.params.seed
   }
   const loads: Promise<unknown>[] = []
   for (const fam of fams) {

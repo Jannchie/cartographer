@@ -2,7 +2,8 @@ import { latitudeOf } from './gen/climate'
 import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from './app/project'
 import { EditorView, type EditTool, type EditView } from './editor/editor'
 import { autoContinents, floodLand, regionAnchor } from './editor/layers'
-import { BIOME_NAMES, DEFAULT_PARAMS, type Label, type World, type WorldEdits, type WorldParams } from './gen/types'
+import { BIOME_NAMES, DEFAULT_PARAMS, type Label, type NamingStyle, type World, type WorldEdits, type WorldParams } from './gen/types'
+import { NAMING_STYLES } from './gen/naming'
 import { THEMES, ensureFonts, type StyleId } from './render/atlas'
 import type { DisplayList } from './render/atlas/svg/displayList'
 import { AtlasViewer } from './render/atlas/svg/viewer'
@@ -130,7 +131,7 @@ resSel.addEventListener('change', () => {
   markDirty()
 })
 
-type NumKey = Exclude<keyof WorldParams, 'seed'>
+type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming'>
 const worldSliders: (Omit<SliderSpec, 'get' | 'set'> & { key: NumKey })[] = [
   { key: 'landRatio', label: '陆地比例', min: 0.12, max: 0.65, step: 0.01, fmt: pct },
   { key: 'plates', label: '板块数量', min: 4, max: 30, step: 1, fmt: (v) => String(v) },
@@ -152,10 +153,26 @@ for (const s of worldSliders) {
     },
   })
 }
+// 命名世界观：只影响地名，重新生成时沿用已演算的地形
+const namingRow = document.createElement('div')
+namingRow.className = 'row'
+namingRow.innerHTML = `<label></label><select id="naming"></select>`
+tr(namingRow.querySelector('label')!, '命名')
+const namingSel = namingRow.querySelector('select')!
+for (const n of NAMING_STYLES) namingSel.appendChild(tr(Object.assign(document.createElement('option'), { value: n.id }), n.label))
+tr(namingSel, '地名的世界观：同一个地名在中英日三种语言里意思一致', 'title')
+$('#presets').after(namingRow)
+const syncNaming = () => (namingSel.value = params.naming ?? 'auto')
+namingSel.addEventListener('change', () => {
+  params.naming = namingSel.value as NamingStyle
+  generate()
+})
 const syncParams = () => {
   sliders.forEach((f) => f())
   syncRes()
+  syncNaming()
 }
+syncNaming()
 $('#reset').addEventListener('click', () => {
   Object.assign(params, { ...DEFAULT_PARAMS, seed: params.seed })
   syncParams()
@@ -1045,7 +1062,7 @@ onLang(async () => {
   if (!world) return
   showStats(world)
   // 地图文字：纸图重排版、3D 地名与铭牌、编辑视图地名
-  await document.fonts.load(`600 20px ${lang === 'ja' ? '"Noto Serif JP"' : '"Noto Serif SC"'}`, worldTitle(world) + world.labels.map((l) => placeName(l)).join(''))
+  await document.fonts.load(`600 20px ${lang === 'ja' ? '"Noto Serif JP"' : '"Noto Serif SC"'}`, worldTitle(world) + [...world.labels, ...world.realms].map((l) => placeName(l)).join(''))
   atlasCache.clear()
   if (mode === '2d') refreshAtlas()
   scene.refreshLanguage()
