@@ -7,6 +7,7 @@ import { VolumetricClouds } from './aerial/volumetric'
 import { PostPipeline } from './aerial/post'
 import { Diorama } from './aerial/diorama'
 import { TerrainBake } from './aerial/bake'
+import { RoadMask } from './aerial/roads3d'
 import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
 import { createRiverWaterMaterial, createWaterMaterial } from './water'
@@ -23,6 +24,8 @@ export interface View3DOptions {
   dof: number
   /** 展台：桌面与展厅背景（关掉时沙盘浮在页面上） */
   stage: boolean
+  /** 道路与航线 */
+  roads: boolean
 }
 
 const SKY_TOP = new THREE.Color('#3b6ea8')
@@ -76,6 +79,7 @@ export class Scene3D {
   private bake: TerrainBake | null = null
   private riverMat: THREE.ShaderMaterial | null = null
   private carve: RiverCarve | null = null
+  private roadMask: RoadMask | null = null
   private riverList: SmoothRiver[] = []
   private lastInteract = 0
   private frame = 0
@@ -281,6 +285,9 @@ export class Scene3D {
   /** 云层、空气感、展台开关与光照 */
   private applyLook() {
     this.diorama.stage.visible = this.opts.stage
+    const roadsOn = this.opts.roads && !!this.roadMask ? 1 : 0
+    if (this.terrainU) this.terrainU.uRoadOn.value = roadsOn
+    if (this.waterMat) this.waterMat.uniforms.uRoadOn.value = roadsOn
     const cloudsOn = this.opts.clouds && !!this.clouds
     if (this.terrainU) this.terrainU.uCloudOn.value = cloudsOn ? 1 : 0
     if (this.waterMat) this.waterMat.uniforms.uCloudOn.value = cloudsOn ? 1 : 0
@@ -409,6 +416,12 @@ export class Scene3D {
     this.group.add(this.terrain)
 
     this.waterMat = createWaterMaterial(ht, tt, colorTex, this.vScale, new THREE.Vector2(SX, this.SZ), hSize)
+    // 道路遮罩与垂直夸张无关，每个世界画一次
+    this.roadMask?.dispose()
+    this.roadMask = new RoadMask(W, H, new THREE.Vector2(SX, this.SZ))
+    this.roadMask.render(this.renderer, world, new THREE.Vector2(SX, this.SZ))
+    uniforms.uRoads.value = this.roadMask.rt.texture
+    this.waterMat.uniforms.uRoads.value = this.roadMask.rt.texture
     this.water = new THREE.Mesh(new THREE.BufferGeometry(), this.waterMat)
     this.water.renderOrder = 2
     this.group.add(this.water)

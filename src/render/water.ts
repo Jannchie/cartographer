@@ -49,6 +49,8 @@ export function createWaterMaterial(
       uCloudOn: { value: 0 },
       uCarve: { value: null as THREE.Texture | null },
       uCarveMap: { value: size },
+      uRoads: { value: null as THREE.Texture | null },
+      uRoadOn: { value: 0 },
     },
     vertexShader: WATER_VERT,
     fragmentShader: WATER_FRAG,
@@ -108,6 +110,8 @@ const WATER_FRAG = /* glsl */ `
       uniform vec4 uCloudRect;
       uniform float uCloudY;
       uniform float uCloudOn;
+      uniform sampler2D uRoads;
+      uniform float uRoadOn;
       varying vec3 vWorld;
       #ifdef RIVER
       varying float vSide;
@@ -230,6 +234,13 @@ const WATER_FRAG = /* glsl */ `
         float caps = 0.0;
         float foam = clamp(shoreFoam + caps, 0.0, 1.0);
         col = mix(col, vec3(0.95, 0.97, 0.98) * uLight * (0.6 + 0.4 * cs), foam * 0.9);
+        #ifndef RIVER
+        // 航线：海面上一道淡白虚线
+        if (uRoadOn > 0.5 && !lake && !outside) {
+          float route = texture2D(uRoads, uv).g;
+          col = mix(col, vec3(0.92, 0.96, 0.97) * uLight, route * 0.55);
+        }
+        #endif
 
         // 海冰
         if (!outside) {

@@ -25,6 +25,9 @@ export interface TerrainUniforms {
   uPatch: { value: THREE.Vector4 }
   uColorSize: { value: THREE.Vector2 }
   uMaskSize: { value: THREE.Vector2 }
+  /** 道路遮罩（roads3d.ts）；uRoadOn 为 0 时不画 */
+  uRoads: { value: THREE.Texture | null }
+  uRoadOn: { value: number }
 }
 
 /** 顶点着色器：高度、坡度、侵蚀值都取自烘焙纹理（一次采样） */
@@ -107,6 +110,8 @@ export function createTerrainMaterial(
     uMaskSize: { value: new THREE.Vector2(hSize.x, hSize.y) },
     uBOrigin: { value: new THREE.Vector2(0, 0) },
     uPatch: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uRoads: { value: null },
+    uRoadOn: { value: 0 },
   }
   const compile = (u: TerrainUniforms, isPatch: boolean) => (sh: THREE.WebGLProgramParametersWithUniforms) => {
     Object.assign(sh.uniforms, u)
@@ -136,6 +141,8 @@ uniform float uCloudOn;
 uniform vec3 uSun;
 uniform float uDetail;
 uniform vec4 uPatch;
+uniform sampler2D uRoads;
+uniform float uRoadOn;
 varying float vErosion;
 ${NOISE_GLSL}
 ${HEIGHT_GLSL}
@@ -376,6 +383,15 @@ if (hKm > 0.0) {
   col *= mix(1.0, mix(0.78, 1.12, smoothstep(0.15, 0.85, vErosion)), mnt);
   // 近景：沟暗脊亮的顺坡冲刷纹，取代被放大的低分辨率底色斑
   col *= mix(1.0, 0.76 + 0.44 * smoothstep(0.15, 0.85, gEr.x), gErK);
+}
+// 道路：压实的土路，两侧一道被车辙踩暗的路肩
+if (uRoadOn > 0.5 && hKm > 0.0) {
+  vec4 rd = texture2D(uRoads, vWorld.xz / uMapSize + 0.5);
+  if (rd.r > 0.004) {
+    col = mix(col, col * vec3(0.62, 0.6, 0.55), smoothstep(0.0, 0.3, rd.r) * 0.6);
+    vec3 dirt = mix(vec3(0.5, 0.4, 0.25), vec3(0.6, 0.52, 0.36), rd.b) * (0.92 + 0.12 * vnoise(vWorld.xz * 60.0));
+    col = mix(col, dirt, smoothstep(0.3, 0.75, rd.r));
+  }
 }
 col *= mix(1.0, gAO, 0.5);
 diffuseColor.rgb *= col;
