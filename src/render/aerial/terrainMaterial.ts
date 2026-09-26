@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { NOISE_GLSL } from './glsl'
+import { BAKED_GLSL } from './bake'
 import { HEIGHT_GLSL } from './heightGLSL'
 
 export interface TerrainUniforms {
@@ -15,42 +16,30 @@ export interface TerrainUniforms {
   uHSize: { value: THREE.Vector2 }
   uMapSize: { value: THREE.Vector2 }
   uDetailKm: { value: number }
+  uBaked: { value: THREE.Texture | null }
+  uGSize: { value: THREE.Vector2 }
+  uBMapSize: { value: THREE.Vector2 }
 }
 
-/** 顶点着色器：高度在 GPU 上由双三次插值 + 亚网格细节求得，法线用有限差分 */
+/** 顶点着色器：高度、坡度、侵蚀值都取自烘焙纹理（一次采样） */
 const VERTEX_HEIGHT = /* glsl */ `
-  vec2 xzP = position.xz;
-  float eN = uMapSize.x / (uHSize.x - 1.0) * 0.5;
-  float b0 = bicubicHeight(xzP);
-  vec2 gB = vec2(bicubicHeight(xzP + vec2(eN, 0.0)) - b0, bicubicHeight(xzP + vec2(0.0, eN)) - b0) / eN; // km / 世界单位
-  float slope = length(gB) * uVScale;
-  float amp = detailAmp(b0, slope);
-  vec3 er = amp > 0.0 ? erosionNoise(xzP, gB * uVScale, 4, 2.3) : vec3(0.0);
-  float hC = b0 + amp * (er.x - 0.15);
-  vec2 gT = gB + amp * er.yz;
-  vErosion = er.x;
-  vec3 objectNormal = normalize(vec3(-gT.x * uVScale, 1.0, -gT.y * uVScale));
-`
-
-const DEPTH_HEIGHT = /* glsl */ `
-  float eN = uMapSize.x / (uHSize.x - 1.0) * 0.5;
-  float b0 = bicubicHeight(position.xz);
-  vec2 gB = vec2(bicubicHeight(position.xz + vec2(eN, 0.0)) - b0, bicubicHeight(position.xz + vec2(0.0, eN)) - b0) / eN;
-  float amp = detailAmp(b0, length(gB) * uVScale);
-  float hC = b0 + (amp > 0.0 ? amp * (erosionNoise(position.xz, gB * uVScale, 4, 2.3).x - 0.15) : 0.0);
+  vec4 B = bakedAt(position.xz);
+  float hC = B.x;
+  vErosion = B.w;
+  vec3 objectNormal = normalize(vec3(-B.y * uVScale, 1.0, -B.z * uVScale));
 `
 
 function injectVertex(sh: THREE.WebGLProgramParametersWithUniforms, withNormal: boolean) {
   sh.vertexShader = sh.vertexShader.replace(
     '#include <common>',
-    `#include <common>\nuniform float uVScale;\n${NOISE_GLSL}\n${HEIGHT_GLSL}\nvarying vec3 vWorld;\nvarying float vErosion;`,
+    `#include <common>\nuniform float uVScale;\n${BAKED_GLSL}\nvarying vec3 vWorld;\nvarying float vErosion;`,
   )
   if (withNormal) sh.vertexShader = sh.vertexShader.replace('#include <beginnormal_vertex>', VERTEX_HEIGHT)
-  // 深度材质的顶点着色器里没有法线段，高度在这里求
+  // 深度材质的顶点着色器里没有法线段，高度在这里取
   sh.vertexShader = sh.vertexShader
     .replace(
       '#include <begin_vertex>',
-      (withNormal ? '' : DEPTH_HEIGHT) + 'vec3 transformed = vec3(position.x, hC * uVScale, position.z);',
+      (withNormal ? '' : 'float hC = bakedAt(position.xz).x;\n') + 'vec3 transformed = vec3(position.x, hC * uVScale, position.z);',
     )
     .replace('#include <project_vertex>', '#include <project_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
 }
@@ -86,6 +75,9 @@ export function createTerrainMaterial(
     uHSize: { value: hSize },
     uMapSize: { value: mapSize },
     uDetailKm: { value: 1 },
+    uBaked: { value: null },
+    uGSize: { value: new THREE.Vector2(1, 1) },
+    uBMapSize: { value: mapSize },
   }
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms)
@@ -130,13 +122,7 @@ float crownShade(vec3 c, vec3 L, float r) {
   vec3 n = normalize(vec3(c.x, sqrt(r * r - c.z * c.z) * 1.1, c.y));
   return 0.5 + 0.75 * max(dot(n, L), 0.0);
 }
-float detailH(vec2 p, vec4 m) {
-  float h = fbm3(p * 5.0) * 0.5;
-  // 树冠的鼓包
-  h += (1.0 - smoothstep(0.1, 0.8, cells(p * 34.0))) * m.r * 0.5 * gLod2;
-  h += (1.0 - smoothstep(0.15, 0.9, cells(p * 11.0))) * m.r * 0.35 * gLod1;
-  return h;
-}`,
+`,
       )
       .replace(
         '#include <map_fragment>',
@@ -160,20 +146,18 @@ if (hKm > 0.0) {
   col *= mix(vec3(0.9, 0.95, 0.9), vec3(1.06, 1.0, 0.9), hue);
   float lum = dot(col, vec3(0.3, 0.59, 0.11));
   col = mix(vec3(lum), col, 0.86);
-  // 草地与灌丛的斑驳
-  float patchy = fbm3(P * 7.0);
-  col *= 0.88 + 0.24 * mix(0.5, patchy, gLod1);
+  // 草地与灌丛的细斑驳（幅度小、频率高，远处淡出）
+  float patchy = fbm3(P * 11.0);
+  col *= 0.95 + 0.1 * mix(0.5, patchy, gLod1);
   // 树冠
   float f = gMask.r;
   if (f > 0.01) {
     vec3 Ls = normalize(uSun);
-    // 三个尺度的树冠：林冠团块、单株树冠、近景细冠
-    float s0 = crownShade(crownCell(P * 4.0), Ls, 0.62);
-    float s1 = crownShade(crownCell(P * 13.0), Ls, 0.58);
-    float s2 = crownShade(crownCell(P * 40.0), Ls, 0.55);
-    float gLod0 = 1.0 - smoothstep(0.06, 0.2, fw);
-    float crown = mix(0.85, s0, gLod0 * 0.6) * mix(0.85, s1, gLod1) * mix(0.9, s2, gLod2);
-    vec3 leaf = base * mix(vec3(0.6, 0.68, 0.58), vec3(1.25, 1.28, 1.08), clamp(crown * 0.9, 0.0, 1.0));
+    // 单株树冠 + 近景细冠；远处淡出为均匀的林冠色，不再出现大块斑
+    float s1 = crownShade(crownCell(P * 16.0), Ls, 0.6);
+    float s2 = crownShade(crownCell(P * 44.0), Ls, 0.56);
+    float crown = mix(0.8, s1, gLod1 * 0.8) * mix(0.9, s2, gLod2 * 0.7);
+    vec3 leaf = base * mix(vec3(0.74, 0.8, 0.72), vec3(1.14, 1.16, 1.02), clamp(crown * 0.95, 0.0, 1.0));
     leaf *= mix(vec3(0.95, 1.0, 0.92), vec3(1.05, 1.02, 0.85), fbm3(P * 3.1 + 7.0));
     col = mix(col, leaf, f);
   }
@@ -216,11 +200,7 @@ diffuseColor.rgb *= col;
         `#include <normal_fragment_maps>
 if (vWorld.y > 0.0 && uDetail > 0.0) {
   vec2 Q = vWorld.xz;
-  float e = 0.004;
-  float h0 = detailH(Q, gMask);
-  float hx = detailH(Q + vec2(e, 0.0), gMask);
-  float hz = detailH(Q + vec2(0.0, e), gMask);
-  vec3 dW = vec3(-(hx - h0) / e, 0.0, -(hz - h0) / e) * 0.012 * uDetail;
+  vec3 dW = vec3(0.0);
   // 逐像素风化法线：沿当前坡向的细冲沟（相当于一张程序化的侵蚀法线贴图）
   vec3 wN = normalize(inverseTransformDirection(normal, viewMatrix));
   float st = 1.0 - wN.y;

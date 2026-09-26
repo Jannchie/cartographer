@@ -260,7 +260,7 @@ const MARCH_FRAG = /* glsl */ `
         // 向太阳的自阴影
         float sumL = 0.0;
         vec3 lp = p;
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 4; j++) {
           lp += L * lstep * (1.0 + float(j) * 0.6);
           sumL += density(lp, true) * lstep * (1.0 + float(j) * 0.6);
         }
@@ -381,7 +381,7 @@ export class VolumetricClouds {
         uFogColor: { value: new THREE.Color('#a9c6e4') },
         uFogDensity: { value: 0.0036 },
         uTime: { value: 0 },
-        uSteps: { value: 56 },
+        uSteps: { value: 44 },
         uMapRect: { value: new THREE.Vector4(-SX / 2, -SZ / 2, SX, SZ) },
         uEnabled: { value: 1 },
       },

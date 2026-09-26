@@ -84,7 +84,7 @@ vec3 erosionNoise(vec2 p, vec2 grad, int octaves, float freq) {
 /** 细节幅度（km）：山地强、平原弱、海岸为零 */
 float detailAmp(float h, float slope) {
   if (h <= 0.0) return 0.0;
-  return smoothstep(0.02, 0.3, h) * (0.02 + 0.34 * smoothstep(0.25, 3.0, h)) * (0.4 + 0.6 * smoothstep(0.05, 0.6, slope)) * uDetailKm;
+  return smoothstep(0.02, 0.3, h) * (0.02 + 0.34 * smoothstep(0.25, 3.0, h)) * (0.08 + 0.92 * smoothstep(0.08, 0.6, slope)) * uDetailKm;
 }
 
 float terrainHeight(vec2 xz) {

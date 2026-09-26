@@ -254,7 +254,7 @@ function setMode(m: '3d' | '2d') {
   $('#view3d').classList.toggle('hidden', m !== '3d')
   $('#view2d').classList.toggle('hidden', m !== '2d')
   scene.active = m === '3d'
-  $('#hint').textContent = m === '3d' ? '拖动旋转 · 右键平移 · 滚轮缩放' : '拖动平移 · 滚轮缩放 · 双击复位'
+  $('#hint').textContent = m === '3d' ? '拖动旋转 · 右键平移 · 滚轮缩放 · P 性能' : '拖动平移 · 滚轮缩放 · 双击复位'
   if (m === '2d' && world) refreshAtlas()
 }
 

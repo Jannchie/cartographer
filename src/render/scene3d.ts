@@ -5,6 +5,7 @@ import { buildMaterialMask } from './aerial/mask'
 import { createSky } from './aerial/sky'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
+import { TerrainBake } from './aerial/bake'
 import { createWaterMaterial } from './water'
 
 export interface View3DOptions {
@@ -45,6 +46,11 @@ export class Scene3D {
   private maskTex: THREE.DataTexture | null = null
   private terrainU: TerrainUniforms | null = null
   private clouds: VolumetricClouds | null = null
+  private bake: TerrainBake | null = null
+  private lastInteract = 0
+  private frame = 0
+  /** 性能读数（按 P 开关）：帧率、GPU 耗时（EXT_disjoint_timer_query_webgl2） */
+  private perf: { el: HTMLDivElement; ext: any; pending: WebGLQuery[]; gpu: number; frames: number; t0: number } | null = null
   private sky = createSky()
   private outer: THREE.Mesh | null = null
   private fog = new THREE.FogExp2(HAZE.getHex(), 0.0036)
@@ -63,6 +69,8 @@ export class Scene3D {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.05
     this.renderer.shadowMap.enabled = true
+    // 地形与植被都是静态的：阴影只在太阳或地形变化时重绘
+    this.renderer.shadowMap.autoUpdate = false
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.setClearColor(0x000000, 0)
     container.appendChild(this.renderer.domElement)
@@ -105,15 +113,68 @@ export class Scene3D {
     new ResizeObserver(() => this.resize()).observe(container)
     this.resize()
     this.updateSun()
+    // 交互检测：镜头静止 1.5 秒后降到 30 fps（水波、云的缓慢变化看不出差别）
+    const touch = () => (this.lastInteract = performance.now())
+    this.controls.addEventListener('change', touch)
+    this.renderer.domElement.addEventListener('pointerdown', touch)
+    this.renderer.domElement.addEventListener('wheel', touch, { passive: true })
     const loop = () => {
       this.raf = requestAnimationFrame(loop)
       if (!this.active) return
       this.controls.update()
-      if (this.waterMat) this.waterMat.uniforms.uTime.value = this.clock.getElapsedTime()
+      this.frame++
+      if (performance.now() - this.lastInteract > 1500 && this.frame % 2) return
+      const pf = this.perf
+      const gl = this.renderer.getContext() as WebGL2RenderingContext
+      let q: WebGLQuery | null = null
+      if (pf?.ext && pf.pending.length < 3) {
+        q = gl.createQuery()
+        gl.beginQuery(pf.ext.TIME_ELAPSED_EXT, q!)
+      }      if (this.waterMat) this.waterMat.uniforms.uTime.value = this.clock.getElapsedTime()
       this.renderFrame()
+      if (pf) {
+        if (q) {
+          gl.endQuery(pf.ext.TIME_ELAPSED_EXT)
+          pf.pending.push(q)
+        }
+        while (pf.pending.length && gl.getQueryParameter(pf.pending[0], gl.QUERY_RESULT_AVAILABLE)) {
+          const done = pf.pending.shift()!
+          const ns = gl.getQueryParameter(done, gl.QUERY_RESULT) as number
+          pf.gpu = pf.gpu * 0.9 + (ns / 1e6) * 0.1
+          gl.deleteQuery(done)
+        }
+        pf.frames++
+        const now = performance.now()
+        if (now - pf.t0 > 500) {
+          const fps = (pf.frames * 1000) / (now - pf.t0)
+          const c = this.renderer.domElement
+          pf.el.textContent = `${fps.toFixed(0)} fps · GPU ${pf.ext ? pf.gpu.toFixed(1) + ' ms' : 'n/a'} · ${c.width}×${c.height}`
+          pf.frames = 0
+          pf.t0 = now
+        }
+      }
       this.updateLabels()
     }
     loop()
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'p' && e.key !== 'P') return
+      if ((e.target as HTMLElement)?.tagName === 'INPUT') return
+      this.togglePerf()
+    })
+  }
+
+  togglePerf() {
+    if (this.perf) {
+      this.perf.el.remove()
+      this.perf = null
+      return
+    }
+    const el = document.createElement('div')
+    el.className = 'perf'
+    el.textContent = '…'
+    this.container.appendChild(el)
+    const ext = (this.renderer.getContext() as WebGL2RenderingContext).getExtension('EXT_disjoint_timer_query_webgl2')
+    this.perf = { el, ext, pending: [], gpu: 0, frames: 0, t0: performance.now() }
   }
 
   get vScale() {
@@ -147,7 +208,11 @@ export class Scene3D {
     const prev = this.opts
     this.opts = { ...this.opts, ...o }
     if (o.exaggeration !== undefined && o.exaggeration !== prev.exaggeration && this.world) this.rebuildGeometry()
-    if (o.trees !== undefined) for (const t of this.trees) t.visible = this.opts.trees
+    if (o.trees !== undefined) {
+      for (const t of this.trees) t.visible = this.opts.trees
+      this.renderer.shadowMap.needsUpdate = true
+    }
+    this.lastInteract = performance.now()
     if (o.sunAzimuth !== undefined || o.sunElevation !== undefined) this.updateSun()
     if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
     if (o.look !== undefined || o.clouds !== undefined) this.applyLook()
@@ -168,10 +233,17 @@ export class Scene3D {
       this.waterMat.uniforms.uFogDensity.value = 0
     }
     this.renderer.toneMappingExposure = aerial ? 1.0 : 1.05
+    // 航拍管线有 HDR 目标 + 多重采样，高 DPI 屏上限制像素比
+    const pr = Math.min(aerial ? 1.5 : 2, window.devicePixelRatio)
+    if (this.renderer.getPixelRatio() !== pr) {
+      this.renderer.setPixelRatio(pr)
+      this.resize()
+    }
     this.updateSun()
   }
 
   private updateSun() {
+    this.renderer.shadowMap.needsUpdate = true
     const az = (this.opts.sunAzimuth * Math.PI) / 180
     const el = (this.opts.sunElevation * Math.PI) / 180
     const d = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az))
@@ -317,6 +389,18 @@ export class Scene3D {
     const vs = this.vScale
     this.terrain!.geometry.dispose()
     this.terrain!.geometry = this.terrainGeometry(w, vs)
+    // 烘焙高度/坡度/侵蚀（换世界或改垂直夸张时）
+    const { GW, GH } = this.gridDims(w)
+    if (!this.bake || this.bake.GW !== GW || this.bake.GH !== GH) {
+      this.bake?.dispose()
+      this.bake = new TerrainBake(GW, GH, this.heightTex!, new THREE.Vector2(w.W, w.H), new THREE.Vector2(SX, this.SZ))
+    }
+    this.bake.bake(this.renderer, vs)
+    for (const u of [this.terrainU!, this.waterMat!.uniforms as unknown as TerrainUniforms]) {
+      u.uBaked.value = this.bake.rt.texture
+      u.uGSize.value.set(GW, GH)
+    }
+    this.renderer.shadowMap.needsUpdate = true
     this.water!.geometry.dispose()
     this.water!.geometry = this.waterGeometry(w, vs)
     this.waterMat!.uniforms.uVScale.value = vs
@@ -362,11 +446,14 @@ export class Scene3D {
    * 地形网格：比高度图更密（约 2 倍），高度与法线都在顶点着色器里由
    * 双三次插值 + 亚网格细节求得，这里只给平面坐标和贴图坐标。
    */
+  private gridDims(w: World) {
+    const d = Math.min(2, Math.sqrt(3.2e6 / (w.W * w.H)))
+    return { GW: Math.round((w.W - 1) * d) + 1, GH: Math.round((w.H - 1) * d) + 1 }
+  }
+
   private terrainGeometry(w: World, _vs: number) {
     const { W, H } = w
-    const d = Math.min(2, Math.sqrt(3.2e6 / (W * H)))
-    const GW = Math.round((W - 1) * d) + 1
-    const GH = Math.round((H - 1) * d) + 1
+    const { GW, GH } = this.gridDims(w)
     const pos = new Float32Array(GW * GH * 3)
     const uv = new Float32Array(GW * GH * 2)
     for (let y = 0; y < GH; y++) {

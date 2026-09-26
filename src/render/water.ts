@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { NOISE_GLSL } from './aerial/glsl'
-import { HEIGHT_GLSL } from './aerial/heightGLSL'
+import { BAKED_GLSL } from './aerial/bake'
 
 /**
  * 水体着色器（按光学吸收建模）：
@@ -25,9 +25,9 @@ export function createWaterMaterial(
     depthWrite: true,
     uniforms: {
       uHeight: { value: heightTex },
-      uHSize: { value: hSize },
-      uMapSize: { value: size },
-      uDetailKm: { value: 1 },
+      uBaked: { value: null as THREE.Texture | null },
+      uGSize: { value: new THREE.Vector2(hSize.x, hSize.y) },
+      uBMapSize: { value: size },
       uTemp: { value: tempTex },
       uColor: { value: colorTex },
       uVScale: { value: vScale },
@@ -76,7 +76,7 @@ export function createWaterMaterial(
       uniform float uCloudOn;
       varying vec3 vWorld;
       ${NOISE_GLSL}
-      ${HEIGHT_GLSL}
+      ${BAKED_GLSL}
 
       float waves(vec2 p, float lod) {
         float t = uTime;
@@ -91,7 +91,7 @@ export function createWaterMaterial(
       void main() {
         vec2 uv = vec2(vWorld.x / uSize.x + 0.5, vWorld.z / uSize.y + 0.5);
         bool outside = uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0;
-        float terrain = outside ? -4.5 : bicubicHeight(vWorld.xz);
+        float terrain = outside ? -4.5 : bakedAt(vWorld.xz).x;
         float level = vWorld.y / uVScale;
         float depth = level - terrain;
         if (depth < 0.0) discard;
@@ -170,7 +170,7 @@ export function createWaterMaterial(
           if (lake) shoreFoam *= 0.25;
         }
         // 外海白浪
-        float caps = smoothstep(0.86, 0.92, fbm3(P * 5.0 + vec2(uTime * 0.05, -uTime * 0.04))) * smoothstep(60.0, 250.0, dm) * 0.35 * lod;
+        float caps = 0.0;
         float foam = clamp(shoreFoam + caps, 0.0, 1.0);
         col = mix(col, vec3(0.95, 0.97, 0.98) * uLight * (0.6 + 0.4 * cs), foam * 0.9);
 

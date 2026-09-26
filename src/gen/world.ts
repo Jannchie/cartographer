@@ -122,8 +122,16 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}): Wo
   for (const lk of hydro.lakes) {
     if (!lk.cells.length) continue
     let lv = -Infinity
-    for (const c of lk.cells) lv = Math.max(lv, elev[c])
-    lk.level = lv + 0.002
+    let rim = Infinity
+    for (const c of lk.cells) {
+      lv = Math.max(lv, elev[c])
+      for (const o of [1, -1, W, -W]) {
+        const j = c + o
+        if (j >= 0 && j < elev.length && hydro.lakeId[j] < 0 && elev[j] > 0) rim = Math.min(rim, elev[j])
+      }
+    }
+    // 湖面不高过湖岸最低处，水不会漫出湖盆
+    lk.level = Math.min(lv, rim)
     for (const c of lk.cells) hydro.lakeLevel[c] = lk.level
   }
   const rivers = extractRivers(hydro, elev, W, H)
