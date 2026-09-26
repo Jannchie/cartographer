@@ -40,10 +40,12 @@ export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale 
     cg[i] = c[1]
     cb[i] = c[2]
   }
-  // 群系边界轻度羽化
-  softBlur(cr, W, H)
-  softBlur(cg, W, H)
-  softBlur(cb, W, H)
+  // 陆、海分开羽化（归一化卷积），岸线两侧的颜色互不渗透
+  const isLand = new Float32Array(N)
+  for (let i = 0; i < N; i++) isLand[i] = e[i] > 0 ? 1 : 0
+  const [lr, lg, lb] = maskedBlur([cr, cg, cb], isLand, W, H)
+  const isSea = isLand.map((v) => 1 - v)
+  const [sr, sg, sb] = maskedBlur([cr, cg, cb], isSea, W, H)
 
   const TW = W * scale
   const TH = H * scale
@@ -75,10 +77,11 @@ export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale 
       const x0 = Math.min(W - 2, Math.floor(gx))
       const fx = gx - x0
       const i = y0 * W + x0
-      let r = bil(cr, x0, y0, fx, fy)
-      let g = bil(cg, x0, y0, fx, fy)
-      let b = bil(cb, x0, y0, fx, fy)
       const h = bil(e, x0, y0, fx, fy)
+      const onLand = h > 0
+      let r = bil(onLand ? lr : sr, x0, y0, fx, fy)
+      let g = bil(onLand ? lg : sg, x0, y0, fx, fy)
+      let b = bil(onLand ? lb : sb, x0, y0, fx, fy)
       const o = (py * TW + px) * 4
       let roughV = 235
       if (h > 0 && biome[i] !== Biome.Lake) {
@@ -88,7 +91,7 @@ export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale 
         const gyv = (e[yp * W + x0] - e[ym * W + x0]) / ((yp - ym) * km)
         const slope = Math.hypot(gxv, gyv)
         // 裸岩：陡坡
-        const rock = smooth(0.12, 0.3, slope) * 0.85
+        const rock = smooth(0.16, 0.36, slope) * 0.45
         r += (122 - r) * rock
         g += (113 - g) * rock
         b += (102 - b) * rock
@@ -119,12 +122,22 @@ export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale 
   rctx.putImageData(rimg, 0, 0)
 
   // 河流：稍深的水色，粗糙度低 → 在阳光下会闪光
-  drawRivers(ctx, rivers, W, scale, 'rgba(58, 96, 116, 0.95)', 1.1)
-  drawRivers(rctx, rivers, W, scale, "rgb(120,120,120)", 1.1)
+  drawRivers(ctx, rivers, W, scale, 'rgba(52, 88, 104, 0.9)', 0.85, 2.5)
+  drawRivers(rctx, rivers, W, scale, 'rgb(120,120,120)', 0.85, 2.5)
   return { color: canvas, roughness: rough }
 }
 
-function softBlur(a: Float32Array, W: number, H: number) {
+/** 归一化卷积：只用 mask=1 的格求加权平均，并外推到 mask=0 的格 */
+function maskedBlur(ch: Float32Array[], mask: Float32Array, W: number, H: number): Float32Array[] {
+  const den = Float32Array.from(mask)
+  const nums = ch.map((c) => c.map((v, i) => v * mask[i]))
+  for (let pass = 0; pass < 3; pass++) {
+    for (const a of [den, ...nums]) box3(a, W, H)
+  }
+  return nums.map((n, k) => n.map((v, i) => (den[i] > 1e-4 ? v / den[i] : ch[k][i])))
+}
+
+function box3(a: Float32Array, W: number, H: number) {
   const t = new Float32Array(a.length)
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {

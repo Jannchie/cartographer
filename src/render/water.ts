@@ -1,44 +1,53 @@
 import * as THREE from 'three'
+import { NOISE_GLSL } from './aerial/glsl'
 
 /**
- * 水面着色器：按真实水深（km，不受垂直夸张影响）混合浅滩青绿与深海蓝，
- * 动态法线的涟漪、菲涅尔天空反射、太阳高光、近岸浪花。
- * 海洋与湖泊共用一张网格，湖泊水面高于海平面。
+ * 水体着色器（按光学吸收建模）：
+ * - 光线穿过水层往返两次，按 Beer–Lambert 定律逐通道衰减（红光最先被吸收），
+ *   于是浅滩白沙上是明亮的青绿、陆架是湖蓝、深海是藏青——不需要手调色带
+ * - 海底颜色取自地表贴图，并在浅水里叠加珊瑚礁/海草暗斑
+ * - 多层动态法线、菲涅尔天空反射、太阳高光带
+ * - 碎浪：沿岸推进的白色浪线 + 礁缘碎浪 + 外海零星白浪
+ * - 云影、空气透视（雾）、海冰
+ * 海洋、湖泊与地图外延伸到地平线的外海共用这一材质。
  */
-export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Texture, vScale: number, size: THREE.Vector2) {
+export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Texture, colorTex: THREE.Texture, vScale: number, size: THREE.Vector2) {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: true,
-    fog: false,
     uniforms: {
       uHeight: { value: heightTex },
       uTemp: { value: tempTex },
+      uColor: { value: colorTex },
       uVScale: { value: vScale },
       uSize: { value: size },
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0.5, 0.6, 0.3).normalize() },
       uSunColor: { value: new THREE.Color(1, 0.95, 0.85) },
-      uSkyTop: { value: new THREE.Color('#5d7fa3') },
-      uSkyHorizon: { value: new THREE.Color('#c9d6df') },
-      uShallow: { value: new THREE.Color('#2b8a92') },
-      uMid: { value: new THREE.Color('#15526c') },
-      uDeep: { value: new THREE.Color('#0a2440') },
-      uLake: { value: new THREE.Color('#2c6f78') },
+      uSkyTop: { value: new THREE.Color('#3f6fa8') },
+      uSkyHorizon: { value: new THREE.Color('#bcd3e6') },
+      uDeep: { value: new THREE.Color('#0a3470') },
+      uLake: { value: new THREE.Color('#1f5560') },
       uLight: { value: 1 },
+      uFogColor: { value: new THREE.Color('#bcd3e6') },
+      uFogDensity: { value: 0 },
+      uCloud: { value: null as THREE.Texture | null },
+      uCloudRect: { value: new THREE.Vector4(-100, -100, 200, 200) },
+      uCloudY: { value: 3 },
+      uCloudOn: { value: 0 },
     },
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
-      varying vec2 vUv;
       void main() {
         vec4 w = modelMatrix * vec4(position, 1.0);
         vWorld = w.xyz;
-        vUv = uv;
         gl_Position = projectionMatrix * viewMatrix * w;
       }
     `,
     fragmentShader: /* glsl */ `
       uniform sampler2D uHeight;
       uniform sampler2D uTemp;
+      uniform sampler2D uColor;
       uniform float uVScale;
       uniform vec2 uSize;
       uniform float uTime;
@@ -46,86 +55,132 @@ export function createWaterMaterial(heightTex: THREE.Texture, tempTex: THREE.Tex
       uniform vec3 uSunColor;
       uniform vec3 uSkyTop;
       uniform vec3 uSkyHorizon;
-      uniform vec3 uShallow;
-      uniform vec3 uMid;
       uniform vec3 uDeep;
       uniform vec3 uLake;
       uniform float uLight;
+      uniform vec3 uFogColor;
+      uniform float uFogDensity;
+      uniform sampler2D uCloud;
+      uniform vec4 uCloudRect;
+      uniform float uCloudY;
+      uniform float uCloudOn;
       varying vec3 vWorld;
-      varying vec2 vUv;
+      ${NOISE_GLSL}
 
-      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float vnoise(vec2 p) {
-        vec2 i = floor(p), f = fract(p);
-        vec2 u = f * f * (3.0 - 2.0 * f);
-        return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
-      }
-      float waves(vec2 p) {
+      float waves(vec2 p, float lod) {
         float t = uTime;
         float h = 0.0;
-        h += vnoise(p * 2.2 + vec2(t * 0.22, t * 0.13)) * 0.5;
-        h += vnoise(p * 4.7 - vec2(t * 0.31, -t * 0.18)) * 0.25;
-        h += vnoise(p * 9.3 + vec2(-t * 0.4, t * 0.35)) * 0.125;
+        h += vnoise(p * 1.3 + vec2(t * 0.12, t * 0.07)) * 0.5;
+        h += vnoise(p * 3.1 - vec2(t * 0.2, -t * 0.13)) * 0.25;
+        h += vnoise(p * 7.7 + vec2(-t * 0.33, t * 0.27)) * 0.14 * lod;
+        h += vnoise(p * 17.0 + vec2(t * 0.5, t * 0.41)) * 0.07 * lod;
         return h;
       }
 
       void main() {
         vec2 uv = vec2(vWorld.x / uSize.x + 0.5, vWorld.z / uSize.y + 0.5);
-        float terrain = texture2D(uHeight, uv).r;
+        bool outside = uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0;
+        float terrain = outside ? -4.5 : texture2D(uHeight, uv).r;
         float level = vWorld.y / uVScale;
         float depth = level - terrain;
         if (depth < 0.0) discard;
         bool lake = level > 0.002;
+        // 米；颜色用的视觉水深压缩了陆架，让环礁浅滩呈现青绿
+        float dm = depth * 1000.0 * (lake ? 1.0 : 0.42);
+
+        vec2 P = vWorld.xz;
+        float fw = length(fwidth(P));
+        float lod = 1.0 - smoothstep(0.01, 0.05, fw);
 
         // 涟漪法线
-        vec2 p = vWorld.xz * 1.6;
-        float e = 0.04;
-        float h0 = waves(p);
-        float hx = waves(p + vec2(e, 0.0));
-        float hz = waves(p + vec2(0.0, e));
-        vec3 n = normalize(vec3(-(hx - h0) / e * 0.045, 1.0, -(hz - h0) / e * 0.045));
+        vec2 p = P * 2.2;
+        float e = 0.03;
+        float h0 = waves(p, lod);
+        float hx = waves(p + vec2(e, 0.0), lod);
+        float hz = waves(p + vec2(0.0, e), lod);
+        vec3 n = normalize(vec3(-(hx - h0) / e * 0.05, 1.0, -(hz - h0) / e * 0.05));
 
         vec3 V = normalize(cameraPosition - vWorld);
         vec3 L = normalize(uSunDir);
+        float sunUp = smoothstep(-0.05, 0.25, L.y);
 
-        // 水体颜色：深度越大越暗越蓝
-        float dk = depth;
-        vec3 body = mix(uShallow, uMid, smoothstep(0.0, 0.1, dk));
-        body = mix(body, uDeep, smoothstep(0.12, 2.5, dk));
-        if (lake) body = mix(uLake * 1.1, uLake * 0.55, smoothstep(0.0, 0.25, dk));
-        float diff = max(dot(vec3(0, 1, 0), L), 0.0) * 0.7 + 0.3;
-        body *= diff * uLight;
+        // 云影
+        float cs = 1.0;
+        if (uCloudOn > 0.5) {
+          vec2 cp = P + L.xz / max(L.y, 0.08) * (uCloudY - vWorld.y);
+          cs = 1.0 - 0.6 * smoothstep(0.05, 0.6, texture2D(uCloud, (cp - uCloudRect.xy) / uCloudRect.zw).r);
+        }
 
-        // 菲涅尔 + 天空反射
+        // —— 水体：海底经吸收后的颜色 + 水的散射色 ——
+        vec3 bed = outside ? vec3(0.0) : texture2D(uColor, uv).rgb;
+        // 浅水里的礁盘与海草：大块暗斑，边缘破碎
+        float reef = smoothstep(0.52, 0.62, fbm5(P * 2.4 + 3.0)) * (1.0 - smoothstep(4.0, 45.0, dm)) * smoothstep(1.5, 4.0, dm);
+        bed = mix(bed, bed * vec3(0.35, 0.42, 0.36), reef * 0.85);
+        float grass = smoothstep(0.55, 0.7, fbm3(P * 6.0 - 9.0)) * smoothstep(6.0, 15.0, dm) * (1.0 - smoothstep(25.0, 60.0, dm));
+        bed = mix(bed, bed * vec3(0.45, 0.55, 0.42), grass * 0.5);
+        // 极浅处是湿沙，偏暗；沙滩只在部分岸段出现
+        bed *= mix(0.72, 1.0, smoothstep(0.0, 2.5, dm));
+        float beachy = smoothstep(0.35, 0.6, fbm3(P * 1.7 + 11.0));
+        bed = mix(bed * vec3(0.8, 0.85, 0.82), bed, beachy);
+        // 光在水中往返的衰减（每米）
+        vec3 absorb = lake ? vec3(0.16, 0.07, 0.06) : vec3(0.1, 0.03, 0.016);
+        vec3 T = exp(-absorb * dm * 2.0);
+        vec3 scatter = lake ? uLake : uDeep;
+        float diff = (max(L.y, 0.0) * 0.8 + 0.2) * cs;
+        vec3 body = bed * T * diff * 1.25 + scatter * (1.0 - T) * (0.6 + 0.4 * cs);
+        // 浅水的阳光焦散
+        float caust = pow(abs(sin(P.x * 38.0 + h0 * 9.0) * sin(P.y * 41.0 - hx * 9.0)), 6.0) * (1.0 - smoothstep(1.0, 8.0, dm)) * lod;
+        body += vec3(0.9, 1.0, 0.95) * caust * 0.12 * cs;
+        body *= uLight;
+
+        // —— 反射 ——
         vec3 R = reflect(-V, n);
-        vec3 sky = mix(uSkyHorizon, uSkyTop, smoothstep(0.0, 0.6, R.y));
+        vec3 sky = mix(uSkyHorizon, uSkyTop, smoothstep(0.0, 0.5, R.y));
         float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
         vec3 col = mix(body, sky * uLight, fres * 0.85);
-
-        // 太阳高光
         vec3 Hh = normalize(L + V);
-        float spec = pow(max(dot(n, Hh), 0.0), 600.0) * 1.6 + pow(max(dot(n, Hh), 0.0), 40.0) * 0.08;
-        col += uSunColor * spec * smoothstep(-0.05, 0.2, L.y);
+        float nh = max(dot(n, Hh), 0.0);
+        float spec = pow(nh, 900.0) * 3.5 + pow(nh, 120.0) * 0.35 + pow(nh, 14.0) * 0.04;
+        col += uSunColor * spec * sunUp * cs;
 
-        // 近岸浪花：沿等深线推进的白色细带
-        float shore = smoothstep(0.018, 0.0, dk);
-        float band = smoothstep(0.55, 1.0, sin(dk * 900.0 - uTime * 1.6 + vnoise(p * 3.0) * 6.0) * 0.5 + 0.5);
-        float foam = shore * (0.35 + 0.65 * band) * (0.6 + 0.4 * vnoise(p * 12.0 + uTime));
-        if (lake) foam *= 0.12;
-        col = mix(col, vec3(0.93, 0.96, 0.97) * uLight, clamp(foam, 0.0, 0.85));
+        // —— 碎浪 ——
+        float shoreFoam = 0.0;
+        if (!outside) {
+          // 沿岸：一道道向岸推进的浪线
+          float band = sin(dm * 1.4 - uTime * 1.3 + fbm3(P * 3.0) * 8.0);
+          float breakZone = 1.0 - smoothstep(0.0, lake ? 0.8 : 2.2, dm);
+          shoreFoam = breakZone * (smoothstep(0.6, 0.95, band) * 0.6 + (1.0 - smoothstep(0.0, 0.5, dm)) * 0.6);
+          shoreFoam *= smoothstep(0.35, 0.65, fbm3(P * 7.0 + vec2(uTime * 0.08, 0.0)));
+          // 迎浪岸段碎浪强、背风湾里几乎没有
+          shoreFoam *= smoothstep(0.3, 0.7, fbm3(P * 0.9 - 5.0));
+          // 礁缘碎浪
+          shoreFoam += reef * smoothstep(0.62, 0.78, fbm3(P * 9.0 + uTime * 0.2)) * 0.35 * (1.0 - smoothstep(3.0, 12.0, dm));
+          shoreFoam *= 0.55 + 0.45 * fbm3(P * 26.0 + vec2(uTime * 0.3, 0.0));
+          if (lake) shoreFoam *= 0.25;
+        }
+        // 外海白浪
+        float caps = smoothstep(0.83, 0.9, fbm3(P * 5.0 + vec2(uTime * 0.05, -uTime * 0.04))) * smoothstep(40.0, 200.0, dm) * 0.5 * lod;
+        float foam = clamp(shoreFoam + caps, 0.0, 1.0);
+        col = mix(col, vec3(0.95, 0.97, 0.98) * uLight * (0.6 + 0.4 * cs), foam * 0.9);
 
-        // 海冰 / 冰封湖面：年均温足够低的水面结冰，边缘破碎成浮冰
-        float T = texture2D(uTemp, uv).r;
-        float floe = vnoise(vWorld.xz * 3.0) * 0.6 + vnoise(vWorld.xz * 9.0) * 0.4;
-        float ice = smoothstep(-6.5, -9.5, T + (floe - 0.5) * 5.0);
-        vec3 iceCol = mix(vec3(0.78, 0.86, 0.9), vec3(0.95, 0.97, 0.98), floe) * (max(L.y, 0.0) * 0.6 + 0.45) * uLight;
+        // 海冰
+        if (!outside) {
+          float Tc = texture2D(uTemp, uv).r;
+          float floe = vnoise(P * 3.0) * 0.6 + vnoise(P * 9.0) * 0.4;
+          float ice = smoothstep(-6.5, -9.5, Tc + (floe - 0.5) * 5.0);
+          vec3 iceCol = mix(vec3(0.78, 0.86, 0.9), vec3(0.95, 0.97, 0.98), floe) * (max(L.y, 0.0) * 0.6 + 0.45) * uLight;
+          col = mix(col, iceCol, ice);
+        }
 
-        // 透明度：浅处透出海底
-        float alpha = mix(0.5, 0.97, smoothstep(0.0, 0.06, dk));
-        alpha = max(alpha, fres * 0.9);
+        // 岸边与沙滩柔和衔接
+        float alpha = smoothstep(0.0, 0.6, dm);
         alpha = max(alpha, foam);
-        col = mix(col, iceCol, ice);
-        alpha = mix(alpha, 1.0, ice);
+
+        // 空气透视
+        float dist = length(cameraPosition - vWorld);
+        float fog = 1.0 - exp(-pow(uFogDensity * dist, 2.0));
+        col = mix(col, uFogColor, fog);
+
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>

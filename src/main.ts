@@ -11,7 +11,7 @@ const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySele
 
 // —— 状态 ——
 const params: WorldParams = { ...DEFAULT_PARAMS, ...readHash() }
-const view3d: View3DOptions = { exaggeration: 26, trees: true, labels: true, sunAzimuth: 225, sunElevation: 32 }
+const view3d: View3DOptions = { exaggeration: 28, trees: false, labels: true, sunAzimuth: 225, sunElevation: 32, look: 'aerial', clouds: true }
 const atlasOpts = { labels: true, contours: true, graticule: true }
 let atlasStyle: StyleId = (localStorageGet('atlasStyle') as StyleId) || 'physical'
 const atlasCache = new Map<string, HTMLCanvasElement>()
@@ -180,6 +180,12 @@ slider(sub3d, {
   },
 })
 toggles(sub3d, [
+  {
+    label: '航拍写实',
+    get: () => view3d.look === 'aerial',
+    set: (v) => scene.setOptions({ look: (view3d.look = v ? 'aerial' : 'model') }),
+  },
+  { label: '云层', get: () => view3d.clouds, set: (v) => scene.setOptions({ clouds: (view3d.clouds = v) }) },
   { label: '植被', get: () => view3d.trees, set: (v) => scene.setOptions({ trees: (view3d.trees = v) }) },
   { label: '地名', get: () => view3d.labels, set: (v) => scene.setOptions({ labels: (view3d.labels = v) }) },
 ])

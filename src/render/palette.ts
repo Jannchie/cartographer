@@ -13,13 +13,13 @@ export const PHYSICAL: Record<number, RGB> = {
   [Biome.Taiga]: hex('#3c5541'),
   [Biome.TemperateForest]: hex('#4b6737'),
   [Biome.TemperateRainforest]: hex('#2f553a'),
-  [Biome.Grassland]: hex('#98a05c'),
-  [Biome.Shrubland]: hex('#a09566'),
+  [Biome.Grassland]: hex('#7e9a45'),
+  [Biome.Shrubland]: hex('#8c8b56'),
   [Biome.ColdDesert]: hex('#a89c80'),
   [Biome.HotDesert]: hex('#d6b985'),
-  [Biome.Savanna]: hex('#ada056'),
-  [Biome.TropicalSeasonalForest]: hex('#5a7a33'),
-  [Biome.TropicalRainforest]: hex('#2d5a28'),
+  [Biome.Savanna]: hex('#949a4a'),
+  [Biome.TropicalSeasonalForest]: hex('#4f7a2c'),
+  [Biome.TropicalRainforest]: hex('#2f6326'),
   [Biome.Alpine]: hex('#81786d'),
   [Biome.Beach]: hex('#d8c69b'),
   [Biome.Wetland]: hex('#56694f'),
@@ -51,12 +51,13 @@ export const ATLAS: Record<number, RGB> = {
 /** 海底：浅滩沙色 → 陆架青绿 → 深海蓝 */
 export function seabed(depthKm: number): RGB {
   const stops: [number, RGB][] = [
-    [0, hex('#b8ae88')],
-    [0.012, hex('#7f9a86')],
-    [0.04, hex('#5b8580')],
-    [0.14, hex('#3f6f73')],
-    [0.6, hex('#23485a')],
-    [4, hex('#132a3b')],
+    [0, hex('#efe6cb')],
+    [0.01, hex('#e8dfc2')],
+    [0.03, hex('#d6cfae')],
+    [0.07, hex('#a9b397')],
+    [0.16, hex('#5f7f7c')],
+    [0.6, hex('#2c4b5a')],
+    [4, hex('#15293a')],
   ]
   return ramp(stops, depthKm)
 }

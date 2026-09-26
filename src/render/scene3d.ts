@@ -1,6 +1,10 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Biome, type World } from '../gen/types'
+import { createClouds, type CloudLayer } from './aerial/clouds'
+import { buildMaterialMask } from './aerial/mask'
+import { createSky } from './aerial/sky'
+import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { createWaterMaterial } from './water'
 
 export interface View3DOptions {
@@ -9,7 +13,13 @@ export interface View3DOptions {
   labels: boolean
   sunAzimuth: number
   sunElevation: number
+  /** 航拍写实 / 沙盘模型 */
+  look: 'aerial' | 'model'
+  clouds: boolean
 }
+
+const SKY_TOP = new THREE.Color('#3b6ea8')
+const HAZE = new THREE.Color('#a9c6e4')
 
 const SX = 100
 
@@ -32,6 +42,12 @@ export class Scene3D {
   private trees: THREE.InstancedMesh[] = []
   private heightTex: THREE.DataTexture | null = null
   private tempTex: THREE.DataTexture | null = null
+  private maskTex: THREE.DataTexture | null = null
+  private terrainU: TerrainUniforms | null = null
+  private clouds: CloudLayer | null = null
+  private sky = createSky()
+  private outer: THREE.Mesh | null = null
+  private fog = new THREE.FogExp2(HAZE.getHex(), 0.0036)
   private clock = new THREE.Clock()
   private opts: View3DOptions
   private labelLayer: HTMLDivElement
@@ -51,14 +67,14 @@ export class Scene3D {
     this.renderer.setClearColor(0x000000, 0)
     container.appendChild(this.renderer.domElement)
 
-    this.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000)
+    this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 6000)
     this.camera.position.set(0, 50, 60)
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.07
     this.controls.maxPolarAngle = Math.PI * 0.47
     this.controls.minDistance = 4
-    this.controls.maxDistance = 220
+    this.controls.maxDistance = 260
     this.controls.screenSpacePanning = false
     this.controls.zoomToCursor = true
 
@@ -80,6 +96,7 @@ export class Scene3D {
     this.hemi = new THREE.HemisphereLight(0xc4d7ea, 0x5b4a3a, 0.9)
     this.scene.add(this.hemi)
     this.scene.add(this.group)
+    this.scene.add(this.sky.mesh)
 
     this.labelLayer = document.createElement('div')
     this.labelLayer.className = 'labels3d'
@@ -93,6 +110,7 @@ export class Scene3D {
       if (!this.active) return
       this.controls.update()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = this.clock.getElapsedTime()
+      if (this.clouds && this.clouds.mesh.visible) this.clouds.update(this.camera)
       this.renderer.render(this.scene, this.camera)
       this.updateLabels()
     }
@@ -122,6 +140,26 @@ export class Scene3D {
     if (o.trees !== undefined) for (const t of this.trees) t.visible = this.opts.trees
     if (o.sunAzimuth !== undefined || o.sunElevation !== undefined) this.updateSun()
     if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
+    if (o.look !== undefined || o.clouds !== undefined) this.applyLook()
+  }
+
+  /** 航拍：天空、空气透视、延伸到地平线的外海、云；沙盘：悬浮的立体模型 */
+  private applyLook() {
+    const aerial = this.opts.look === 'aerial'
+    this.sky.mesh.visible = aerial
+    this.scene.fog = aerial ? this.fog : null
+    if (this.outer) this.outer.visible = aerial
+    for (const c of this.group.children) if (c.userData.skirt) c.visible = !aerial
+    const cloudsOn = this.opts.clouds && aerial && !!this.clouds
+    if (this.clouds) this.clouds.mesh.visible = cloudsOn
+    if (this.terrainU) this.terrainU.uCloudOn.value = cloudsOn ? 1 : 0
+    if (this.waterMat) {
+      this.waterMat.uniforms.uCloudOn.value = cloudsOn ? 1 : 0
+      this.waterMat.uniforms.uFogDensity.value = aerial ? this.fog.density : 0
+    }
+    this.clouds?.setFog(HAZE, aerial ? this.fog.density : 0)
+    this.renderer.toneMappingExposure = aerial ? 1.0 : 1.05
+    this.updateSun()
   }
 
   private updateSun() {
@@ -134,13 +172,29 @@ export class Scene3D {
     const warm = 1 - Math.min(1, Math.max(0, (this.opts.sunElevation - 4) / 40))
     this.sun.color.setRGB(1, 0.95 - 0.2 * warm, 0.86 - 0.36 * warm)
     const k = Math.min(1, Math.max(0.15, Math.sin(el) * 2.2))
-    this.sun.intensity = 3.2 * k
-    this.hemi.intensity = 0.55 + 0.45 * k
+    const aerial = this.opts.look === 'aerial'
+    // 航拍：天光弱、日光强，地形明暗对比更像真实照片
+    this.sun.intensity = (aerial ? 3.8 : 3.2) * k
+    this.hemi.intensity = (aerial ? 0.42 : 0.55) + (aerial ? 0.3 : 0.45) * k
     if (this.waterMat) {
       this.waterMat.uniforms.uSunDir.value.copy(d)
       this.waterMat.uniforms.uSunColor.value.copy(this.sun.color)
       this.waterMat.uniforms.uLight.value = 0.45 + 0.55 * k
     }
+    this.sky.mat.uniforms.uSun.value.copy(d)
+    this.sky.mat.uniforms.uSunColor.value.copy(this.sun.color)
+    // 天空随太阳高度变暗、偏暖
+    this.sky.mat.uniforms.uTop.value.copy(SKY_TOP).multiplyScalar(0.35 + 0.65 * k)
+    this.sky.mat.uniforms.uHorizon.value.copy(HAZE).lerp(new THREE.Color('#f0c59a'), warm * 0.45).multiplyScalar(0.45 + 0.55 * k)
+    this.fog.color.copy(this.sky.mat.uniforms.uHorizon.value)
+    if (this.waterMat) {
+      this.waterMat.uniforms.uFogColor.value.copy(this.fog.color)
+      this.waterMat.uniforms.uSkyTop.value.copy(this.sky.mat.uniforms.uTop.value)
+      this.waterMat.uniforms.uSkyHorizon.value.copy(this.sky.mat.uniforms.uHorizon.value)
+    }
+    this.clouds?.setFog(this.fog.color, this.opts.look === 'aerial' ? this.fog.density : 0)
+    if (this.terrainU) this.terrainU.uSun.value.copy(d)
+    this.clouds?.setSun(d, this.sun.color, 0.5 + 0.5 * k)
   }
 
   setWorld(world: World, color: HTMLCanvasElement, rough: HTMLCanvasElement) {
@@ -180,20 +234,58 @@ export class Scene3D {
     colorTex.flipY = false
     const roughTex = new THREE.CanvasTexture(rough)
     roughTex.flipY = false
-    const mat = new THREE.MeshStandardMaterial({ map: colorTex, roughnessMap: roughTex, roughness: 1, metalness: 0 })
+    this.maskTex?.dispose()
+    const mk = new THREE.DataTexture(buildMaterialMask(world), W, H, THREE.RGBAFormat, THREE.UnsignedByteType)
+    mk.magFilter = THREE.LinearFilter
+    mk.minFilter = THREE.LinearFilter
+    mk.needsUpdate = true
+    this.maskTex = mk
+    const { mat, uniforms } = createTerrainMaterial(colorTex, roughTex, mk, this.vScale)
+    this.terrainU = uniforms
     this.terrain = new THREE.Mesh(new THREE.BufferGeometry(), mat)
     this.terrain.castShadow = true
     this.terrain.receiveShadow = true
     this.group.add(this.terrain)
 
-    this.waterMat = createWaterMaterial(ht, tt, this.vScale, new THREE.Vector2(SX, this.SZ))
+    this.waterMat = createWaterMaterial(ht, tt, colorTex, this.vScale, new THREE.Vector2(SX, this.SZ))
     this.water = new THREE.Mesh(new THREE.BufferGeometry(), this.waterMat)
     this.water.renderOrder = 2
     this.group.add(this.water)
+    // 地图外一直延伸到地平线的外海（四块围住地图）
+    const R = 3000
+    const ring = [
+      [0, -(R + this.SZ / 2) / 2, R * 2, R - this.SZ / 2],
+      [0, (R + this.SZ / 2) / 2, R * 2, R - this.SZ / 2],
+      [-(R + SX / 2) / 2, 0, R - SX / 2, this.SZ],
+      [(R + SX / 2) / 2, 0, R - SX / 2, this.SZ],
+    ].map(([x, z, w, h]) => new THREE.PlaneGeometry(w, h, 1, 1).rotateX(-Math.PI / 2).translate(x, 0, z))
+    const merged = mergeGeoms(ring)
+    this.outer = new THREE.Mesh(merged, this.waterMat)
+    this.outer.renderOrder = 2
+    this.group.add(this.outer)
 
     this.rebuildGeometry()
     this.updateSun()
+    this.applyLook()
     this.buildLabels()
+  }
+
+  private buildClouds() {
+    const w = this.world!
+    if (this.clouds) {
+      this.scene.remove(this.clouds.mesh)
+      this.clouds.dispose()
+    }
+    let seed = 0
+    for (const ch of w.params.seed) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0
+    const baseY = this.vScale * 3.4
+    this.clouds = createClouds(seed, SX, this.SZ, baseY, 0.35)
+    this.scene.add(this.clouds.mesh)
+    for (const u of [this.terrainU!, this.waterMat!.uniforms as unknown as TerrainUniforms]) {
+      u.uCloud.value = this.clouds.shadow
+      u.uCloudRect.value.copy(this.clouds.rect)
+      u.uCloudY.value = baseY
+    }
   }
 
   private rebuildGeometry() {
@@ -204,6 +296,7 @@ export class Scene3D {
     this.water!.geometry.dispose()
     this.water!.geometry = this.waterGeometry(w, vs)
     this.waterMat!.uniforms.uVScale.value = vs
+    this.terrainU!.uVScale.value = vs
     // 侧面剖面
     for (const c of [...this.group.children]) if (c.userData.skirt) this.group.remove(c)
     this.group.add(...this.skirts(w, vs))
@@ -217,6 +310,9 @@ export class Scene3D {
       this.group.add(t)
     }
     for (const l of this.labelEls) l.pos.y = this.heightAt(l.pos.x, l.pos.z) + 0.6
+    this.buildClouds()
+    this.applyLook()
+    this.updateSun()
   }
 
   /** 世界坐标 → 格坐标 */
@@ -381,11 +477,7 @@ export class Scene3D {
       [Biome.TemperateRainforest]: [0.7, 1.2],
       [Biome.TropicalSeasonalForest]: [0, 0.8],
       [Biome.TropicalRainforest]: [0, 1.3],
-      [Biome.Savanna]: [0, 0.06],
-      [Biome.Shrubland]: [0.2, 0.12],
-      [Biome.Wetland]: [0.2, 0.2],
-      [Biome.Grassland]: [0.3, 0.015],
-      [Biome.Tundra]: [1, 0.02],
+      [Biome.Wetland]: [0.2, 0.12],
     }
     const colors: Record<number, THREE.Color[]> = {
       [Biome.Taiga]: ['#2b4632', '#324f3a', '#26402f'].map((c) => new THREE.Color(c)),
@@ -594,4 +686,21 @@ function quad(
 ) {
   pos.push(...a, ...b, ...c, ...a, ...c, ...d)
   for (const x of [ca, cb, cc, ca, cc, cd]) col.push(x.r, x.g, x.b)
+}
+
+function mergeGeoms(list: THREE.BufferGeometry[]) {
+  const pos: number[] = []
+  const idx: number[] = []
+  for (const g of list) {
+    const base = pos.length / 3
+    const p = g.getAttribute('position').array
+    for (let i = 0; i < p.length; i++) pos.push(p[i])
+    const ix = g.getIndex()!.array
+    for (let i = 0; i < ix.length; i++) idx.push(ix[i] + base)
+    g.dispose()
+  }
+  const out = new THREE.BufferGeometry()
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  out.setIndex(idx)
+  return out
 }
