@@ -1,4 +1,4 @@
-import { clipWater, placeable, type Ctx } from './ctx'
+import { clipWater, isFree, placeable, type Ctx } from './ctx'
 import {
   area,
   centroid,
@@ -6,6 +6,7 @@ import {
   clipHalf,
   dist,
   insetConvex,
+  inscribedRect,
   obb,
   pointInPoly,
   rect,
@@ -112,7 +113,10 @@ export function subdivide(ctx: Ctx, block: Poly, o: Dens): Lot[] {
   })
 }
 
-/** 地块 → 房屋：只保留临街进深，后部留作院子 */
+/**
+ * 地块 → 房屋：只保留临街进深，后部留作院子。
+ * 斜切出来的三角形、梯形地块不直接当房子：取沿临街边摆放、贴着街的内接矩形。
+ */
 function lotBuilding(lot: Lot, depth: number): Poly | null {
   const { poly, front } = lot
   if (!front.length) return null
@@ -146,14 +150,108 @@ function lotBuilding(lot: Lot, depth: number): Poly | null {
     const ey = (q[1] - p[1]) / (dist(p, q) || 1)
     return Math.abs(ex * nx + ey * ny) > 0.5
   })
-  if (corner) return poly
+  const u: P = [dx / L, dy / L]
+  const n: P = [nx, ny]
+  if (corner) return inscribedRect(poly, u, { v: n, minSide: 3.5 })
   const out = clipHalf(poly, [a[0] + nx * depth, a[1] + ny * depth], [nx, ny])
-  return out.length >= 3 && area(out) > 12 ? out : null
+  if (out.length < 3) return null
+  const r = inscribedRect(out, u, { v: n, minSide: 3.5 })
+  return r && area(r) > 12 ? r : null
 }
 
-function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house') {
+/** 被路、河裁掉一角的房屋重新取成矩形（沿原来的朝向） */
+function squareUp(orig: Poly, q: Poly): Poly | null {
+  if (q.length === 4 && area(q) > area(orig) * 0.995) return q
+  const u: P = [orig[1][0] - orig[0][0], orig[1][1] - orig[0][1]]
+  return inscribedRect(q, u, {
+    minSide: 3.5,
+    bands: [
+      [0, 1],
+      [0, 0.85],
+      [0.15, 1],
+      [0, 0.7],
+      [0.3, 1],
+      [0.1, 0.9],
+    ],
+  })
+}
+
+/**
+ * 放一座建筑：压水、碰路或压到已有实体就不放。pad 为离道路 / 城墙走廊的余量。
+ * 所有建筑都经这里落地，占地登记由此保证互不重叠。
+ */
+export function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house', pad = 0): boolean {
+  if (!isFree(ctx, poly, { pad })) return false
   const b = obb(poly)
   ctx.out.buildings.push({ poly, kind, tone: ctx.rng.next(), ridge: Math.atan2(b.axis[1], b.axis[0]) })
+  ctx.occ.add(poly)
+  return true
+}
+
+/** 一组部件（中殿、耳堂、后殿）要么全部放下，要么一个都不放；部件之间允许相交 */
+function addGroup(ctx: Ctx, parts: [Poly, BuildingKind][], pad: number): boolean {
+  for (const [p] of parts) if (!isFree(ctx, p, { pad })) return false
+  for (const [p, kind] of parts) {
+    const b = obb(p)
+    ctx.out.buildings.push({ poly: p, kind, tone: ctx.rng.next(), ridge: Math.atan2(b.axis[1], b.axis[0]) })
+  }
+  for (const [p] of parts) ctx.occ.add(p)
+  return true
+}
+
+/**
+ * 在区域里给特殊建筑找个能落地的位置：先放中心，再沿长轴、短轴偏移，都不行就逐级缩小。
+ * make(中心, 缩放) 生成候选，ok 判定能否落地。
+ */
+function fit<T>(zone: Poly, make: (c: P, s: number) => T | null, ok: (t: T) => boolean, scales = [1, 0.85, 0.7, 0.55]): T | null {
+  if (zone.length < 3) return null
+  const b = obb(zone)
+  const c = centroid(zone)
+  const across: P = [-b.axis[1], b.axis[0]]
+  const offs = [
+    [0, 0],
+    [0.15, 0],
+    [-0.15, 0],
+    [0, 0.15],
+    [0, -0.15],
+    [0.28, 0],
+    [-0.28, 0],
+    [0.15, 0.18],
+    [-0.15, -0.18],
+    [0.15, -0.18],
+    [-0.15, 0.18],
+  ]
+  for (const s of scales)
+    for (const [du, dv] of offs) {
+      const q: P = [c[0] + b.axis[0] * du * b.len + across[0] * dv * b.wid, c[1] + b.axis[1] * du * b.len + across[1] * dv * b.wid]
+      if (!pointInPoly(q, zone)) continue
+      const t = make(q, s)
+      if (t && ok(t)) return t
+    }
+  return null
+}
+
+const inside = (poly: Poly, zone: Poly) => poly.every((v) => pointInPoly(v, zone))
+
+/** 码头：不碰路桥与城墙，不压别的码头与船 */
+export function addPier(ctx: Ctx, pier: Poly): boolean {
+  if (ctx.corridors.hitsPoly(pier, 1, ['road', 'wall'])) return false
+  if (ctx.occ.overlaps(pier, 2)) return false
+  ctx.out.piers.push(pier)
+  ctx.occ.add(pier)
+  return true
+}
+
+/** 船：整条船都在水里，不压桥、码头与别的船 */
+export function addBoat(ctx: Ctx, p: P, angle: number, len: number): boolean {
+  const u: P = [Math.cos(angle), Math.sin(angle)]
+  const hull = rect(p, u, len, len * 0.36)
+  if (hull.some((v) => ctx.T.waterAt(v) > -1)) return false
+  if (ctx.corridors.hitsPoly(hull, 1, ['road'])) return false
+  if (ctx.occ.overlaps(hull, 0.8)) return false
+  ctx.out.boats.push({ p, angle, len })
+  ctx.occ.add(hull)
+  return true
 }
 
 function overlaps(poly: Poly, zones: Poly[]) {
@@ -188,7 +286,15 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
     // 院落深处偶有后屋、作坊
     if (!b && !lot.front.length && nearRoad === Infinity && rng.next() < (densKey === 'slum' ? 0.75 : 0.3)) {
       const bb = obb(lot.poly)
-      if (bb.wid > 5) b = rect(bb.center, bb.axis, bb.len * 0.6, bb.wid * 0.6)
+      if (bb.wid > 5)
+        b = inscribedRect(lot.poly, bb.axis, {
+          minSide: 3.5,
+          bands: [
+            [0.2, 0.8],
+            [0.15, 0.85],
+            [0.25, 0.75],
+          ],
+        })
     }
     if (!b) {
       if (!lot.front.length && area(lot.poly) > 60 && rng.next() < 0.35) scatterTrees(ctx, insetConvex(lot.poly, 1.5), 0.01, 2, 3.5)
@@ -196,7 +302,8 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
     }
     b = insetConvex(b, 0.2)
     if (b.length < 3) continue
-    const q = placeable(ctx, b)
+    const clipped = placeable(ctx, b)
+    const q = clipped && squareUp(b, clipped)
     if (!q || area(q) < 14) continue
     addBuilding(ctx, q, o.kind ?? (area(q) > 420 ? 'large' : 'house'))
   }
@@ -219,7 +326,7 @@ function farmstead(ctx: Ctx, lot: Lot) {
   if ((c0[0] - a[0]) * n[0] + (c0[1] - a[1]) * n[1] < 0) n = [-n[0], -n[1]]
   if (ctx.p.culture === 'eastern') {
     // 东方农家：小院，正房坐北
-    const yard = clipHalf(poly, [a[0] + n[0] * 26, a[1] + n[1] * 26], n)
+    const yard = clipHalf(poly, [a[0] + n[0] * 34, a[1] + n[1] * 34], n)
     const q = yard.length >= 3 ? placeable(ctx, insetConvex(yard, 1)) : null
     if (q && area(q) > 80) siheyuan(ctx, q)
     return
@@ -229,9 +336,8 @@ function farmstead(ctx: Ctx, lot: Lot) {
   const slide = (rng.next() - 0.5) * Math.max(0, L - len) * 0.6
   const m: P = [(a[0] + b[0]) / 2 + u[0] * slide, (a[1] + b[1]) / 2 + u[1] * slide]
   const hc: P = [m[0] + n[0] * (2.5 + dep / 2), m[1] + n[1] * (2.5 + dep / 2)]
-  const house = placeable(ctx, rect(hc, u, len, dep))
-  if (!house || !house.every((v) => pointInPoly(v, poly))) return
-  addBuilding(ctx, house, 'house')
+  const house = rect(hc, u, len, dep)
+  if (!house.every((v) => pointInPoly(v, poly)) || !addBuilding(ctx, house, 'house')) return
   if (rng.next() < 0.65) {
     const side = rng.next() < 0.5
     const bl = 7 + rng.next() * 4
@@ -240,8 +346,8 @@ function farmstead(ctx: Ctx, lot: Lot) {
     const bc: P = side
       ? [hc[0] + u[0] * (len / 2 + bw / 2 + 2) * sg, hc[1] + u[1] * (len / 2 + bw / 2 + 2) * sg]
       : [hc[0] + n[0] * (dep / 2 + bw / 2 + 4), hc[1] + n[1] * (dep / 2 + bw / 2 + 4)]
-    const barn = placeable(ctx, side ? rect([bc[0] + n[0] * 2, bc[1] + n[1] * 2], n, bl, bw) : rect(bc, u, bl, bw))
-    if (barn && barn.every((v) => pointInPoly(v, poly))) addBuilding(ctx, barn, 'shed')
+    const barn = side ? rect([bc[0] + n[0] * 2, bc[1] + n[1] * 2], n, bl, bw) : rect(bc, u, bl, bw)
+    if (barn.every((v) => pointInPoly(v, poly))) addBuilding(ctx, barn, 'shed')
   }
   const fence = insetConvex(poly, 0.8)
   if (fence.length >= 3 && rng.next() < 0.55) ctx.out.enclosures.push(fence)
@@ -265,8 +371,9 @@ export function scatterTrees(ctx: Ctx, poly: Poly, density: number, r0: number, 
   for (let k = 0, placed = 0; k < n * 4 && placed < n; k++) {
     const p: P = [x0 + rng.next() * (x1 - x0), y0 + rng.next() * (y1 - y0)]
     if (!pointInPoly(p, poly)) continue
-    if (ctx.T.waterAt(p) < 2 || ctx.corridors.hits(p, 1)) continue
-    ctx.out.trees.push({ p, r: r0 + rng.next() * (r1 - r0) })
+    const r = r0 + rng.next() * (r1 - r0)
+    if (ctx.T.waterAt(p) < 2 || ctx.corridors.hits(p, 1) || ctx.occ.hitsPoint(p, r * 0.5)) continue
+    ctx.out.trees.push({ p, r })
     placed++
   }
 }
@@ -284,23 +391,26 @@ export function plaza(ctx: Ctx, _ward: Ward, block: Poly) {
   if (size === 'town' || size === 'city') {
     const b = obb(pave)
     const L = Math.min(b.len * 0.42, size === 'city' ? 34 : 24)
-    const Wd = L * 0.5
-    const hc: P = [c[0] + b.axis[1] * b.wid * 0.2, c[1] - b.axis[0] * b.wid * 0.2]
-    const hall = ctx.p.culture === 'eastern' ? rect(c, [1, 0], 14, 14) : rect(hc, b.axis, L, Wd)
-    if (placeable(ctx, hall)) {
-      addBuilding(ctx, hall, ctx.p.culture === 'eastern' ? 'tower' : 'hall')
+    const east = ctx.p.culture === 'eastern'
+    const hall = fit(
+      pave,
+      (q, s) => (east ? rect(q, [1, 0], 14 * s, 14 * s) : rect(q, b.axis, L * s, L * 0.5 * s)),
+      (h) => inside(h, pave) && isFree(ctx, h, { pad: 1 }),
+      [1, 0.8, 0.65],
+    )
+    if (hall && addBuilding(ctx, hall, east ? 'tower' : 'hall', 1)) {
       reserve.push(hall)
       ctx.out.landmarks.push({ p: centroid(hall), name: ctx.namer.landmark('market', ctx.p.magic), kind: 'market' })
     }
-    // 摊位
+    // 摊位：只摆在铺装内侧，不上街
     const stalls = size === 'city' ? 26 : 12
-    for (let k = 0, t = 0; k < stalls && t < stalls * 8; t++) {
+    const inner = insetConvex(pave, 4)
+    for (let k = 0, t = 0; k < stalls && t < stalls * 8 && inner.length >= 3; t++) {
       const p: P = [c[0] + (rng.next() - 0.5) * b.len * 0.8, c[1] + (rng.next() - 0.5) * b.len * 0.8]
       const s = rect(p, b.axis, 3 + rng.next() * 2, 2.2 + rng.next())
-      if (!s.every((v) => pointInPoly(v, insetConvex(pave, 4)))) continue
-      if (overlaps(s, reserve)) continue
-      reserve.push(insetConvex(rect(p, b.axis, 7, 5.5), 0))
-      addBuilding(ctx, s, 'shed')
+      if (!inside(s, inner) || overlaps(s, reserve)) continue
+      if (!addBuilding(ctx, s, 'shed', 0.8)) continue
+      reserve.push(rect(p, b.axis, 7, 5.5))
       k++
     }
   }
@@ -321,30 +431,46 @@ export function temple(ctx: Ctx, _ward: Ward, block: Poly) {
   } else {
     // 大教堂：东西向的中殿 + 耳堂 + 半圆后殿（尽量朝东）
     const east: P = Math.abs(b.axis[0]) > 0.5 ? (b.axis[0] > 0 ? b.axis : [-b.axis[0], -b.axis[1]]) : b.axis
-    const L = Math.min(b.len * 0.78, big ? 78 : 46)
-    const Wn = L * 0.27
-    const parts: Poly[] = []
-    parts.push(rect(c, east, L, Wn))
-    const tc: P = [c[0] + east[0] * L * 0.18, c[1] + east[1] * L * 0.18]
-    parts.push(rect(tc, east, Wn * 0.95, Wn * 2.25))
-    const ac: P = [c[0] + east[0] * L * 0.5, c[1] + east[1] * L * 0.5]
-    const apse = circlePoly(ac, Wn * 0.5, 14).filter((p) => (p[0] - ac[0]) * east[0] + (p[1] - ac[1]) * east[1] >= -0.01)
-    parts.push(apse)
-    if (big) {
-      // 西立面双塔
-      for (const s of [-1, 1]) {
-        const w: P = [c[0] - east[0] * L * 0.5 + east[1] * s * Wn * 0.42, c[1] - east[1] * L * 0.5 - east[0] * s * Wn * 0.42]
-        parts.push(rect(w, east, Wn * 0.4, Wn * 0.4))
+    const L0 = Math.min(b.len * 0.78, big ? 78 : 46)
+    // 大教堂：东西向的中殿 + 耳堂 + 半圆后殿（尽量朝东）；放不下就挪位、缩小
+    const make = (c: P, s: number) => {
+      const L = L0 * s
+      const Wn = L * 0.27
+      const parts: [Poly, BuildingKind][] = []
+      parts.push([rect(c, east, L, Wn), 'temple'])
+      const tc: P = [c[0] + east[0] * L * 0.18, c[1] + east[1] * L * 0.18]
+      parts.push([rect(tc, east, Wn * 0.95, Wn * 2.25), 'temple'])
+      const ac: P = [c[0] + east[0] * L * 0.5, c[1] + east[1] * L * 0.5]
+      parts.push([circlePoly(ac, Wn * 0.5, 14).filter((p) => (p[0] - ac[0]) * east[0] + (p[1] - ac[1]) * east[1] >= -0.01), 'temple'])
+      if (big && s > 0.8) {
+        // 西立面双塔
+        for (const sd of [-1, 1]) {
+          const w: P = [c[0] - east[0] * L * 0.5 + east[1] * sd * Wn * 0.42, c[1] - east[1] * L * 0.5 - east[0] * sd * Wn * 0.42]
+          parts.push([rect(w, east, Wn * 0.4, Wn * 0.4), 'temple'])
+        }
       }
+      return { c, L, Wn, parts }
     }
-    const zone = rect(c, east, L + 18, Wn * 2.25 + 18)
-    reserve.push(zone)
-    for (const q of parts) addBuilding(ctx, q, 'temple')
-    // 教堂前的广场与墓园
-    ctx.out.plazas.push(insetConvex(rect([c[0] - east[0] * (L * 0.5 + 8), c[1] - east[1] * (L * 0.5 + 8)], east, 16, Wn * 2), 0))
-    const yard = insetConvex(block, 3)
-    graves(ctx, rect([c[0] + east[1] * Wn * 1.9, c[1] - east[0] * Wn * 1.9], east, L * 0.7, Wn * 1.2), east)
-    if (yard.length >= 3) scatterTrees(ctx, rect([c[0] - east[1] * Wn * 1.9, c[1] + east[0] * Wn * 1.9], east, L * 0.7, Wn * 1.1), 0.006, 2.5, 4)
+    const got = fit(inner, make, (t) => t.parts.every(([p]) => inside(p, block) && isFree(ctx, p, { pad: 1.5 })))
+    if (!got || !addGroup(ctx, got.parts, 1.5)) return urban(ctx, block, 'common')
+    const { c: tc, L, Wn } = got
+    reserve.push(rect(tc, east, L + 14, Wn * 2.25 + 14))
+    // 教堂前的广场、一侧的墓园、另一侧的树
+    const fore = rect([tc[0] - east[0] * (L * 0.5 + 8), tc[1] - east[1] * (L * 0.5 + 8)], east, 16, Wn * 2)
+    if (isFree(ctx, fore, { tags: ['wall', 'river'] })) ctx.out.plazas.push(fore)
+    const gz = placeable(ctx, rect([tc[0] + east[1] * Wn * 1.9, tc[1] - east[0] * Wn * 1.9], east, L * 0.7, Wn * 1.2), 2)
+    if (gz && area(gz) > 60 && inside(gz, block)) {
+      reserve.push(gz)
+      graves(ctx, gz, east)
+    }
+    const tz = placeable(ctx, rect([tc[0] - east[1] * Wn * 1.9, tc[1] + east[0] * Wn * 1.9], east, L * 0.7, Wn * 1.1), 2)
+    if (tz && inside(tz, block)) {
+      reserve.push(tz)
+      scatterTrees(ctx, tz, 0.006, 2.5, 4)
+    }
+    ctx.out.landmarks.push({ p: tc, name: ctx.namer.landmark('temple', ctx.p.magic), kind: 'temple' })
+    urban(ctx, block, 'common', reserve)
+    return
   }
   ctx.out.landmarks.push({ p: c, name: ctx.namer.landmark('temple', ctx.p.magic), kind: 'temple' })
   // 外圈仍是街坊
@@ -352,27 +478,43 @@ export function temple(ctx: Ctx, _ward: Ward, block: Poly) {
   void rng
 }
 
+/** 墓碑成排：沿 axis 方向按墓园自身的范围排布，每块都必须完整落在墓园内（离围墙留一点空） */
 function graves(ctx: Ctx, zone: Poly, axis: P) {
-  const b = obb(zone)
   const rng = ctx.rng
   ctx.out.greens.push({ poly: zone, kind: 'cemetery' })
+  const inner = insetConvex(zone, 1.2)
+  if (inner.length < 3) return
   const across: P = [-axis[1], axis[0]]
-  for (let u = -b.len / 2 + 3; u < b.len / 2 - 2; u += 3.2)
-    for (let v = -b.wid / 2 + 3; v < b.wid / 2 - 2; v += 4.2) {
+  let u0 = Infinity
+  let u1 = -Infinity
+  let v0 = Infinity
+  let v1 = -Infinity
+  for (const p of zone) {
+    const u = p[0] * axis[0] + p[1] * axis[1]
+    const v = p[0] * across[0] + p[1] * across[1]
+    u0 = Math.min(u0, u)
+    u1 = Math.max(u1, u)
+    v0 = Math.min(v0, v)
+    v1 = Math.max(v1, v)
+  }
+  for (let u = u0 + 2.5; u < u1 - 1.5; u += 3.2)
+    for (let v = v0 + 2.5; v < v1 - 1.5; v += 4.2) {
       if (rng.next() < 0.25) continue
-      const p: P = [b.center[0] + axis[0] * u + across[0] * v, b.center[1] + axis[1] * u + across[1] * v]
-      addBuilding(ctx, rect(p, across, 1.9, 0.9), 'shed')
+      const p: P = [axis[0] * u + across[0] * v, axis[1] * u + across[1] * v]
+      const g = rect(p, across, 1.9, 0.9)
+      if (inside(g, inner)) addBuilding(ctx, g, 'shed')
     }
 }
 
 export function cemetery(ctx: Ctx, ward: Ward, block: Poly) {
-  const zone = clipWater(ctx, insetConvex(block, 3), 3)
-  if (!zone || zone.length < 3) return
+  // 墓园按道路、河岸裁齐，围墙沿裁剪后的边界
+  const zone = placeable(ctx, insetConvex(block, 3), 3, 0.4)
+  if (!zone || zone.length < 3 || area(zone) < 300) return
   const b = obb(zone)
+  const chapel = fit(zone, (q, s) => rect(q, b.axis, 12 * s, 7 * s), (h) => inside(h, zone) && isFree(ctx, h, { pad: 1 }), [1, 0.8])
+  if (chapel) addBuilding(ctx, chapel, ctx.p.culture === 'eastern' ? 'hall' : 'temple', 1)
   graves(ctx, zone, b.axis)
   ctx.out.enclosures.push(zone)
-  const chapel = rect(b.center, b.axis, 12, 7)
-  addBuilding(ctx, chapel, ctx.p.culture === 'eastern' ? 'hall' : 'temple')
   scatterTrees(ctx, zone, 0.002, 3, 5)
   void ward
 }
@@ -392,7 +534,10 @@ export function park(ctx: Ctx, ward: Ward, block: Poly) {
     const mid: P = [(m[0] + c[0]) / 2 + (ctx.rng.next() - 0.5) * 12, (m[1] + c[1]) / 2 + (ctx.rng.next() - 0.5) * 12]
     ctx.out.roads.push({ line: [m, mid, c], width: 2.2, kind: 'path' })
   }
-  if (ctx.p.culture === 'eastern') addBuilding(ctx, rect(c, b.axis, 9, 6), 'pagoda')
+  if (ctx.p.culture === 'eastern') {
+    const pav = fit(g, (q, s) => rect(q, b.axis, 9 * s, 6 * s), (h) => inside(h, g) && isFree(ctx, h, { pad: 1 }), [1, 0.8])
+    if (pav) addBuilding(ctx, pav, 'pagoda', 1)
+  }
   else ctx.out.landmarks.push({ p: c, name: '', kind: 'well' })
   scatterTrees(ctx, g, 0.006, 2.5, 5.5)
   if (ctx.rng.next() < 0.6) ctx.out.landmarks.push({ p: c, name: ctx.namer.landmark('park', ctx.p.magic), kind: 'shrine' })
@@ -402,8 +547,16 @@ export function park(ctx: Ctx, ward: Ward, block: Poly) {
 /** 城堡 / 衙署：幕墙、角楼、主楼与沿墙的附属建筑 */
 export function castle(ctx: Ctx, ward: Ward, block: Poly) {
   const rng = ctx.rng
-  const curtain = clipWater(ctx, insetConvex(block, 4), 4)
-  if (!curtain || curtain.length < 3) return urban(ctx, block, 'common')
+  // 幕墙不能被街道穿过：碰到就往里收，收不下就不建城堡
+  let curtain: Poly | null = null
+  for (const d of [4, 8, 12]) {
+    const q = clipWater(ctx, insetConvex(block, d), 4)
+    if (q && q.length >= 3 && area(q) > 900 && !ctx.corridors.hitsPoly(q, 1, ['road', 'river'])) {
+      curtain = q
+      break
+    }
+  }
+  if (!curtain) return urban(ctx, block, 'common')
   const c = centroid(curtain)
   ctx.out.landmarks.push({ p: c, name: ctx.namer.landmark('castle', ctx.p.magic), kind: 'castle' })
   if (ctx.p.culture === 'eastern') {
@@ -440,7 +593,12 @@ export function castle(ctx: Ctx, ward: Ward, block: Poly) {
   const b = obb(curtain)
   const away: P = [c[0] - toCenter[0] / (Math.hypot(...toCenter) || 1) * b.wid * 0.12, c[1] - toCenter[1] / (Math.hypot(...toCenter) || 1) * b.wid * 0.12]
   const ks = Math.min(24, Math.sqrt(area(curtain)) * 0.3)
-  addBuilding(ctx, rect(away, b.axis, ks, ks * (0.8 + rng.next() * 0.3)), 'keep')
+  const kr = 0.8 + rng.next() * 0.3
+  const court = insetConvex(curtain, 4)
+  const keep =
+    fit(court, (q, s) => rect(q, b.axis, ks * s, ks * kr * s), (h) => inside(h, court) && isFree(ctx, h, { pad: 1 }), [1, 0.85, 0.7]) ??
+    (inside(rect(away, b.axis, ks * 0.6, ks * kr * 0.6), court) ? rect(away, b.axis, ks * 0.6, ks * kr * 0.6) : null)
+  if (keep) addBuilding(ctx, keep, 'keep', 1)
   // 沿墙的附属建筑
   const inner = insetConvex(curtain, 2.5)
   for (let i = 0; i < inner.length; i++) {
@@ -456,7 +614,8 @@ export function castle(ctx: Ctx, ward: Ward, block: Poly) {
     const s = (c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1] > 0 ? 1 : -1
     const d = 7 + rng.next() * 3
     const mid: P = [a[0] + u[0] * L * ((t0 + t1) / 2) + n[0] * s * d / 2, a[1] + u[1] * L * ((t0 + t1) / 2) + n[1] * s * d / 2]
-    addBuilding(ctx, rect(mid, u, L * (t1 - t0), d), 'hall')
+    const hall = rect(mid, u, L * (t1 - t0), d)
+    if (inside(hall, curtain)) addBuilding(ctx, hall, 'hall', 0.5)
   }
   // 堡外的片区剩余部分
   void ward
@@ -485,9 +644,12 @@ export function noble(ctx: Ctx, ward: Ward, block: Poly) {
       shift = [(m[0] - b.center[0]) * 0.35, (m[1] - b.center[1]) * 0.35]
     }
     const hc: P = [b.center[0] + shift[0], b.center[1] + shift[1]]
-    const house = rect(hc, b.axis, b.len * (0.4 + rng.next() * 0.15), b.wid * (0.35 + rng.next() * 0.1))
-    const clipped = insetConvex(house, 0)
-    if (clipped.every((v) => pointInPoly(v, encl))) addBuilding(ctx, clipped, 'large')
+    const hl = b.len * (0.4 + rng.next() * 0.15)
+    const hw = b.wid * (0.35 + rng.next() * 0.1)
+    for (const s of [1, 0.8, 0.62]) {
+      const house = rect(hc, b.axis, hl * s, hw * s)
+      if (inside(house, encl) && addBuilding(ctx, house, 'large', 0.5)) break
+    }
     scatterTrees(ctx, insetConvex(encl, 2), 0.004, 2.5, 4.5)
   }
   void ward
@@ -519,15 +681,16 @@ export function harbor(ctx: Ctx, ward: Ward, block: Poly) {
     if (seaSide && !ctx.T.seaAt(end)) continue
     const mid: P = [(q[0] + end[0]) / 2, (q[1] + end[1]) / 2]
     const pier = rect(mid, [-g[0], -g[1]], L + w + 3, seaSide ? 6 : 4)
-    if (ctx.corridors.hits(mid, 2)) continue
-    ctx.out.piers.push(pier)
+    if (!addPier(ctx, pier)) continue
     placed.push(q)
     const n: P = [-g[1], g[0]]
     for (const sd of [-1, 1])
       if (rng.next() < 0.75) {
         const t = 0.35 + rng.next() * 0.5
-        const bp: P = [q[0] - g[0] * (L + w) * t + n[0] * (seaSide ? 8 : 5) * sd, q[1] - g[1] * (L + w) * t + n[1] * (seaSide ? 8 : 5) * sd]
-        if (ctx.T.waterAt(bp) < -2) ctx.out.boats.push({ p: bp, angle: Math.atan2(-g[1], -g[0]), len: seaSide ? 12 + rng.next() * 10 : 7 + rng.next() * 3 })
+        const len = seaSide ? 12 + rng.next() * 10 : 7 + rng.next() * 3
+        const off = (seaSide ? 6 : 4) / 2 + len * 0.18 + 1.2
+        const bp: P = [q[0] - g[0] * (L + w) * t + n[0] * off * sd, q[1] - g[1] * (L + w) * t + n[1] * off * sd]
+        addBoat(ctx, bp, Math.atan2(-g[1], -g[0]), len)
       }
   }
   if (placed.length) ctx.out.landmarks.push({ p: placed[0], name: ctx.namer.landmark('harbor', ctx.p.magic), kind: 'harbor' })
@@ -544,17 +707,24 @@ export function magicWard(ctx: Ctx, _ward: Ward, block: Poly) {
     else eastWard(ctx, block, false)
     return
   }
+  // 魔法阵连同石柱一整圈都不能压路、压水
+  const r0 = Math.min(34, Math.sqrt(area(g)) * 0.32)
+  const spot = fit(g, (q, s) => ({ q, r: r0 * s }), (t) => inside(circlePoly(t.q, t.r * 1.2, 16), g) && isFree(ctx, circlePoly(t.q, t.r * 1.2, 16), { pad: 1 }), [1, 0.85, 0.7, 0.55])
+  if (!spot) return urban(ctx, block, 'common')
+  const { q: mc, r } = spot
   ctx.out.greens.push({ poly: g, kind: 'garden' })
-  const r = Math.min(34, Math.sqrt(area(g)) * 0.32)
-  ctx.out.wonders.push({ p: c, r, kind: 'circle' })
-  addBuilding(ctx, circlePoly(c, r * 0.28, 20), 'magic')
+  ctx.out.wonders.push({ p: mc, r, kind: 'circle' })
+  addBuilding(ctx, circlePoly(mc, r * 0.28, 20), 'magic')
   // 围绕的石柱
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2
-    addBuilding(ctx, circlePoly([c[0] + Math.cos(a) * r * 1.12, c[1] + Math.sin(a) * r * 1.12], 1.2, 8), 'shed')
+    addBuilding(ctx, circlePoly([mc[0] + Math.cos(a) * r * 1.12, mc[1] + Math.sin(a) * r * 1.12], 1.2, 8), 'shed')
   }
+  // 整个魔法阵登记为占地：树与房屋都绕开
+  ctx.occ.add(circlePoly(mc, r * 1.2, 16))
+  // 先盖房再种树，树就不会被房子压住
+  urban(ctx, block, 'common', [circlePoly(mc, r * 1.4, 16)])
   scatterTrees(ctx, g, 0.003, 3, 5)
-  urban(ctx, block, 'common', [circlePoly(c, r * 1.4, 16)])
 }
 
 // —————————————————————— 东方：院落 ——————————————————————
@@ -583,13 +753,26 @@ function localBox(poly: Poly, e: P, n: P) {
   return { u0, u1, v0, v1, box }
 }
 
-/** 四合院：正房坐北朝南，东西厢房，南侧倒座与院门 */
+/**
+ * 四合院：正房坐北朝南，东西厢房，南侧倒座与院门。
+ * 院落顺着地块摆：在地块的两条主轴里取最接近正北的方向当"北"，斜地块上的院子也跟着斜。
+ */
 export function siheyuan(ctx: Ctx, lot: Poly) {
-  const { n, e } = northOf(ctx)
+  const N = northOf(ctx).n
+  const ob = obb(lot)
+  const axes: P[] = [ob.axis, [-ob.axis[0], -ob.axis[1]], [-ob.axis[1], ob.axis[0]], [ob.axis[1], -ob.axis[0]]]
+  let n = axes[0]
+  for (const a of axes) if (a[0] * N[0] + a[1] * N[1] > n[0] * N[0] + n[1] * N[1]) n = a
+  const e: P = [-n[1], n[0]]
+  // 斜地块上的院子也取成矩形（院墙规整），只要不比原地块小太多
+  const sq = inscribedRect(lot, e, { v: n, minSide: 8 })
+  if (sq && area(sq) > area(lot) * 0.25) lot = sq
   const { u0, u1, v0, v1, box } = localBox(lot, e, n)
   const w = u1 - u0
   const h = v1 - v0
-  ctx.out.enclosures.push(lot)
+  // 院墙等到至少放下一座房子再画，免得留下空框
+  let built = 0
+  const wall = () => built === 1 && ctx.out.enclosures.push(lot)
   const put = (p: Poly, kind: BuildingKind = 'house') => {
     let q: Poly = p
     for (let i = 0; i < lot.length && q.length >= 3; i++) {
@@ -607,7 +790,13 @@ export function siheyuan(ctx: Ctx, lot: Poly) {
       }
       q = clipHalf(q, [a[0] + nx * 0.6, a[1] + ny * 0.6], [-nx, -ny])
     }
-    if (q.length >= 3 && area(q) > 10) addBuilding(ctx, q, kind)
+    if (q.length < 3) return
+    // 被地块斜边切过的屋子重新取成顺院落方向的矩形
+    const r = q.length === 4 && area(q) > area(p) * 0.995 ? q : inscribedRect(q, e, { v: n, minSide: 3, bands: [[0, 1], [0, 0.8], [0.2, 1], [0.1, 0.9]] })
+    if (r && area(r) > 10 && addBuilding(ctx, r, kind)) {
+      built++
+      wall()
+    }
   }
   const m = 0.6
   if (w * h < 260 || w < 11 || h < 11) {
@@ -643,6 +832,8 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: 'palace' | 'temple' | 
   const probe: P[] = [...court, centroid(court)]
   for (let k = 0; k < 4; k++) probe.push([(court[k][0] + court[(k + 1) % 4][0]) / 2, (court[k][1] + court[(k + 1) % 4][1]) / 2])
   if (probe.some((q) => ctx.T.waterAt(q) < 3)) return null
+  // 也不能压路、压城墙或压到已有的建筑
+  if (ctx.corridors.hitsPoly(court, 0.5, ['road', 'wall']) || ctx.occ.overlaps(court)) return null
   const encl = court
   if (!encl.every((p) => pointInPoly(p, area0))) {
     // 退回到片区内缩
@@ -667,10 +858,13 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: 'palace' | 'temple' | 
   put(box(uc - cw / 2 + 1, uc - cw / 2 + 5, vc - ch * 0.35, vc + ch * 0.38), 'house')
   put(box(uc + cw / 2 - 5, uc + cw / 2 - 1, vc - ch * 0.35, vc + ch * 0.38), 'house')
   if (kind !== 'palace') {
-    // 塔
-    const pt = box(uc + cw * 0.22 - 4, uc + cw * 0.22 + 4, vc + ch * 0.28 - 4, vc + ch * 0.28 + 4)
-    put(pt, 'pagoda')
+    // 塔：放在中轴东侧、两进殿宇之间的空院里
+    const vp = vc + ch * 0.145
+    const up = uc + cw * 0.3
+    put(box(up - 4, up + 4, vp - 4, vp + 4), 'pagoda')
   }
+  // 整座院落登记为占地，后来的民居与树木都绕开
+  ctx.occ.add(court)
   return box(uc - cw / 2 - 4, uc + cw / 2 + 4, vc - ch / 2 - 4, vc + ch / 2 + 4)
 }
 

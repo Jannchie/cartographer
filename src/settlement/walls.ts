@@ -1,6 +1,7 @@
 import { chaikin, dist, segIntersect, type P } from './geom'
 import { simplify } from '../render/atlas/svg/contour'
 import type { Ctx } from './ctx'
+import { touchesSea, type TerrainResult } from './terrain'
 
 export const toF32 = (line: P[]) => Float32Array.from(line.flat())
 export const fromF32 = (r: Float32Array): P[] => {
@@ -9,10 +10,21 @@ export const fromF32 = (r: Float32Array): P[] => {
   return out
 }
 
-/** 平滑寻路结果：先 Douglas–Peucker 去掉阶梯，再 Chaikin 圆滑 */
-export function smoothRoute(line: P[], tol = 4): P[] {
+/**
+ * 平滑寻路结果：先 Douglas–Peucker 去掉阶梯，再 Chaikin 圆滑。
+ * 平滑会切弯；给了地形时，切进海里的方案就退回更保守的平滑，最后退回原始折线。
+ */
+export function smoothRoute(line: P[], tol = 4, T?: TerrainResult): P[] {
   if (line.length < 3) return line
-  return chaikin(fromF32(simplify(toF32(line), tol)), 3)
+  for (const [t, it] of [
+    [tol, 3],
+    [tol / 2, 2],
+    [1, 1],
+  ] as const) {
+    const s = chaikin(fromF32(simplify(toF32(line), t)), it)
+    if (!T || !touchesSea(T, s)) return s
+  }
+  return line
 }
 
 
@@ -94,6 +106,6 @@ export function wallFromLoop(ctx: Ctx, simp: P[], kind: 'stone' | 'palisade', ar
   const thickness = kind === 'stone' ? (ctx.p.size === 'city' ? 5 : 4) : 2
   ctx.out.walls.push({ loop, solid, towers, gates: gates.map(({ p, angle }) => ({ p, angle })), kind, thickness })
   // 城墙两侧留出空地（城内的环城路、城外的缓冲带）
-  for (let i = 0; i < loop.length; i++) if (solid[i]) ctx.corridors.add([loop[i], loop[(i + 1) % loop.length]], thickness / 2 + (kind === 'stone' ? 6 : 4))
+  for (let i = 0; i < loop.length; i++) if (solid[i]) ctx.corridors.add([loop[i], loop[(i + 1) % loop.length]], thickness / 2 + (kind === 'stone' ? 6 : 4), 'wall')
   for (const g of gates) ctx.out.landmarks.push({ p: g.p, name: ctx.namer.gate(g.angle), kind: 'gate' })
 }

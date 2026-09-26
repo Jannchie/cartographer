@@ -2,7 +2,7 @@ import { Biome } from '../gen/types'
 import { clipWater, placeable, type Ctx } from './ctx'
 import { centroid, dist, insetConvex, obb, pointAt, pointInPoly, polylineLength, rect, resample, splitConvex, voronoi, type P, type Poly } from './geom'
 import type { Field, WardType } from './types'
-import { scatterTrees, subdivide } from './wards'
+import { addBuilding, scatterTrees, subdivide } from './wards'
 
 /**
  * 城内外共用的部分：Voronoi 片区剖分、植被、农田、林地与道路过水处理。
@@ -186,6 +186,15 @@ export function farm(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>) 
     const b = obb(poly)
     const angle = Math.atan2(b.axis[1], b.axis[0])
     const tone = rng.next()
+    // 偶见农舍：先占地，田里的果树再绕开它
+    if (rng.next() < (p.size === 'city' ? 0.12 : 0.2)) {
+      const c = centroid(poly)
+      const h = rect(c, b.axis, 14, 8)
+      if (ctx.corridors.gap(c) < 90 && h.every((v) => pointInPoly(v, poly)) && addBuilding(ctx, h, 'house', 2)) {
+        const shed = rect([c[0] + b.axis[1] * 10, c[1] - b.axis[0] * 10], b.axis, 10, 6)
+        if (shed.every((v) => pointInPoly(v, poly))) addBuilding(ctx, shed, 'shed', 2)
+      }
+    }
     if (kind === 'crop' || kind === 'paddy') {
       // 长条田：沿长轴方向分成窄条
       const stripW = kind === 'paddy' ? 14 + rng.next() * 10 : 11 + rng.next() * 14
@@ -231,19 +240,10 @@ export function farm(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>) 
         for (let u = -b.len / 2 + 5; u < b.len / 2 - 4; u += 8)
           for (let v = -b.wid / 2 + 5; v < b.wid / 2 - 4; v += 8) {
             const t: P = [b.center[0] + b.axis[0] * u + across[0] * v, b.center[1] + b.axis[1] * u + across[1] * v]
-            if (pointInPoly(t, q)) ctx.out.trees.push({ p: t, r: 2.6 })
+            if (pointInPoly(t, q) && !ctx.occ.hitsPoint(t, 1.5) && !ctx.corridors.hits(t, 1)) ctx.out.trees.push({ p: t, r: 2.6 })
           }
       }
       if (kind === 'pasture' && rng.next() < 0.5) scatterTrees(ctx, q, 0.0004, 3, 5)
-    }
-    // 偶见农舍
-    if (rng.next() < (p.size === 'city' ? 0.12 : 0.2)) {
-      const c = centroid(poly)
-      const h = placeable(ctx, rect(c, b.axis, 14, 8), 4, 0.2)
-      if (h && ctx.corridors.gap(c) < 90) {
-        ctx.out.buildings.push({ poly: h, kind: 'house', tone: rng.next(), ridge: angle })
-        ctx.out.buildings.push({ poly: rect([c[0] + b.axis[1] * 10, c[1] - b.axis[0] * 10], b.axis, 10, 6), kind: 'shed', tone: rng.next(), ridge: angle })
-      }
     }
   }
 }

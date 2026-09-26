@@ -1,6 +1,6 @@
 import { RNG, hashString } from '../gen/rng'
 import { contours, simplify } from '../render/atlas/svg/contour'
-import { Corridors, SIZE_CFG, clipWater, placeable, type Ctx } from './ctx'
+import { Corridors, Occupancy, SIZE_CFG, clipWater, isFree, type Ctx } from './ctx'
 import {
   area,
   centroid,
@@ -13,6 +13,7 @@ import {
   pointInPoly,
   polylineLength,
   rect,
+  segPolyDist,
   resample,
   type P,
   type Poly,
@@ -21,9 +22,9 @@ import { layoutGrid } from './grid'
 import { fromF32, smoothRoute, wallFromLoop } from './walls'
 import { buildPatches, crossings, farm, sharedEdge, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
-import { EXTENT, buildTerrain, routeOnTerrain } from './terrain'
+import { EXTENT, buildTerrain, landPieces, routeOnTerrain } from './terrain'
 import type { MapLabel, Settlement, SettlementParams, Ward, WardType } from './types'
-import { castle, cemetery, eastCompound, eastWard, harbor, magicWard, noble, park, plaza, temple, urban } from './wards'
+import { addBoat, addBuilding, addPier, castle, cemetery, eastCompound, eastWard, harbor, magicWard, noble, park, plaza, temple, urban } from './wards'
 
 export function generateSettlement(p: SettlementParams): Settlement {
   const t0 = performance.now()
@@ -44,6 +45,7 @@ export function generateSettlement(p: SettlementParams): Settlement {
     Rin: 0,
     gridAngle: 0,
     corridors: new Corridors(),
+    occ: new Occupancy(),
     out: {
       roads: [],
       crossings: [],
@@ -158,6 +160,7 @@ function routeArterials(ctx: Ctx): P[][] {
     }
     if (!target) continue
     const raw = routeOnTerrain(T, ctx.center, target, { water: 14, slope: 1, bias })
+    if (raw.length < 2) continue
     for (const q of resample(raw, cell / 2)) {
       const i = Math.round(q[0] / cell)
       const j = Math.round(q[1] / cell)
@@ -168,7 +171,7 @@ function routeArterials(ctx: Ctx): P[][] {
           if (x >= 0 && y >= 0 && x < GW && y < GH) used[y * GW + x] = 1
         }
     }
-    roads.push(smoothRoute(raw))
+    roads.push(smoothRoute(raw, 4, T))
   }
   return roads
 }
@@ -279,6 +282,21 @@ function assignWards(ctx: Ctx, patches: Patch[], walled: boolean) {
     return best
   }
   const dc = (i: number) => dist(patches[i].site, ctx.center) / ctx.Rin
+  // 特殊片区（城堡、教堂、法师塔、墓地、公园）尽量挑没有街道穿过的片区
+  const clearCache = new Map<number, boolean>()
+  const clear = (i: number) => {
+    let v = clearCache.get(i)
+    if (v === undefined) {
+      const core = insetConvex(patches[i].poly, 8)
+      v = core.length >= 3 && !ctx.corridors.hitsPoly(core, 0, ['road'])
+      clearCache.set(i, v)
+    }
+    return v
+  }
+  const prefer = (cands: number[]) => {
+    const c = cands.filter(clear)
+    return c.length ? c : cands
+  }
   const small = p.size === 'hamlet' || p.size === 'village'
   patches[0].type = small ? 'park' : 'plaza'
   if (small) {
@@ -290,15 +308,15 @@ function assignWards(ctx: Ctx, patches: Patch[], walled: boolean) {
     if (walled && (p.size === 'city' || rng.next() < 0.55)) {
       const typical = ctx.cfg.patch * ctx.cfg.patch * 0.87
       const c = pick(
-        free().filter((i) => touchesWall(i) && area(patches[i].poly) < typical * 1.5 && area(patches[i].poly) > typical * 0.5),
+        free().filter((i) => touchesWall(i) && clear(i) && area(patches[i].poly) < typical * 1.5 && area(patches[i].poly) > typical * 0.5),
         (i) => T.heightAt(patches[i].site) / 8 + dc(i) * 0.5,
       )
       if (c >= 0) patches[c].type = 'castle'
     }
-    const t = pick(patches[0].nb.filter((i) => patches[i].inner && !patches[i].type), (i) => area(patches[i].poly) / 8000)
+    const t = pick(prefer(patches[0].nb.filter((i) => patches[i].inner && !patches[i].type)), (i) => area(patches[i].poly) / 8000)
     if (t >= 0) patches[t].type = 'temple'
     if (p.magic > 0) {
-      const m = pick(free().filter((i) => !patches[0].nb.includes(i)), (i) => T.heightAt(patches[i].site) / 10 + dc(i))
+      const m = pick(prefer(free().filter((i) => !patches[0].nb.includes(i))), (i) => T.heightAt(patches[i].site) / 10 + dc(i))
       if (m >= 0) patches[m].type = 'magic'
     }
     if (p.coast || p.river) {
@@ -309,11 +327,11 @@ function assignWards(ctx: Ctx, patches: Patch[], walled: boolean) {
       for (const i of hs) patches[i].type = p.coast ? 'harbor' : 'craft'
     }
     if (p.size === 'city' || rng.next() < 0.45) {
-      const k = pick(free().filter((i) => !patches[0].nb.includes(i)), () => 0)
+      const k = pick(prefer(free().filter((i) => !patches[0].nb.includes(i))), () => 0)
       if (k >= 0) patches[k].type = 'park'
     }
     if (rng.next() < 0.6) {
-      const k = pick(free().filter(touchesWall), (i) => dc(i))
+      const k = pick(prefer(free().filter(touchesWall)), (i) => dc(i))
       if (k >= 0) patches[k].type = 'cemetery'
     }
     const castleId = patches.findIndex((x) => x.type === 'castle')
@@ -376,13 +394,16 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], walled: 'stone' | 'palisade' 
         if (j < i || !patches[j].inner || rng.next() < 0.35) continue
         const e = sharedEdge(patches[i], patches[j])
         if (!e || T.waterAt(e[0]) < 3 || T.waterAt(e[1]) < 3) continue
-        ctx.out.roads.push({ line: [e[0], e[1]], width: cfg.lane, kind: 'lane' })
+        // 巷子不下海：只留陆上的段
+        for (const piece of landPieces(T, [e[0], e[1]])) ctx.out.roads.push({ line: piece, width: cfg.lane, kind: 'lane' })
       }
     }
   }
   extraBridges(ctx, inside)
+  // 栈桥与通往栈桥的小路要在盖房之前定下，房子才会让开
+  if (p.coast && (p.size === 'hamlet' || p.size === 'village')) jetties(ctx)
   for (const r of ctx.out.roads) if (r.kind !== 'path') ctx.corridors.add(r.line, r.width / 2 + 1.2)
-  if (T.river) ctx.corridors.add(T.river.line, 0)
+  if (T.river) ctx.corridors.add(T.river.line, 0, 'river')
   crossings(ctx)
 
   // —— 片区 ——
@@ -408,14 +429,18 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], walled: 'stone' | 'palisade' 
         break
       case 'temple':
         if (small) {
-          urban(ctx, block, p.size, [], 34)
-          const c = centroid(block)
+          // 先定礼拜堂 / 祠堂的位置，农舍再绕开它
           const b = obb(block)
-          const ch = rect(c, b.axis, 16, 8)
-          if (placeable(ctx, ch)) {
-            ctx.out.buildings.push({ poly: ch, kind: p.culture === 'eastern' ? 'hall' : 'temple', tone: 0.5, ridge: Math.atan2(b.axis[1], b.axis[0]) })
-            ctx.out.landmarks.push({ p: c, name: ctx.namer.landmark(p.culture === 'eastern' ? 'shrine' : 'chapel', p.magic), kind: 'temple' })
-          }
+          let ch: Poly | null = null
+          for (const s of [1, 0.8])
+            for (const t of [0, 0.2, -0.2, 0.35, -0.35]) {
+              const q: P = [b.center[0] + b.axis[0] * b.len * t, b.center[1] + b.axis[1] * b.len * t]
+              const cand = rect(q, b.axis, 16 * s, 8 * s)
+              if (!ch && cand.every((v) => pointInPoly(v, block)) && isFree(ctx, cand, { pad: 1.5 })) ch = cand
+            }
+          if (ch && addBuilding(ctx, ch, p.culture === 'eastern' ? 'hall' : 'temple', 1.5))
+            ctx.out.landmarks.push({ p: centroid(ch), name: ctx.namer.landmark(p.culture === 'eastern' ? 'shrine' : 'chapel', p.magic), kind: 'temple' })
+          urban(ctx, block, p.size, ch ? [rect(centroid(ch), b.axis, 26, 16)] : [], 34)
         } else temple(ctx, ward, block)
         break
       case 'castle':
@@ -453,7 +478,6 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], walled: 'stone' | 'palisade' 
         else urban(ctx, block, type)
     }
   }
-  if (p.coast && (p.size === 'hamlet' || p.size === 'village')) jetties(ctx)
   nameDistricts(ctx)
 }
 
@@ -476,11 +500,14 @@ function jetties(ctx: Ctx) {
     const end: P = [q[0] - g[0] * L, q[1] - g[1] * L]
     if (!T.seaAt(end)) continue
     const mid: P = [(q[0] + end[0]) / 2, (q[1] + end[1]) / 2]
-    ctx.out.piers.push(rect(mid, [-g[0], -g[1]], L + 2, 3.2))
+    const route = smoothRoute(routeOnTerrain(T, center, [q[0] + g[0] * 3, q[1] + g[1] * 3], { water: 30, slope: 1 }), 3, T)
+    if (route.length < 2) continue
+    if (!addPier(ctx, rect(mid, [-g[0], -g[1]], L + 2, 3.2))) continue
     const n: P = [-g[1], g[0]]
-    for (const s of [-1, 1])
-      if (rng.next() < 0.7) ctx.out.boats.push({ p: [end[0] + g[0] * L * 0.3 + n[0] * 5 * s, end[1] + g[1] * L * 0.3 + n[1] * 5 * s], angle: Math.atan2(-g[1], -g[0]), len: 7 + rng.next() * 4 })
-    const route = smoothRoute(routeOnTerrain(T, center, [q[0] + g[0] * 3, q[1] + g[1] * 3], { water: 30, slope: 1 }), 3)
+    for (const s of [-1, 1]) {
+      const len = 7 + rng.next() * 4
+      if (rng.next() < 0.7) addBoat(ctx, [end[0] + g[0] * L * 0.3 + n[0] * (2.8 + len * 0.18) * s, end[1] + g[1] * L * 0.3 + n[1] * (2.8 + len * 0.18) * s], Math.atan2(-g[1], -g[0]), len)
+    }
     ctx.out.roads.push({ line: route, width: ctx.cfg.lane, kind: 'lane' })
     made.push(q)
   }
@@ -497,7 +524,8 @@ function villageGreen(ctx: Ctx, block: Poly) {
   ctx.out.landmarks.push({ p: c, name: '', kind: 'well' })
   for (let k = 0; k < 3; k++) {
     const a = ctx.rng.next() * Math.PI * 2
-    ctx.out.trees.push({ p: [c[0] + Math.cos(a) * r * 0.6, c[1] + Math.sin(a) * r * 0.6], r: 4 + ctx.rng.next() * 2 })
+    const t: P = [c[0] + Math.cos(a) * r * 0.6, c[1] + Math.sin(a) * r * 0.6]
+    if (!ctx.corridors.hits(t, 1) && !ctx.occ.hitsPoint(t, 2)) ctx.out.trees.push({ p: t, r: 4 + ctx.rng.next() * 2 })
   }
   urban(ctx, block, ctx.p.size, [circlePoly(c, r + 4, 18)], 30)
 }
@@ -544,24 +572,49 @@ function magicExtras(ctx: Ctx) {
   if (p.magic === 0) return
   // 东方：山上的宗门，石阶从城门蜿蜒而上
   if (p.culture === 'eastern' && p.hills && T.hillDir) {
-    let best: P | null = null
-    let bh = -Infinity
+    // 候选山头按"高、缓、离城不太远"排序，依次试到能落地为止（不压路、不压水）
+    const cands: { q: P; h: number }[] = []
     for (let k = 0; k < 400; k++) {
       const q: P = [160 + rng.next() * (MW - 320), 160 + rng.next() * (MH - 320)]
-      const h = T.heightAt(q) - T.slopeAt(q) * 200 - dist(q, ctx.center) * 0.03
-      if (h > bh && T.waterAt(q) > 30 && dist(q, ctx.center) > ctx.Rin * 1.2) {
-        bh = h
-        best = q
-      }
+      if (T.waterAt(q) > 30 && dist(q, ctx.center) > ctx.Rin * 1.2) cands.push({ q, h: T.heightAt(q) - T.slopeAt(q) * 200 - dist(q, ctx.center) * 0.03 })
+    }
+    cands.sort((a, b) => b.h - a.h)
+    let best: P | null = null
+    for (const { q } of cands.slice(0, 40)) {
+      const zone = rect(q, [1, 0], 110, 110)
+      if (zone.some((v) => T.waterAt(v) < 5) || ctx.corridors.hitsPoly(zone, 1, ['road', 'wall'])) continue
+      best = q
+      break
     }
     if (best) {
+      // 宗门所在的山头先清场：原有的农舍、林木、田块让位
       const zone = rect(best, [1, 0], 110, 110)
-      const got = eastCompound(ctx, zone, 'sect')
-      if (got) ctx.out.trees = ctx.out.trees.filter((t) => !pointInPoly(t.p, got))
-      ctx.out.landmarks.push({ p: best, name: ctx.namer.landmark('magic', p.magic), kind: 'magic' })
-      const from = ctx.out.walls[0]?.gates[0]?.p ?? ctx.center
-      const stair = smoothRoute(routeOnTerrain(T, from, [best[0], best[1] + 50], { water: 20, slope: 0.25 }), 3)
-      ctx.out.roads.push({ line: stair, width: 2.5, kind: 'stair' })
+      const clear = rect(best, [1, 0], 124, 124)
+      const inClear = (poly: Poly) => poly.some((v) => pointInPoly(v, clear)) || pointInPoly(centroid(poly), clear)
+      ctx.out.buildings = ctx.out.buildings.filter((b) => !inClear(b.poly))
+      ctx.out.enclosures = ctx.out.enclosures.filter((e) => !inClear(e))
+      ctx.out.fields = ctx.out.fields.filter((f) => !inClear(f.poly))
+      ctx.out.trees = ctx.out.trees.filter((t) => !pointInPoly(t.p, clear))
+      ctx.occ.removeWhere(inClear)
+      if (eastCompound(ctx, zone, 'sect')) {
+        ctx.out.landmarks.push({ p: best, name: ctx.namer.landmark('magic', p.magic), kind: 'magic' })
+        // 石阶从城门通到山门外，沿途让开
+        // 从离山门最近的城门出发，绕开城内
+        const gate: P = [best[0], best[1] + 62]
+        const wall = ctx.out.walls[0]
+        const from = wall?.gates.length ? wall.gates.reduce((a, g) => (dist(g.p, gate) < dist(a.p, gate) ? g : a)).p : ctx.center
+        const inCity = (q: P) => !!wall && pointInPoly(q, wall.loop)
+        const stair = smoothRoute(routeOnTerrain(T, from, gate, { water: 20, slope: 0.25, bias: (q) => (inCity(q) ? 30 : ctx.corridors.hits(q, 0) ? 0.6 : 1) }), 3, T)
+        if (stair.length > 1) {
+          const hit = (poly: Poly) => {
+            for (let i = 0; i + 1 < stair.length; i++) if (segPolyDist(stair[i], stair[i + 1], poly) < 2.5) return true
+            return false
+          }
+          ctx.out.buildings = ctx.out.buildings.filter((b) => !hit(b.poly))
+          ctx.out.trees = ctx.out.trees.filter((t) => !hit(circlePoly(t.p, t.r * 0.6, 6)))
+          ctx.out.roads.push({ line: stair, width: 2.5, kind: 'stair' })
+        }
+      }
     }
   }
   if (p.magic < 2) return

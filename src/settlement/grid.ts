@@ -1,7 +1,7 @@
 import { clipWater, type Ctx } from './ctx'
 import { area, centroid, clipHalf, dist, insetConvex, pointInPoly, type P, type Poly } from './geom'
 import { buildPatches, crossings, farm, spacing, vegetation, wild } from './outer'
-import { routeOnTerrain } from './terrain'
+import { landPieces, routeOnTerrain } from './terrain'
 import type { Ward, WardType } from './types'
 import { smoothRoute, wallFromLoop } from './walls'
 import { cemetery, eastCompound, eastMarket, eastWard, harbor, magicWard, park } from './wards'
@@ -93,7 +93,8 @@ export function layoutGrid(ctx: Ctx, _arterials: P[][], walled: 'stone' | 'palis
     const target = clampToMap(g.from, far, MW, MH)
     if (T.waterAt(target) < 10) continue
     const start: P = [g.from[0] - g.dir[0] * 6, g.from[1] - g.dir[1] * 6]
-    const route = smoothRoute(routeOnTerrain(T, start, target, { water: 14, slope: 1 }))
+    const route = smoothRoute(routeOnTerrain(T, start, target, { water: 14, slope: 1 }), 4, T)
+    if (route.length < 2) continue
     roadsOut.push(route)
     ctx.out.roads.push({ line: route, width: cfg.highway, kind: 'highway' })
   }
@@ -102,23 +103,23 @@ export function layoutGrid(ctx: Ctx, _arterials: P[][], walled: 'stone' | 'palis
   // —— 城内街道 ——
   for (let i = 1; i < nx; i++) {
     const w = widthI(i)
-    const top = i > palace.i0 && i < palace.i1 ? V(palaceRow) : V(ny)
-    const line = [at(U(i), V(0)), at(U(i), top)]
-    ctx.out.roads.push({ line, width: w, kind: isMainI(i) ? 'main' : 'street', name: ctx.namer.street(isMainI(i) ? 'main' : 'street') })
+    // 中轴大街止于宫城前的横街（街口由横街铺满），走廊不伸进宫城
+    const top = i > palace.i0 && i < palace.i1 ? V(palaceRow) - widthJ(palaceRow) / 2 : V(ny)
+    const name = ctx.namer.street(isMainI(i) ? 'main' : 'street')
+    // 城池压到海里的部分不铺路
+    for (const piece of landPieces(T, [at(U(i), V(0)), at(U(i), top)])) ctx.out.roads.push({ line: piece, width: w, kind: isMainI(i) ? 'main' : 'street', name })
   }
   for (let j = 1; j < ny; j++) {
     const w = widthJ(j)
-    ctx.out.roads.push({ line: [at(U(0), V(j)), at(U(nx), V(j))], width: w, kind: isMainJ(j) ? 'main' : 'street', name: ctx.namer.street(isMainJ(j) ? 'main' : 'street') })
+    const name = ctx.namer.street(isMainJ(j) ? 'main' : 'street')
+    for (const piece of landPieces(T, [at(U(0), V(j)), at(U(nx), V(j))])) ctx.out.roads.push({ line: piece, width: w, kind: isMainJ(j) ? 'main' : 'street', name })
   }
   // 顺城街
   const ring = 8
-  ctx.out.roads.push({
-    line: [at(U(0) + ring, V(0) + ring), at(U(nx) - ring, V(0) + ring), at(U(nx) - ring, V(ny) - ring), at(U(0) + ring, V(ny) - ring), at(U(0) + ring, V(0) + ring)],
-    width: 5,
-    kind: 'street',
-  })
+  const ringLine: P[] = [at(U(0) + ring, V(0) + ring), at(U(nx) - ring, V(0) + ring), at(U(nx) - ring, V(ny) - ring), at(U(0) + ring, V(ny) - ring), at(U(0) + ring, V(0) + ring)]
+  for (const piece of landPieces(T, ringLine)) ctx.out.roads.push({ line: piece, width: 5, kind: 'street' })
   for (const r of ctx.out.roads) if (r.kind !== 'path') ctx.corridors.add(r.line, r.width / 2 + 1)
-  if (T.river) ctx.corridors.add(T.river.line, 0)
+  if (T.river) ctx.corridors.add(T.river.line, 0, 'river')
   crossings(ctx)
 
   // —— 里坊 ——

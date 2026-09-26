@@ -330,3 +330,145 @@ export function segIntersect(a0: P, a1: P, b0: P, b1: P): { t: number; u: number
 
 /** 点键：用于把共享顶点归并成图节点 */
 export const keyOf = (p: P) => `${Math.round(p[0] * 10)},${Math.round(p[1] * 10)}`
+
+export type BBox = [number, number, number, number]
+
+export function bboxOf(poly: Poly): BBox {
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const [x, y] of poly) {
+    if (x < x0) x0 = x
+    if (y < y0) y0 = y
+    if (x > x1) x1 = x
+    if (y > y1) y1 = y
+  }
+  return [x0, y0, x1, y1]
+}
+
+/**
+ * 两个凸多边形是否相交（分离轴定理）。
+ * tol > 0：贴边或重叠不足 tol 的不算相交；tol < 0：间距小于 |tol| 也算相交（留出空隙）。
+ */
+export function convexOverlap(a: Poly, b: Poly, tol = 0.05): boolean {
+  for (const poly of [a, b]) {
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i]
+      const q = poly[(i + 1) % poly.length]
+      let nx = q[1] - p[1]
+      let ny = p[0] - q[0]
+      const L = Math.hypot(nx, ny)
+      if (L < 1e-9) continue
+      nx /= L
+      ny /= L
+      let a0 = Infinity
+      let a1 = -Infinity
+      let b0 = Infinity
+      let b1 = -Infinity
+      for (const v of a) {
+        const t = v[0] * nx + v[1] * ny
+        if (t < a0) a0 = t
+        if (t > a1) a1 = t
+      }
+      for (const v of b) {
+        const t = v[0] * nx + v[1] * ny
+        if (t < b0) b0 = t
+        if (t > b1) b1 = t
+      }
+      if (a1 <= b0 + tol || b1 <= a0 + tol) return false
+    }
+  }
+  return true
+}
+
+/** 两线段间的最短距离 */
+export function segSegDist(a0: P, a1: P, b0: P, b1: P): number {
+  const r = segIntersect(a0, a1, b0, b1)
+  if (r && r.t >= 0 && r.t <= 1 && r.u >= 0 && r.u <= 1) return 0
+  return Math.min(segDist(a0, b0, b1).d, segDist(a1, b0, b1).d, segDist(b0, a0, a1).d, segDist(b1, a0, a1).d)
+}
+
+/** 线段到多边形（含内部）的距离 */
+export function segPolyDist(a: P, b: P, poly: Poly): number {
+  if (pointInPoly(a, poly) || pointInPoly(b, poly)) return 0
+  let best = Infinity
+  for (let i = 0; i < poly.length; i++) best = Math.min(best, segSegDist(a, b, poly[i], poly[(i + 1) % poly.length]))
+  return best
+}
+
+/** 凸多边形与直线 p·v = t 的交弦，在 u 方向上的区间 */
+function chord(poly: Poly, u: P, v: P, t: number): [number, number] | null {
+  let lo = Infinity
+  let hi = -Infinity
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i]
+    const b = poly[(i + 1) % poly.length]
+    const ta = a[0] * v[0] + a[1] * v[1]
+    const tb = b[0] * v[0] + b[1] * v[1]
+    if ((ta - t) * (tb - t) > 0 || ta === tb) continue
+    const k = (t - ta) / (tb - ta)
+    const s = (a[0] + (b[0] - a[0]) * k) * u[0] + (a[1] + (b[1] - a[1]) * k) * u[1]
+    lo = Math.min(lo, s)
+    hi = Math.max(hi, s)
+  }
+  return lo <= hi ? [lo, hi] : null
+}
+
+/**
+ * 凸多边形里、沿 u 方向摆放的内接矩形（房屋的真实轮廓）。
+ * 在 v 方向（u 的法向）试几种进深区间 [v0 + f0·H, v0 + f1·H]：凸多边形里，矩形在该区间内的宽度
+ * 就是两端交弦的交集。取面积最大者；宽或深小于 minSide 就返回 null。
+ * bands 默认从 v 最小的一侧（临街面）算起，房子贴着街。
+ */
+export function inscribedRect(
+  poly: Poly,
+  u: P,
+  opts: { bands?: [number, number][]; minSide?: number; v?: P } = {},
+): Poly | null {
+  if (poly.length < 3) return null
+  const L = Math.hypot(u[0], u[1]) || 1
+  const uu: P = [u[0] / L, u[1] / L]
+  const v: P = opts.v ?? [-uu[1], uu[0]]
+  let v0 = Infinity
+  let v1 = -Infinity
+  for (const p of poly) {
+    const t = p[0] * v[0] + p[1] * v[1]
+    v0 = Math.min(v0, t)
+    v1 = Math.max(v1, t)
+  }
+  const H = v1 - v0
+  const minSide = opts.minSide ?? 3
+  if (H < minSide) return null
+  const bands = opts.bands ?? [
+    [0, 1],
+    [0, 0.85],
+    [0, 0.7],
+    [0, 0.55],
+    [0, 0.4],
+    [0.1, 0.9],
+    [0.15, 1],
+    [0.25, 0.75],
+  ]
+  const eps = Math.min(0.02, H * 0.001)
+  let best: Poly | null = null
+  let ba = 0
+  for (const [f0, f1] of bands) {
+    const ta = v0 + H * f0 + eps
+    const tb = v0 + H * f1 - eps
+    if (tb - ta < minSide) continue
+    const ca = chord(poly, uu, v, ta)
+    const cb = chord(poly, uu, v, tb)
+    if (!ca || !cb) continue
+    const s0 = Math.max(ca[0], cb[0])
+    const s1 = Math.min(ca[1], cb[1])
+    if (s1 - s0 < minSide) continue
+    const a = (s1 - s0) * (tb - ta)
+    if (a > ba) {
+      ba = a
+      const at = (s: number, t: number): P => [uu[0] * s + v[0] * t, uu[1] * s + v[1] * t]
+      best = [at(s0, ta), at(s1, ta), at(s1, tb), at(s0, tb)]
+    }
+  }
+  return best
+}

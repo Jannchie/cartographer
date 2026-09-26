@@ -200,7 +200,10 @@ export function buildTerrain(p: SettlementParams, rng: RNG): TerrainResult {
   }
 }
 
-/** 网格 A*：在地形上找一条代价最低的路（坡度、涉水都有代价） */
+/**
+ * 网格 A*：在地形上找一条代价最低的路（坡度、涉水都有代价）。
+ * 海不可通行（过河靠桥，过海不行）；终点不可达时返回空数组。
+ */
 export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: number; slope: number; bias?: (p: P) => number }): P[] {
   const { W, H, cell } = T.terrain
   // 用较粗的网格寻路，保证速度
@@ -264,6 +267,7 @@ export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: 
       const nk = ny * GW + nx
       if (closed[nk]) continue
       const q: P = [nx * gc, ny * gc]
+      if (nk !== goal && T.seaAt(q)) continue
       const L = Math.hypot(DX[d], DY[d]) * gc
       const dh = Math.abs(T.heightAt(q) - hp) / L
       let c = L * (1 + opts.slope * dh * dh * 40)
@@ -277,6 +281,7 @@ export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: 
       }
     }
   }
+  if (goal !== start && prev[goal] < 0) return []
   const path: P[] = []
   for (let k = goal; k >= 0; k = prev[k]) {
     path.push([(k % GW) * gc, Math.floor(k / GW) * gc])
@@ -288,6 +293,27 @@ export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: 
     path[path.length - 1] = to
   }
   return path
+}
+
+/** 折线上是否有点落在海里（按 step 米重采样检查） */
+export function touchesSea(T: TerrainResult, line: P[], step = 3) {
+  if (line.length < 2) return false
+  for (const q of resample(line, step)) if (T.seaAt(q)) return true
+  return false
+}
+
+/** 把折线在海里的部分去掉，返回留在陆上的各段 */
+export function landPieces(T: TerrainResult, line: P[], step = 3): P[][] {
+  const out: P[][] = []
+  let cur: P[] = []
+  for (const q of resample(line, step)) {
+    if (T.seaAt(q)) {
+      if (cur.length > 1) out.push(cur)
+      cur = []
+    } else cur.push(q)
+  }
+  if (cur.length > 1) out.push(cur)
+  return out
 }
 
 /** 折线离最近点的距离 */
