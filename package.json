@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "preview:png": "tsx scripts/preview.ts",
     "shade:png": "tsx scripts/shade.ts",
-    "atlas:png": "tsx scripts/atlas.ts"
+    "atlas:png": "tsx scripts/atlas.ts",
+    "svg": "tsx scripts/svg.ts"
   },
   "dependencies": {
     "three": "^0.186.1"

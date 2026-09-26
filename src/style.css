@@ -220,6 +220,12 @@ button.primary:disabled {
   opacity: 0.5;
   cursor: progress;
 }
+.export-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+}
 button.wide {
   width: 100%;
   margin-top: 6px;

@@ -453,6 +453,30 @@ function localStorageSet(k: string, v: string) {
   }
 }
 
+// —— 矢量导出：纸图的全部底色、线划、符号与注记都是路径和文字 ——
+$('#export-svg').addEventListener('click', async () => {
+  if (!world) return
+  const w = world
+  loading.classList.remove('hidden')
+  $('#load-stage').textContent = '矢量化：追踪等值线与区域轮廓'
+  $('#load-bar').style.width = '100%'
+  await ensureFonts(w, atlasStyle)
+  await new Promise((r) => setTimeout(r, 20))
+  try {
+    const { renderAtlasSvg } = await import('./render/atlas/svg/vector')
+    const measurer = document.createElement('canvas').getContext('2d')!
+    const svg = renderAtlasSvg(w, rivers, atlasStyle, atlasOpts, measurer, 2)
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${w.worldName.toLowerCase()}-${params.seed}-${atlasStyle}.svg`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+  } finally {
+    loading.classList.add('hidden')
+  }
+})
+
 // —— URL 同步：分享链接即可复现同一世界 ——
 function writeHash() {
   const q = new URLSearchParams()

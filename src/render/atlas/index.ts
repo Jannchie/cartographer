@@ -14,9 +14,10 @@ import {
 } from './furniture'
 import { drawGlyphs } from './glyphs'
 import { LabelLayer } from './labels'
-import { THEMES, themeById, type AtlasOpts, type StyleId } from './styles'
+import { THEMES, themeById, type AtlasOpts, type StyleId, type Theme } from './styles'
 
 export { THEMES, type StyleId }
+export { Fields }
 
 const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
 
@@ -42,21 +43,29 @@ export async function ensureFonts(world: World, id: StyleId) {
 
 const fieldCache = new WeakMap<World, Fields>()
 
+export function fieldsFor(world: World, S: number) {
+  let f = fieldCache.get(world)
+  if (!f || f.S !== S) {
+    f = new Fields(world, S)
+    fieldCache.set(world, f)
+  }
+  return f
+}
+
+export function marginOf(theme: Theme, S: number) {
+  return Math.round((theme.frame === 'ink' ? 44 : 34) * S)
+}
+
 /**
  * 纸质地图：先逐像素着色（各风格的底色、晕渲、线划），
  * 再叠加河流、符号、经纬网、图名、图例、注记与图框。
  */
 export function renderAtlas(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, S = 2): HTMLCanvasElement {
   const theme = themeById(id)
-  let f = fieldCache.get(world)
-  if (!f || f.S !== S) {
-    f = new Fields(world, S)
-    fieldCache.set(world, f)
-  }
+  const f = fieldsFor(world, S)
   theme.prepare?.(f)
-  const { MW, MH, W } = f
-  const k = S / 2
-  const M = Math.round((theme.frame === 'ink' ? 44 : 34) * S)
+  const { MW, MH } = f
+  const M = marginOf(theme, S)
   const canvas = document.createElement('canvas')
   canvas.width = MW + M * 2
   canvas.height = MH + M * 2
@@ -65,7 +74,7 @@ export function renderAtlas(world: World, rivers: SmoothRiver[], id: StyleId, op
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
   const t0 = performance.now()
-  const img = f.scan((p, o) => theme.pixel(p, o, f!, opts))
+  const img = f.scan((p, o) => theme.pixel(p, o, f, opts))
   const t1 = performance.now()
   const off = document.createElement('canvas')
   off.width = MW
@@ -78,7 +87,18 @@ export function renderAtlas(world: World, rivers: SmoothRiver[], id: StyleId, op
   ctx.beginPath()
   ctx.rect(0, 0, MW, MH)
   ctx.clip()
+  drawOverlays(ctx, f, theme, rivers, opts)
+  ctx.restore()
 
+  drawFrame(ctx, world, theme, S, M, MW, MH)
+  if (import.meta.env?.DEV) console.log(`[atlas] ${id}: pixels ${(t1 - t0).toFixed(0)}ms, overlays ${(performance.now() - t1).toFixed(0)}ms`)
+  return canvas
+}
+
+/** 地图框内的全部叠加层（位图与矢量共用） */
+export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Theme, rivers: SmoothRiver[], opts: AtlasOpts) {
+  const { world, S, MW, MH, W } = f
+  const k = S / 2
   const compassR = (theme.compass === 'nautical' ? 46 : theme.compass === 'ornate' ? 44 : 34) * S
   const cx = MW - (theme.compass === 'nautical' ? 110 : 76) * S
   const cy = MH - (theme.compass === 'nautical' ? 118 : 84) * S
@@ -88,7 +108,7 @@ export function renderAtlas(world: World, rivers: SmoothRiver[], id: StyleId, op
   if (theme.glyphs) drawGlyphs(ctx, f, { ink: theme.ink, paper: 'rgb(236, 222, 186)', shadow: 'rgba(74, 54, 36, 0.32)' })
   if (opts.graticule && theme.graticule) drawGraticule(ctx, world, S, theme.graticule)
   drawCompass(ctx, theme, cx, cy, compassR)
-  drawScaleBar(ctx, world, theme, S, theme.compass === 'none' ? MW - 150 * S : MW - 150 * S, MH - 24 * S)
+  drawScaleBar(ctx, world, theme, S, MW - 150 * S, MH - 24 * S)
   const title = drawCartouche(ctx, world, theme, S, MW)
   const legend = drawLegend(ctx, world, theme, S, MH)
   if (opts.labels) {
@@ -100,9 +120,4 @@ export function renderAtlas(world: World, rivers: SmoothRiver[], id: StyleId, op
     layer.reserve({ x0: MW - 300 * k, y0: MH - 50 * k, x1: MW, y1: MH })
     layer.all()
   }
-  ctx.restore()
-
-  drawFrame(ctx, world, theme, S, M, MW, MH)
-  if (import.meta.env?.DEV) console.log(`[atlas] ${id}: pixels ${(t1 - t0).toFixed(0)}ms, overlays ${(performance.now() - t1).toFixed(0)}ms`)
-  return canvas
 }
