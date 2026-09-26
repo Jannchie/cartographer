@@ -198,12 +198,14 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, world: World, theme:
 
 // ———————————————————————— 图名 ————————————————————————
 
-function spaced(ctx: CanvasRenderingContext2D, text: string, cx: number, y: number, spacing: number) {
+/** 字距加宽的居中文字；halo 为真时每个字先按当前 strokeStyle / lineWidth 描边再填充 */
+function spaced(ctx: CanvasRenderingContext2D, text: string, cx: number, y: number, spacing: number, halo = false) {
   const ws = [...text].map((c) => ctx.measureText(c).width)
   const tot = ws.reduce((a, b) => a + b, 0) + spacing * (text.length - 1)
   let x = cx - tot / 2
   ctx.textAlign = 'left'
   for (let i = 0; i < text.length; i++) {
+    if (halo) ctx.strokeText(text[i], x, y)
     ctx.fillText(text[i], x, y)
     x += ws[i] + spacing
   }
@@ -280,6 +282,43 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       box = { x0: 0, y0: 0, x1: x + w + 12 * k, y1: y + h + 10 * k }
       break
     }
+    case 'game': {
+      // 游戏大地图的区域名：无底框，白字深描边，下方一道带菱形的细装饰线
+      const x = 30 * k
+      const y = 28 * k
+      const w = 320 * k
+      ctx.translate(x, y)
+      ctx.fillStyle = theme.ink
+      ctx.strokeStyle = theme.labels.halo
+      ctx.lineJoin = 'round'
+      ctx.font = `600 ${34 * k}px ${theme.labels.display}`
+      ctx.lineWidth = 4 * k
+      spaced(ctx, title, w / 2, 38 * k, 8 * k, true)
+      ctx.lineWidth = 1 * k
+      ctx.strokeStyle = theme.ink
+      ctx.globalAlpha = 0.85
+      for (const [a, b] of [[20 * k, w / 2 - 9 * k], [w / 2 + 9 * k, w - 20 * k]]) {
+        ctx.beginPath()
+        ctx.moveTo(a, 52 * k)
+        ctx.lineTo(b, 52 * k)
+        ctx.stroke()
+      }
+      ctx.beginPath()
+      ctx.moveTo(w / 2, 47 * k)
+      ctx.lineTo(w / 2 + 5 * k, 52 * k)
+      ctx.lineTo(w / 2, 57 * k)
+      ctx.lineTo(w / 2 - 5 * k, 52 * k)
+      ctx.closePath()
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.font = `600 ${12 * k}px ${theme.labels.text}`
+      ctx.strokeStyle = theme.labels.halo
+      ctx.lineWidth = 3 * k
+      const sub = `SEED · ${world.params.seed.toUpperCase()}`
+      spaced(ctx, sub, w / 2, 74 * k, 3 * k, true)
+      box = { x0: 0, y0: 0, x1: x + w + 16 * k, y1: y + 86 * k }
+      break
+    }
     case 'ink': {
       // 竖排题名 + 朱文印
       const zhTitle = `${world.worldNameZh}舆地全图`
@@ -322,9 +361,7 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.font = `${sans ? '' : 'italic'} 500 ${13 * k}px ${theme.labels.text}`
       ctx.textAlign = 'center'
       const sub =
-        theme.id === 'political'
-          ? `Political map · ${world.realms.length} realms`
-          : theme.id === 'topo'
+        theme.id === 'topo'
             ? `Topographic survey · contour interval 100 m`
             : `A physical map of the known world · seed “${world.params.seed}”`
       ctx.fillText(sub, w / 2, 66 * k)
@@ -497,6 +534,7 @@ export function drawSoundings(ctx: CanvasRenderingContext2D, f: Fields) {
 // ———————————————————————— 图框 ————————————————————————
 
 export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Theme, S: number, M: number, MW: number, MH: number) {
+  if (theme.frame === 'none') return
   const k = S / 2
   const ink = theme.ink
   const paper = rgb(theme.paper)

@@ -4,8 +4,8 @@ import { ATLAS, atlasSea, ramp, type RGB } from '../../palette'
 import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
 import { drawOverlays, fieldsFor, marginOf } from '../index'
-import { HYPSO_STOPS, REALM_COLORS, themeById, type AtlasOpts, type StyleId } from '../styles'
-import { categoryBorders, contours, pathData } from './contour'
+import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type StyleId } from '../styles'
+import { contours, pathData } from './contour'
 import { DisplayList, type Fill, type Stroke } from './displayList'
 import { Recorder } from './recorder'
 
@@ -14,7 +14,6 @@ const FONT_CSS =
 
 const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]
 const rgb = (c: RGB) => `rgb(${c.map((v) => Math.round(Math.min(255, Math.max(0, v)))).join(',')})`
-const mixRGB = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 
 const FOREST = new Set<number>([Biome.Taiga, Biome.TemperateForest, Biome.TemperateRainforest, Biome.TropicalRainforest, Biome.TropicalSeasonalForest])
 
@@ -24,6 +23,11 @@ interface LayerOpt {
   clip?: string
   tol?: number
   minArea?: number
+}
+
+/** 颜色或 url(#图案) → 填充 */
+function toFill(color: string, alpha: number): Fill {
+  return color.startsWith('url(') ? { pattern: color.slice(5, -1), alpha, rule: 'evenodd' } : { color, alpha, rule: 'evenodd' }
 }
 
 /** 以格为单位的矢量图层构建器：追踪出的路径直接写进显示列表（地图坐标空间） */
@@ -38,10 +42,7 @@ class Layers {
   /** 填充"场 ≥ level"的区域 */
   fill(field: ArrayLike<number>, level: number, color: string, opacity = 1, o: LayerOpt = {}) {
     const d = pathData(contours(field, this.W, this.H, level, true), this.S, { closed: true, tol: o.tol ?? 0.35, minArea: o.minArea ?? 1.5 })
-    const fill: Fill = color.startsWith('url(')
-      ? { pattern: color.slice(5, -1), alpha: opacity, rule: 'evenodd' }
-      : { color, alpha: opacity, rule: 'evenodd' }
-    this.list.path('map', d, { fill, stroke: o.stroke, filter: o.filter, clip: o.clip })
+    this.list.path('map', d, { fill: toFill(color, opacity), stroke: o.stroke, filter: o.filter, clip: o.clip })
     return d
   }
 
@@ -55,7 +56,7 @@ class Layers {
   rect(color: string, opacity = 1) {
     const w = this.W * this.S
     const h = this.H * this.S
-    this.list.path('map', `M-10 -10L${w + 10} -10L${w + 10} ${h + 10}L-10 ${h + 10}Z`, { fill: { color, alpha: opacity } })
+    this.list.path('map', `M-10 -10L${w + 10} -10L${w + 10} ${h + 10}L-10 ${h + 10}Z`, { fill: toFill(color, opacity) })
   }
 }
 
@@ -155,18 +156,24 @@ function physical(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, opts:
 }
 
 function fantasy(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
-  const PARCH = hex('#e6d3a7')
-  const SEA = hex('#c9c7a4')
-  const SEPIA = 'rgb(74,54,36)'
-  L.rect(rgb(mixRGB(PARCH, SEA, 0.35)))
-  for (const d of [30, 18, 10, 5]) L.fill(world.coastDist, -d, rgb(SEA), 0.2)
+  const C = FANTASY_COLORS
+  const SEPIA = rgb(C.sepia)
+  const N = world.W * world.H
+  // 海：近纸色，近岸几层铜绿水彩叠出由浓到淡的晕
+  L.rect(rgb(C.sea))
+  for (const [d, a] of [[60, 0.05], [34, 0.1], [20, 0.14], [11, 0.16], [5, 0.16]] as const) L.fill(world.coastDist, -d, rgb(C.seaWash), a)
   L.fill(F.ice, 0, 'rgb(240,232,210)')
-  ripples(L, world, [2, 4, 6.5, 9.5, 13.5], SEPIA, [0.4, 0.33, 0.26, 0.19, 0.12], 0.9)
-  L.fill(F.land, 0, rgb(hex('#ecdcb5')))
-  biomeLayers(L, world, ATLAS, 0.22)
-  hillshade(L, F, SEPIA, 0.05, 0.08)
-  L.fill(F.lake, 0.5, 'rgb(205,200,170)', 1, { stroke: { color: SEPIA, width: 1.4, alpha: 1 } })
-  L.line(F.land, 0, SEPIA, 2.5, 0.95)
+  ripples(L, world, [1.75, 3.5, 5.5, 8, 11], SEPIA, [0.36, 0.3, 0.23, 0.16, 0.1], 0.75)
+  // 陆：群系淡彩 + 高地棕晕 + 沿岸赭石色带
+  L.fill(F.land, 0, rgb(hex('#ecdcb3')))
+  biomeLayers(L, world, FANTASY_TINT, 0.6)
+  for (const lv of [1.3, 2.3]) L.fill(F.land, lv, rgb(C.mountainWash), 0.07)
+  const band = new Float32Array(N)
+  for (let i = 0; i < N; i++) band[i] = world.elevation[i] > 0 ? -world.coastDist[i] : -99
+  for (const d of [4, 2.5, 1.2]) L.fill(band, -d, rgb(C.coastWash), 0.14)
+  hillshade(L, F, SEPIA, 0.045, 0.07)
+  L.fill(F.lake, 0.5, rgb(C.lake), 1, { stroke: { color: SEPIA, width: 1.4, alpha: 1 } })
+  L.line(F.land, 0, SEPIA, 2.6, 0.95)
 }
 
 function nautical(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
@@ -189,38 +196,59 @@ function nautical(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
   L.line(F.land, 0, 'rgb(30,30,30)', 1.9, 0.92)
 }
 
-function political(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, S: number) {
-  const { W, H } = world
-  const N = W * H
+function teyvat(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, S: number) {
+  const C = TEYVAT
+  const N = world.W * world.H
+  const cd = world.coastDist
+  // 虚空 → 探索区域（圆润的一整团，外侧泛青色辉光）→ 近岸渐亮的青绿水
+  const reach = teyvatReach(world)
+  const inner = new Float32Array(N)
+  for (let i = 0; i < N; i++) inner[i] = -reach[i]
+  // 虚空里零星的星点：可平铺的小图案
   const k = S / 2
-  L.rect('#cfe0e4')
-  for (const d of [30, 15, 6]) L.fill(world.coastDist, -d, 'rgb(170,200,210)', 0.2)
-  L.fill(F.ice, 0, 'rgb(244,246,246)')
-  ripples(L, world, [2.5, 5.5], 'rgb(90,130,150)', [0.18, 0.18], 0.7)
-  L.fill(F.land, 0, 'rgb(243,238,226)')
-  const paper: RGB = [243, 238, 226]
-  world.realms.forEach((r, id) => {
-    const ind = new Float32Array(N)
-    for (let i = 0; i < N; i++) ind[i] = world.realm[i] === id ? 1 : 0
-    blur(ind, W, H, 1, 1)
-    const c = REALM_COLORS[r.color]
-    const d = L.fill(ind, 0.5, rgb(mixRGB(paper, c, 0.62)), 1, { tol: 0.4, minArea: 2 })
-    if (d) {
-      // 国界内侧晕边：以本国轮廓为裁剪，描一条宽边
-      L.list.clips.set(`rc${id}`, { d, rule: 'evenodd' })
-      L.list.path('map', d, {
-        stroke: { color: rgb(mixRGB(paper, [c[0] * 0.78, c[1] * 0.78, c[2] * 0.78], 0.9)), width: 14 * k, alpha: 0.55 },
-        clip: `rc${id}`,
-      })
-    }
+  const T = 180 * k
+  const stars = Array.from({ length: 14 }, (_, i) => [((i * 97 + 31) % 180) * k, ((i * 61 + 17) % 180) * k, (0.4 + ((i * 7) % 5) * 0.15) * k])
+  L.list.patterns.set('stars', {
+    w: T,
+    h: T,
+    svg: stars.map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${rgb(C.star)}" fill-opacity="0.55"/>`).join(''),
+    tile: () => {
+      const c = document.createElement('canvas')
+      c.width = c.height = Math.round(T * 2)
+      const g = c.getContext('2d')!
+      g.scale(2, 2)
+      g.fillStyle = rgb(C.star)
+      g.globalAlpha = 0.55
+      for (const [x, y, r] of stars) {
+        g.beginPath()
+        g.arc(x, y, r, 0, Math.PI * 2)
+        g.fill()
+      }
+      return c
+    },
   })
-  hillshade(L, F, 'rgb(40,35,30)', 0.05, 0.05)
-  // 国界：相邻两国格子的公共边串成折线，简化后平滑，止于海岸
-  const borders = categoryBorders(world.realm, W, H)
-  const bd = pathData(borders, S, { closed: false, tol: 0.75 })
-  L.list.path('map', bd, { stroke: { color: 'rgb(120,50,55)', width: 1.5, alpha: 0.85, cap: 'round', dash: [6 * k, 3 * k, 1.5 * k, 3 * k] } })
-  L.fill(F.lake, 0.5, '#cfe0e4', 1, { stroke: { color: 'rgb(70,100,120)', width: 0.9, alpha: 1 } })
-  L.line(F.land, 0, 'rgb(60,70,76)', 1.6, 0.92)
+  L.rect('url(#stars)')
+  for (const [d, a] of [[6, 0.1], [3, 0.16]] as const) L.fill(inner, -d, rgb(C.sea), a, { tol: 0.6, minArea: 4 })
+  // 边界亮线复用这一层追踪出的轮廓
+  const region = L.fill(inner, 0, rgb(C.deep), 1, { tol: 0.6, minArea: 4 })
+  for (const d of [18, 13, 9, 6]) L.fill(cd, -d, rgb(C.sea), 0.22)
+  for (const d of [4, 2.5, 1.5]) L.fill(cd, -d, rgb(C.shallow), 0.22)
+  L.fill(F.ice, 0, rgb(C.ice))
+  L.list.path('map', region, { stroke: { color: rgb(C.edge), alpha: 0.9, width: 1.6, cap: 'round', join: 'round' } })
+  // 陆：群系平涂 + 台地（越高越偏土黄）+ 崖线
+  L.fill(F.land, 0, rgb(TEYVAT_TINT[Biome.Grassland]))
+  biomeLayers(L, world, TEYVAT_TINT, 1)
+  for (let lv = TEYVAT_STEP; lv < 2.6; lv += TEYVAT_STEP) L.fill(F.land, lv, rgb(C.plateau), 0.05, { tol: 0.45, minArea: 2 })
+  L.fill(F.land, 2.9, rgb(C.rock), 0.7)
+  L.fill(F.snow, 0.5, rgb(C.snow))
+  // 卡通分层的明暗
+  L.fill(F.dark, 0.08, rgb(C.toonDark), 0.1, { tol: 0.5, minArea: 3 })
+  L.fill(F.dark, 0.2, rgb(C.toonDark), 0.12, { tol: 0.5, minArea: 3 })
+  L.fill(F.light, 0.04, rgb(C.toonLight), 0.08, { tol: 0.5, minArea: 3 })
+  // 崖线：只有陡处的台地边缘明显（坡度调制透明度在矢量里做不到，改用较淡的线 + 只画较高的台阶）
+  for (let lv = TEYVAT_STEP * 2; lv < 4; lv += TEYVAT_STEP) L.line(F.land, lv, rgb(C.cliff), 1, 0.35, undefined, { tol: 0.45 })
+  L.fill(F.lake, 0.5, rgb(C.lake), 1, { stroke: { color: rgb(C.coast), width: 0.9, alpha: 0.8 } })
+  L.line(F.land, 0, rgb(C.coast), 1.4, 0.7)
 }
 
 function ink(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, S: number) {
@@ -352,8 +380,8 @@ export function buildAtlasVector(world: World, rivers: SmoothRiver[], id: StyleI
     case 'nautical':
       nautical(L, world, F)
       break
-    case 'political':
-      political(L, world, F, S)
+    case 'teyvat':
+      teyvat(L, world, F, S)
       break
     case 'ink':
       ink(L, world, F, S)
@@ -380,8 +408,10 @@ export function buildAtlasVector(world: World, rivers: SmoothRiver[], id: StyleI
     tile: () => grain,
   })
   const mapRect = `M0 0L${MW} 0L${MW} ${MH}L0 ${MH}Z`
-  list.path('map', mapRect, { fill: { pattern: 'blotP', alpha: 1 }, opacity: brown ? 0.7 : 0.45 })
-  list.path('map', mapRect, { fill: { pattern: 'grainP', alpha: 1 }, opacity: brown ? 0.5 : 0.3 })
+  if (theme.paperTexture !== false) {
+    list.path('map', mapRect, { fill: { pattern: 'blotP', alpha: 1 }, opacity: brown ? 0.5 : 0.45 })
+    list.path('map', mapRect, { fill: { pattern: 'grainP', alpha: 1 }, opacity: brown ? 0.5 : 0.3 })
+  }
   list.filters.set(
     'brush',
     `<filter id="brush" x="-2%" y="-2%" width="104%" height="104%"><feTurbulence type="fractalNoise" baseFrequency="${(0.35 / k).toFixed(3)}" numOctaves="2" seed="5"/><feDisplacementMap in="SourceGraphic" scale="${2.6 * k}"/></filter>`,

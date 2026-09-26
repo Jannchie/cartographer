@@ -12,9 +12,10 @@ import {
   drawScaleBar,
   drawSoundings,
 } from './furniture'
+import { fitRiversToCoast } from './riverMouth'
 import { drawGlyphs } from './glyphs'
 import { LabelLayer } from './labels'
-import { THEMES, themeById, type AtlasOpts, type StyleId, type Theme } from './styles'
+import { FANTASY_GLYPHS, THEMES, themeById, type AtlasOpts, type StyleId, type Theme } from './styles'
 
 export { THEMES, type StyleId }
 export { Fields }
@@ -53,6 +54,7 @@ export function fieldsFor(world: World, S: number) {
 }
 
 export function marginOf(theme: Theme, S: number) {
+  if (theme.frame === 'none') return 0
   return Math.round((theme.frame === 'ink' ? 44 : 34) * S)
 }
 
@@ -104,8 +106,9 @@ export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Th
   const cy = MH - (theme.compass === 'nautical' ? 118 : 84) * S
   if (theme.rhumb) drawRhumbLines(ctx, [[cx, cy], [MW * 0.3, MH * 0.35]], MW, MH, S)
   if (theme.soundings) drawSoundings(ctx, f)
-  drawRivers(ctx, rivers, W, S, theme.river.color, theme.river.width, theme.river.minFlow)
-  if (theme.glyphs) drawGlyphs(ctx, f, { ink: theme.ink, paper: 'rgb(236, 222, 186)', shadow: 'rgba(74, 54, 36, 0.32)' })
+  const rv = theme.river
+  drawRivers(ctx, rv.fitCoast ? fitRiversToCoast(rivers, f) : rivers, W, S, rv.color, rv.width, rv.minFlow)
+  if (theme.glyphs) drawGlyphs(ctx, f, FANTASY_GLYPHS)
   if (opts.graticule && theme.graticule) drawGraticule(ctx, world, S, theme.graticule)
   drawCompass(ctx, theme, cx, cy, compassR)
   drawScaleBar(ctx, world, theme, S, MW - 150 * S, MH - 24 * S)

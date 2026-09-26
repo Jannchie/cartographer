@@ -21,6 +21,9 @@ interface TextStyle {
 type Kind = Label['kind'] | 'realm'
 
 /** 带避让的注记排布：按重要度依次放置，放不下就在附近换位，再不行就舍弃 */
+/** 默认不描边的注记：大字直接压在浅色底图上 */
+const NO_HALO = ['ocean', 'sea', 'continent']
+
 export class LabelLayer {
   private placed: Box[] = []
   constructor(
@@ -51,7 +54,8 @@ export class LabelLayer {
     const vertical = L.vertical.includes(kind)
     const caps = L.caps && !zh
     const f = (style: string, size: number, fam: string) => ({ font: `${style} ${size * k}px ${fam}`, size: size * k })
-    const base = (o: ReturnType<typeof f>, color: string, spacing: number, upper: boolean, halo = true): TextStyle => ({
+    const halo = !(L.noHalo ?? NO_HALO).includes(kind)
+    const base = (o: ReturnType<typeof f>, color: string, spacing: number, upper: boolean): TextStyle => ({
       ...o,
       color,
       spacing: zh ? Math.max(0.12, spacing * 0.6) : spacing,
@@ -62,13 +66,13 @@ export class LabelLayer {
     const it = zh ? '' : 'italic'
     switch (kind) {
       case 'ocean':
-        return base(f(`${it} 500`, zh ? 34 : 30, L.display), L.water, 0.42, true, false)
+        return base(f(`${it} 500`, zh ? 34 : 30, L.display), L.water, 0.42, true)
       case 'sea':
-        return base(f(`${it} 500`, zh ? 20 : 19, zh ? L.display : L.text), L.water, 0.25, false, false)
+        return base(f(`${it} 500`, zh ? 20 : 19, zh ? L.display : L.text), L.water, 0.25, false)
       case 'continent':
-        return base(f('600', Math.min(40, 22 + weight / 9000) * (zh ? 1.1 : 1), L.display), L.land, 0.55, true, false)
+        return base(f('600', Math.min(40, 22 + weight / 9000) * (zh ? 1.1 : 1), L.display), L.land, 0.55, true)
       case 'realm':
-        return base(f('600', Math.min(30, 15 + weight / 5000) * (zh ? 1.15 : 1), L.display), L.land, 0.35, true, true)
+        return base(f('600', Math.min(30, 15 + weight / 5000) * (zh ? 1.15 : 1), L.display), L.land, 0.35, true)
       case 'island':
         return base(f('500', weight > 2500 ? 16 : 13, L.text), L.land, 0.12, false)
       case 'range':

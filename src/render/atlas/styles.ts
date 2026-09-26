@@ -1,9 +1,9 @@
-import { Biome } from '../../gen/types'
-import { edt } from '../../gen/util'
+import { Biome, type World } from '../../gen/types'
+import { blur, edt } from '../../gen/util'
 import { ATLAS, atlasSea, ramp, type RGB } from '../palette'
 import { Fields, fnoise, hash, line, mix, mixc, paperGrain, set, sm, vnoise, type Px } from './fields'
 
-export type StyleId = 'physical' | 'fantasy' | 'nautical' | 'political' | 'ink' | 'topo'
+export type StyleId = 'physical' | 'fantasy' | 'nautical' | 'teyvat' | 'ink' | 'topo'
 
 export interface LabelTheme {
   /** 大字（大陆、海洋、国名）字体 */
@@ -23,6 +23,8 @@ export interface LabelTheme {
   /** 大写与字距 */
   caps: boolean
   city_marker: 'dot' | 'castle' | 'square' | 'star'
+  /** 不描边的注记类型（默认海洋、海、大陆：大字直接压在浅色底图上）；彩色底图上的白字要全部描边 */
+  noHalo?: string[]
 }
 
 export interface AtlasOpts {
@@ -39,16 +41,18 @@ export interface Theme {
   ink: string
   prepare?: (f: Fields) => void
   pixel: (p: Px, o: Float32Array, f: Fields, opts: AtlasOpts) => void
-  river: { color: string; width: number; minFlow: number }
-  frame: 'atlas' | 'ornate' | 'ink'
+  river: { color: string; width: number; minFlow: number; fitCoast?: boolean }
+  frame: 'atlas' | 'ornate' | 'ink' | 'none'
   compass: 'star' | 'ornate' | 'nautical' | 'north' | 'none'
-  cartouche: 'box' | 'scroll' | 'nautical' | 'ink'
+  cartouche: 'box' | 'scroll' | 'nautical' | 'ink' | 'game'
   graticule: string | null
   glyphs?: boolean
   rhumb?: boolean
   soundings?: boolean
   realms?: boolean
   legend?: 'realms' | 'hypsometric'
+  /** 纸纹（水渍、颗粒），默认有；游戏地图这类非纸质风格关掉 */
+  paperTexture?: boolean
   labels: LabelTheme
 }
 
@@ -125,40 +129,84 @@ function seaIce(p: Px, o: Float32Array, c: RGB) {
 }
 
 // ————————————————————————————————— 奇幻羊皮 —————————————————————————————————
-const PARCH = hex('#e6d3a7')
-const PARCH_LAND = hex('#ecdcb5')
-const PARCH_SEA = hex('#c9c7a4')
+const PARCH_LAND = hex('#ecdcb3')
+const PARCH_SEA = hex('#ded4b0')
+const SEA_WASH = hex('#94ab98')
+const COAST_WASH = hex('#cfa86c')
+const MOUNTAIN_WASH = hex('#b08c60')
 const SEPIA = hex('#4a3624')
+/** 手工上色的群系淡彩 */
+export const FANTASY_TINT: Record<number, RGB> = {}
+for (let b = 0; b <= 17; b++) FANTASY_TINT[b] = PARCH_LAND
+Object.assign(FANTASY_TINT, {
+  [Biome.Grassland]: hex('#d8d49a'),
+  [Biome.Savanna]: hex('#e2cf92'),
+  [Biome.Shrubland]: hex('#d9c998'),
+  [Biome.TemperateForest]: hex('#c2c690'),
+  [Biome.TemperateRainforest]: hex('#b6c08e'),
+  [Biome.Taiga]: hex('#bec4a0'),
+  [Biome.TropicalSeasonalForest]: hex('#c8c68a'),
+  [Biome.TropicalRainforest]: hex('#b2bc84'),
+  [Biome.HotDesert]: hex('#edd29a'),
+  [Biome.ColdDesert]: hex('#e0d2ac'),
+  [Biome.SaltFlat]: hex('#ede5cd'),
+  [Biome.Tundra]: hex('#dbd8c2'),
+  [Biome.IceCap]: hex('#f3efe3'),
+  [Biome.Alpine]: hex('#e0d6c0'),
+  [Biome.Wetland]: hex('#bcc49e'),
+  [Biome.Beach]: hex('#eedcae'),
+})
+export const FANTASY_COLORS = {
+  sea: PARCH_SEA,
+  seaWash: SEA_WASH,
+  coastWash: COAST_WASH,
+  mountainWash: MOUNTAIN_WASH,
+  lake: hex('#b9c6b0'),
+  sepia: SEPIA,
+}
+export const FANTASY_GLYPHS = {
+  ink: '#4a3624',
+  paper: 'rgb(241, 229, 199)',
+  shadow: 'rgb(198, 172, 128)',
+  snow: 'rgb(251, 247, 236)',
+  leaf: 'rgb(190, 192, 132)',
+  leafDark: 'rgb(140, 145, 94)',
+  pine: 'rgb(154, 163, 114)',
+  pineDark: 'rgb(108, 119, 84)',
+  grass: 'rgb(98, 92, 50)',
+}
 function fantasyPixel(p: Px, o: Float32Array, f: Fields) {
   const { px, py } = p
   if (p.h <= 0) {
-    // 近岸一圈淡墨绿晕染，向外渐隐到纸色
+    // 深海近纸色，近岸一圈铜绿水彩，越近越浓
     const d = -p.coast
-    set(o, PARCH)
-    mixc(o, PARCH_SEA, 0.35 + 0.55 * Math.exp(-d / 26))
+    set(o, PARCH_SEA)
+    mixc(o, SEA_WASH, 0.56 * Math.exp(-d / (22 * f.S)) + 0.1 * Math.exp(-d / (60 * f.S)))
     seaIce(p, o, [240, 232, 210])
-    const rip = [4, 8, 13, 19, 27]
-    for (let k = 0; k < rip.length; k++) mixc(o, SEPIA, (1 - sm(0.3, 0.95, Math.abs(d - rip[k] * (f.S / 2)))) * (0.4 - k * 0.07))
+    const rip = [3.5, 7, 11, 16, 22]
+    for (let k = 0; k < rip.length; k++) mixc(o, SEPIA, (1 - sm(0.25, 0.85, Math.abs(d - rip[k] * (f.S / 2)))) * (0.34 - k * 0.06))
   } else {
     set(o, PARCH_LAND)
-    // 极淡的群系色与晕渲，让地形隐约可辨
-    const [cr, cg, cb] = f.biomeColors('atlas', ATLAS)
-    mix(o, f.sample(cr, p.gx, p.gy), f.sample(cg, p.gx, p.gy), f.sample(cb, p.gx, p.gy), 0.22)
-    const sh = 1 + (p.shade - 1) * 0.35
+    const [cr, cg, cb] = f.biomeColors('fantasy', FANTASY_TINT)
+    mix(o, f.sample(cr, p.gx, p.gy), f.sample(cg, p.gx, p.gy), f.sample(cb, p.gx, p.gy), 0.6)
+    // 高地一层棕色晕染，沿岸一道赭石色带
+    mixc(o, MOUNTAIN_WASH, sm(1.1, 1.5, p.h) * 0.07 + sm(2.1, 2.5, p.h) * 0.06)
+    mixc(o, COAST_WASH, Math.exp(-p.coast / (3 * f.S)) * 0.34)
+    const sh = 1 + (p.shade - 1) * 0.3
     o[0] *= sh
     o[1] *= sh
     o[2] *= sh
-    lakeFill(p, o, [205, 200, 170], SEPIA, 0.8)
+    lakeFill(p, o, FANTASY_COLORS.lake, SEPIA, 0.9)
   }
-  coastInk(p, o, SEPIA, 1.25, 0.95)
-  // 陈旧感：水渍、霉斑与四周焦边
+  coastInk(p, o, SEPIA, 1.3, 0.95)
+  // 陈旧感：水渍与四周焦边
   const stain = fnoise(px, py, 110) * 0.65 + fnoise(px + 999, py, 28) * 0.35
-  mix(o, 170, 140, 95, sm(0.55, 0.85, stain) * 0.2)
+  mix(o, 170, 140, 95, sm(0.6, 0.88, stain) * 0.14)
   const ex = Math.min(px, f.MW - px) / f.MW
   const ey = Math.min(py, f.MH - py) / f.MH
   const edge = 1 - sm(0, 0.12, Math.min(ex, ey * 1.4) + (fnoise(px, py, 45) - 0.5) * 0.04)
-  mix(o, 120, 82, 45, edge * 0.55)
-  paperGrain(o, px, py, 1.3)
+  mix(o, 120, 82, 45, edge * 0.5)
+  paperGrain(o, px, py, 1.2)
 }
 
 // ————————————————————————————————— 航海图 —————————————————————————————————
@@ -188,52 +236,133 @@ function nauticalPixel(p: Px, o: Float32Array) {
   paperGrain(o, p.px, p.py, 0.6)
 }
 
-// ————————————————————————————————— 政区图 —————————————————————————————————
-function politicalPrepare(f: Fields) {
-  if (f.cache.has('border')) return
-  const { W, H, world } = f
-  const r = world.realm
-  const mask = new Uint8Array(W * H)
-  for (let y = 0; y < H - 1; y++) {
-    for (let x = 0; x < W - 1; x++) {
-      const i = y * W + x
-      const a = r[i]
-      if (a < 0) continue
-      const b = r[i + 1]
-      const c = r[i + W]
-      if ((b >= 0 && b !== a) || (c >= 0 && c !== a)) mask[i] = 1
-    }
-  }
-  f.cache.set('border', edt(mask, W, H))
+// ————————————————————————————————— 提瓦特（原神大地图风） —————————————————————————————————
+/**
+ * 游戏大地图：已探索区域（陆地外扩一圈海）之外是深藏青的星空虚空，交界是一道发光的青线；
+ * 海是低饱和的青绿，陆地是橄榄绿 / 黄橄榄 / 土黄的平涂台地，台地边缘有深色崖线，几乎不做写实晕渲。
+ */
+export const TEYVAT = {
+  void: hex('#0d1624'),
+  deep: hex('#2e6972'),
+  sea: hex('#3d8187'),
+  shallow: hex('#5b9e9a'),
+  edge: hex('#bfe6df'),
+  cliff: hex('#4b5528'),
+  coast: hex('#3f4a26'),
+  rock: hex('#b3ad93'),
+  snow: hex('#dfe2dc'),
+  lake: hex('#4f9396'),
+  /** 高处台地偏向的土黄 */
+  plateau: hex('#c4b470'),
+  star: hex('#c8dceb'),
+  ice: hex('#d6e0de'),
+  toonDark: hex('#282c14'),
+  toonLight: hex('#fffae1'),
 }
-function politicalPixel(p: Px, o: Float32Array, f: Fields) {
+/** 台地高差（km） */
+export const TEYVAT_STEP = 0.6
+
+const reachCache = new WeakMap<World, Float32Array>()
+/**
+ * 探索区域的有符号距离场（格，区域外为正）：离陆地约 24 格以内的海先膨胀、再大半径模糊，
+ * 相邻岛屿的范围连成一整团圆润的轮廓，而不是贴着每座岛绕一圈。
+ */
+export function teyvatReach(world: World) {
+  let sd = reachCache.get(world)
+  if (sd) return sd
+  const { W, H, coastDist } = world
+  const N = W * H
+  const soft = new Float32Array(N)
+  for (let i = 0; i < N; i++) soft[i] = coastDist[i] > -24 ? 1 : 0
+  blur(soft, W, H, 14, 3)
+  const inside = new Uint8Array(N)
+  const outside = new Uint8Array(N)
+  for (let i = 0; i < N; i++) {
+    inside[i] = soft[i] >= 0.5 ? 1 : 0
+    outside[i] = 1 - inside[i]
+  }
+  const dIn = edt(inside, W, H)
+  const dOut = edt(outside, W, H)
+  sd = new Float32Array(N)
+  for (let i = 0; i < N; i++) sd[i] = dIn[i] - dOut[i]
+  blur(sd, W, H, 1, 2)
+  reachCache.set(world, sd)
+  return sd
+}
+export const TEYVAT_TINT: Record<number, RGB> = {}
+for (let b = 0; b <= 17; b++) TEYVAT_TINT[b] = hex('#9aa447')
+Object.assign(TEYVAT_TINT, {
+  [Biome.Grassland]: hex('#9ca646'),
+  [Biome.Savanna]: hex('#b5a855'),
+  [Biome.Shrubland]: hex('#a8a052'),
+  [Biome.TemperateForest]: hex('#7e8d3b'),
+  [Biome.TemperateRainforest]: hex('#6f8237'),
+  [Biome.Taiga]: hex('#737f48'),
+  [Biome.TropicalSeasonalForest]: hex('#8c9a3e'),
+  [Biome.TropicalRainforest]: hex('#6a7f33'),
+  [Biome.HotDesert]: hex('#c7b672'),
+  [Biome.ColdDesert]: hex('#b9b189'),
+  [Biome.SaltFlat]: hex('#d4cfba'),
+  [Biome.Tundra]: hex('#aeb08d'),
+  [Biome.IceCap]: hex('#dfe2dc'),
+  [Biome.Alpine]: hex('#aba68b'),
+  [Biome.Wetland]: hex('#7e8b50'),
+  [Biome.Beach]: hex('#cbbd82'),
+})
+function teyvatPixel(p: Px, o: Float32Array, f: Fields) {
+  const { px, py } = p
   const S = f.S
   if (p.h <= 0) {
-    set(o, hex('#cfe0e4'))
-    mix(o, 170, 200, 210, Math.exp(-(-p.coast) / 30) * 0.6)
-    seaIce(p, o, [244, 246, 246])
-    for (const r of [5, 11]) mix(o, 90, 130, 150, (1 - sm(0.35, 1, Math.abs(-p.coast - r * (S / 2)))) * 0.18)
-  } else {
-    const id = f.world.realm[p.i]
-    set(o, [243, 238, 226])
-    if (id >= 0) {
-      const c = REALM_COLORS[f.world.realms[id].color]
-      const bd = f.sample(f.cache.get('border') as Float32Array, p.gx, p.gy) * S
-      // 国界内侧加深的色带（经典政区图的"晕边"）
-      mixc(o, c, 0.62)
-      mix(o, c[0] * 0.78, c[1] * 0.78, c[2] * 0.78, Math.exp(-bd / 7) * 0.75)
-      // 国界线：点划线
-      const dash = ((p.px >> 2) + (p.py >> 2)) % 3 !== 0 ? 1 : 0.25
-      mix(o, 120, 50, 55, line(bd, 0.75) * 0.85 * dash)
+    // 探索区域边界（像素，外为正）
+    const bnd = f.sample(teyvatReach(f.world), p.gx, p.gy) * S
+    if (bnd > 0) {
+      // 虚空：深藏青，零星的星点，靠近边界泛出青色辉光
+      set(o, TEYVAT.void)
+      const n = vnoise(px, py, 220)
+      mix(o, 26, 40, 62, n * 0.5)
+      const star = hash(px, py)
+      if (star > 0.9985) mixc(o, TEYVAT.star, (star - 0.9985) * 400 * (0.4 + n))
+      mixc(o, TEYVAT.sea, Math.exp(-bnd / (7 * S)) * 0.45)
+    } else {
+      // 近岸用精确距离（平坦海底上 |h|/|∇h| 会失真，只在贴岸处用）
+      const d = Math.min(-p.coast, p.coastSd)
+      set(o, TEYVAT.deep)
+      mixc(o, TEYVAT.sea, Math.exp(-d / (12 * S)) * 0.8)
+      mixc(o, TEYVAT.shallow, Math.exp(-d / (3.5 * S)) * 0.6)
+      // 内侧靠边界略暗
+      mixc(o, TEYVAT.void, sm(-6 * S, 0, bnd) * 0.25)
+      seaIce(p, o, TEYVAT.ice)
     }
-    const sh = 1 + (p.shade - 1) * 0.3
-    o[0] *= sh
-    o[1] *= sh
-    o[2] *= sh
-    lakeFill(p, o, hex('#cfe0e4'), [70, 100, 120])
+    // 边界亮线
+    mixc(o, TEYVAT.edge, line(Math.abs(bnd), 0.9) * 0.9)
+  } else {
+    const [cr, cg, cb] = f.biomeColors('teyvat', TEYVAT_TINT)
+    o[0] = f.sample(cr, p.gx, p.gy)
+    o[1] = f.sample(cg, p.gx, p.gy)
+    o[2] = f.sample(cb, p.gx, p.gy)
+    // 台地：按高差分层，越高越偏土黄、越亮
+    const lv = p.h / TEYVAT_STEP
+    const tier = Math.floor(lv)
+    mixc(o, TEYVAT.plateau, Math.min(0.25, tier * 0.05))
+    mixc(o, TEYVAT.rock, sm(2.4, 3.4, p.h) * 0.7)
+    mixc(o, TEYVAT.snow, sm(-5, -7.5, p.T))
+    // 卡通分层的明暗：只分亮、中、暗三档
+    const s = p.shade
+    const toon = s > 1.04 ? 1.06 : s < 0.8 ? 0.8 : s < 0.92 ? 0.9 : 1
+    o[0] *= toon
+    o[1] *= toon
+    o[2] *= toon
+    // 台地边缘：只在陡处画——上沿一道深色崖线，崖下一小段阴影；缓坡上不画，免得像等高线图
+    const steep = sm(0.04, 0.12, p.gpx)
+    if (steep > 0 && tier > 0) {
+      const up = ((1 - (lv - tier)) * TEYVAT_STEP) / p.gpx
+      const down = ((lv - tier) * TEYVAT_STEP) / p.gpx
+      mixc(o, TEYVAT.cliff, line(down, 0.7) * 0.55 * steep)
+      mixc(o, TEYVAT.cliff, (1 - sm(0, 3.5 * S, up)) * 0.18 * steep)
+    }
+    lakeFill(p, o, TEYVAT.lake, TEYVAT.coast, 0.8)
   }
-  coastInk(p, o, [60, 70, 76], 0.8)
-  paperGrain(o, p.px, p.py, 0.5)
+  coastInk(p, o, TEYVAT.coast, 0.8, 0.7)
 }
 
 // ————————————————————————————————— 水墨 —————————————————————————————————
@@ -364,7 +493,7 @@ export const THEMES: Theme[] = [
     paper: hex('#dcc596'),
     ink: '#4a3624',
     pixel: fantasyPixel,
-    river: { color: 'rgba(74, 70, 70, 0.9)', width: 0.9, minFlow: 2.2 },
+    river: { color: 'rgba(48, 70, 88, 0.95)', width: 1.15, minFlow: 2, fitCoast: true },
     frame: 'ornate',
     compass: 'ornate',
     cartouche: 'scroll',
@@ -415,33 +544,32 @@ export const THEMES: Theme[] = [
     },
   },
   {
-    id: 'political',
-    name: '政区图',
-    desc: '国家 · 国界 · 都城',
-    paper: hex('#f3eee2'),
-    ink: '#3c4448',
-    prepare: politicalPrepare,
-    pixel: politicalPixel,
-    river: { color: 'rgba(70, 120, 150, 0.85)', width: 0.8, minFlow: 2.5 },
-    frame: 'atlas',
-    compass: 'star',
-    cartouche: 'box',
-    graticule: 'rgba(60, 80, 90, 0.2)',
-    realms: true,
-    legend: 'realms',
+    id: 'teyvat',
+    name: '提瓦特',
+    desc: '原神风 · 平涂台地 · 星空边界',
+    paper: TEYVAT.void,
+    ink: '#f2f0e6',
+    pixel: teyvatPixel,
+    river: { color: 'rgba(88, 150, 152, 0.95)', width: 1.1, minFlow: 2, fitCoast: true },
+    frame: 'none',
+    compass: 'none',
+    cartouche: 'game',
+    graticule: null,
+    paperTexture: false,
     labels: {
       display: CORMORANT,
-      text: CORMORANT,
-      water: '#4b6c7c',
-      land: 'rgba(60, 50, 40, 0.5)',
-      range: '#6c533c',
-      region: '#6f5c48',
-      city: '#2a2622',
-      halo: 'rgba(243, 238, 226, 0.75)',
+      text: SANS,
+      water: '#e6f1ee',
+      land: '#fbf8ec',
+      range: '#f4efdc',
+      region: '#f4efde',
+      city: '#ffffff',
+      halo: 'rgba(24, 32, 30, 0.7)',
       zh: false,
       vertical: [],
       caps: true,
-      city_marker: 'star',
+      city_marker: 'dot',
+      noHalo: [],
     },
   },
   {
