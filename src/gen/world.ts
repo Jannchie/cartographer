@@ -304,7 +304,7 @@ function signedCoastDist(elev: Float32Array, W: number, H: number) {
   return out
 }
 
-function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number) {
+export function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number) {
   const s = new Float32Array(W * H)
   for (let y = 1; y < H - 1; y++) {
     for (let x = 1; x < W - 1; x++) {

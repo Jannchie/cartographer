@@ -340,6 +340,46 @@ if (hKm > 0.0) {
     float varn = smoothstep(0.55, 0.75, fbm3(P * 7.0 + wv * 4.0));
     col = mix(col, col * vec3(0.78, 0.7, 0.64), varn * rocky * 0.4);
   }
+  // 农田：城镇周边的田块拼布。按大区换朝向，砖式错缝的长条田，田间是树篱；
+  // 近看有犁沟，远处淡出为深浅不一的色块
+  float farm = gMask2.g * (1.0 - smoothstep(0.1, 0.22, slope)) * (1.0 - smoothstep(0.3, 0.6, gMask.g)) * (1.0 - gMask.b * 0.7);
+  if (farm > 0.02) {
+    // 大区（庄园）：蜂窝分区，每区一个朝向与田块尺寸
+    vec4 est = crownCell2(P * 2.2 + wv * 0.6);
+    // 远处：田块小于像素，退成按大区起伏的均匀色调（逐田块的计算整个跳过）
+    vec3 fieldCol = mix(vec3(0.36, 0.38, 0.17), vec3(0.46, 0.4, 0.2), est.w);
+    float keep = 0.55;
+    if (gLod1 > 0.01) {
+      float ang = est.w * 3.14159;
+      mat2 rot = mat2(cos(ang), -sin(ang), sin(ang), cos(ang));
+      vec2 q = rot * P * (26.0 + 14.0 * est.w);
+      // 长条田：行高 1，行内按哈希错缝切成长短不一的段
+      float row = floor(q.y);
+      float xo = q.x * 0.45 + hash12(vec2(row, est.w * 91.0)) * 7.0;
+      vec2 fid = vec2(floor(xo), row) + est.w * 53.0;
+      vec2 fl = vec2(fract(xo), fract(q.y));
+      float h = hash12(fid);
+      float h2 = hash12(fid + 17.3);
+      // 作物：金黄麦田、青绿作物、浅绿牧场、褐色休耕、深色新翻地
+      vec3 crop = h < 0.26 ? vec3(0.62, 0.5, 0.2) : h < 0.52 ? vec3(0.24, 0.34, 0.1) : h < 0.72 ? vec3(0.34, 0.42, 0.17) : h < 0.88 ? vec3(0.42, 0.36, 0.2) : vec3(0.27, 0.21, 0.12);
+      crop *= 0.88 + 0.24 * h2;
+      // 犁沟与作物行：沿田块长边的细纹
+      float furrow = 0.5 + 0.5 * sin((fl.y + h2) * 6.2832 * (5.0 + floor(h2 * 4.0)));
+      crop *= 1.0 - 0.14 * furrow * gLod3;
+      // 树篱：田埂上的深绿细线（按屏幕导数定宽，远处淡出）
+      vec2 edge = min(fl, 1.0 - fl) / max(fwidth(vec2(xo, q.y)), vec2(1e-4));
+      float hedge = (1.0 - smoothstep(0.6, 1.6, min(edge.x, edge.y))) * gLod2;
+      fieldCol = mix(fieldCol, mix(crop, vec3(0.1, 0.16, 0.06), hedge * 0.75), gLod1);
+      // 边缘田块零散：农田度低的地方只开垦一部分
+      keep = mix(0.55, smoothstep(h2 * 0.8, h2 * 0.8 + 0.15, farm * 1.2), gLod1);
+    }
+    // 保留一点底色的明暗，免得和地形脱节
+    float lumB = dot(col, vec3(0.3, 0.59, 0.11));
+    fieldCol *= 0.75 + 0.5 * smoothstep(0.05, 0.3, lumB);
+    // 与周围地表同一个色调，拼布不显得突兀
+    fieldCol = mix(fieldCol, col * vec3(1.05, 1.02, 0.9), 0.25);
+    col = mix(col, fieldCol, smoothstep(0.02, 0.35, farm) * keep * 0.85);
+  }
   // 盐壳：白色结皮，龟裂成多边形，边缘是褐色泥滩
   float sf = gMask2.a;
   if (sf > 0.02) {
