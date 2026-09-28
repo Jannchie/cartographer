@@ -12,7 +12,8 @@
     "atlas:png": "tsx scripts/atlas.ts",
     "svg": "tsx scripts/svg.ts",
     "settlement:png": "tsx scripts/settlement.ts",
-    "showcase": "tsx scripts/showcase.ts docs/images"
+    "showcase": "tsx scripts/showcase.ts docs/images",
+    "icon": "tsx scripts/icon.ts"
   },
   "dependencies": {
     "three": "^0.186.1",
