@@ -30,7 +30,7 @@ function detect(): Lang {
 }
 
 export let lang: Lang = typeof window !== 'undefined' ? detect() : 'zh'
-if (typeof document !== 'undefined') document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang
+if (typeof document !== 'undefined' && document.documentElement) document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang
 
 /** 翻译：key 为中文原文；{name} 形式的占位符用 vars 替换 */
 export function t(key: string, vars?: Record<string, string | number>): string {
