@@ -1,12 +1,14 @@
-<p align="center">
-  <img src="docs/images/ja/world-physical.webp" alt="シード aurelia から生成した世界、自然地理スタイル" width="100%">
-</p>
+<p align="center"><img src="docs/images/logo.png" alt="Cartographer" width="96"></p>
 
 <h1 align="center">Cartographer</h1>
 
 <p align="center">ひとつのシードから架空の世界をまるごと生成します。プレート造山・侵食・気候・水系が形づくる大陸と、<br>そこにあるすべての町の街区レベルの平面図です。</p>
 
-<p align="center"><a href="README.md">中文</a> · <a href="README.en.md">English</a> · <b>日本語</b></p>
+<p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a> · <b>日本語</b></p>
+
+<p align="center">
+  <img src="docs/images/ja/world-physical.webp" alt="シード aurelia から生成した世界、自然地理スタイル" width="100%">
+</p>
 
 シードを入力すると、Cartographer はプレートの衝突、河川侵食、モンスーンの降水、河川の合流をシミュレートし、成り立ちのある大陸をつくって紙の地図や 3D ジオラマとして描きます。世界地図上の町を選ぶと、その街区図が開きます。街路は地形に沿って伸び、城壁・宮殿・寺社・市場・港・田畑が、その文明の様式で配置されます。
 
