@@ -15,6 +15,12 @@ import { cjkFont, lang } from '../../i18n'
 
 const srgb = (hex: string) => new THREE.Color(hex)
 
+/** 夜里的展厅背景：深藏青（线性色，终合成会再提亮曝光） */
+const GALLERY_NIGHT_HORIZON = new THREE.Color().setRGB(0.0032, 0.0042, 0.0095)
+const GALLERY_NIGHT_TOP = new THREE.Color().setRGB(0.0016, 0.0024, 0.0065)
+/** 暮光时地平线的暖粉 */
+const TWILIGHT_GLOW = new THREE.Color().setRGB(0.009, 0.0045, 0.005)
+
 /**
  * onBeforeCompile 的公共部分：顶点着色器传出世界坐标 vWp，片元着色器带上噪声函数，
  * 再用 color 替换掉 color_fragment（程序化的反照率）。
@@ -305,8 +311,23 @@ export class Diorama {
     this.seaSection.uniforms.uSunColor.value.copy(sun)
   }
 
+  /**
+   * 展厅背景随昼夜：白天是暗灰的展厅，黄昏地平线透一点暖粉，入夜变成深藏青的星空（带月亮）。
+   * night：夜的程度 0~1；stars：星空 0~1；moonUp：月亮在天上的程度；twilight：暮光 0~1
+   */
+  setSky(night: number, stars: number, moonDir: THREE.Vector3, moonUp: number, twilight: number) {
+    const u = this.sky.mat.uniforms
+    // 夜里终合成会提亮曝光：背景的线性值要压低，才不会比白天的展厅还亮
+    u.uHorizon.value.setRGB(0.0035, 0.0038, 0.0045).lerp(GALLERY_NIGHT_HORIZON, night).add(TWILIGHT_GLOW.clone().multiplyScalar(twilight))
+    u.uTop.value.setRGB(0.012, 0.012, 0.013).lerp(GALLERY_NIGHT_TOP, night)
+    u.uStars.value = stars
+    u.uMoon.value.copy(moonDir)
+    u.uMoonK.value = moonUp * night
+  }
+
   set time(t: number) {
     this.seaSection.uniforms.uTime.value = t
+    this.sky.mat.uniforms.uTime.value = t
   }
 
   /** 岩层剖面底面高度（随垂直夸张变化） */

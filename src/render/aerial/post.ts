@@ -236,6 +236,7 @@ const FINAL_FRAG = /* glsl */ `
   uniform vec3 uMonoMix;
   uniform float uHalation;
   uniform float uAberration;
+  uniform float uNight;
   varying vec2 vUv;
   ${NOISE_GLSL}
 
@@ -291,6 +292,12 @@ const FINAL_FRAG = /* glsl */ `
     c *= uWB;
     // 黑白：在场景线性空间按通道权重转灰（相当于镜头前加滤色镜）
     c = mix(c, vec3(dot(c, uMonoMix)), uMono);
+    // 夜视（Purkinje）：暗处色彩褪去、偏蓝；灯火这类亮处保持原色
+    if (uNight > 0.0) {
+      float ln = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      // 按曝光后的亮度判断明暗
+      c = mix(c, vec3(ln) * vec3(0.78, 0.9, 1.2), uNight * 0.4 * (1.0 - smoothstep(0.04, 0.35, ln * uExposure)));
+    }
     c = agx(c * uExposure * v);
     // 分离色调：暗部与亮部各自偏色
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -414,6 +421,7 @@ export class PostPipeline {
       uMonoMix: { value: new THREE.Vector3(0.2126, 0.7152, 0.0722) },
       uHalation: { value: 0 },
       uAberration: { value: 0 },
+      uNight: { value: 0 },
     })
     this.final.toneMapped = false
   }
@@ -421,7 +429,8 @@ export class PostPipeline {
   /** 观感只影响终合成，不需要重新累积 */
   setLook(k: Look) {
     const u = this.final.uniforms
-    u.uExposure.value = 1.35 * 2 ** k.ev
+    this.ev = k.ev
+    u.uExposure.value = 1.35 * 2 ** k.ev * this.exposureComp
     u.uSat.value = k.saturation
     u.uContrast.value = k.contrast
     u.uShadowTint.value.setRGB(...k.shadowTint)
@@ -440,6 +449,14 @@ export class PostPipeline {
     u.uAberration.value = (k.aberration * this.h) / 1000
   }
   private aberration = 0
+  private ev = 0
+  /** 曝光补偿（昼夜：夜里提亮），乘在观感的曝光上；只影响终合成，不打断累积 */
+  private exposureComp = 1
+  setExposureComp(c: number, night = 0) {
+    this.exposureComp = c
+    this.final.uniforms.uExposure.value = 1.35 * 2 ** this.ev * c
+    this.final.uniforms.uNight.value = night
+  }
 
   /** 画质：MSAA、泛光级数、累积上限（尺寸由调用方随后 setSize） */
   setQuality(q: Quality, maxMsaa: number) {

@@ -17,12 +17,20 @@ import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
 import { createRiverWaterMaterial, createWaterMaterial } from './water'
 import { isTypingTarget } from '../ui/keys'
+import { daylight, type Daylight } from './aerial/daylight'
+import { CityLights } from './aerial/cityLights'
 
 export interface View3DOptions {
   exaggeration: number
   labels: boolean
+  /** 正午时太阳的方位（整条日轨随之旋转） */
   sunAzimuth: number
+  /** 正午时太阳的高度（日轨的最高点） */
   sunElevation: number
+  /** 时刻（小时 0~24）：12 点即正午，太阳在 (sunAzimuth, sunElevation) */
+  timeOfDay: number
+  /** 昼夜循环：时刻自动前进（一整天约 dayLength 秒） */
+  dayCycle: boolean
   /** 空气感：远景霾与低空薄雾 */
   haze: boolean
   clouds: boolean
@@ -40,12 +48,12 @@ export interface View3DOptions {
   look: Look
 }
 
-const SKY_TOP = new THREE.Color('#3b6ea8')
-const HAZE = new THREE.Color('#a9c6e4')
 /** 云里远处的淡出（空气透视） */
 const CLOUD_FOG = 0.0036
 
 const SX = 100
+/** 昼夜循环中主光方向转过这么多（弧度）才重画阴影贴图（约 0.6°） */
+const SHADOW_STEP = 0.0105
 
 /**
  * 3D 立体沙盘：地形网格 + 水面 + 河流 + 侧面剖面，
@@ -113,9 +121,18 @@ export class Scene3D {
   onTourChange: ((on: boolean) => void) | null = null
   /** 逐 pass 的 GPU 耗时，性能读数打开时才计时 */
   private timer: GpuTimer
-  /** 天色（随太阳高度变化），水面反射、云、空气透视共用 */
-  private skyTop = new THREE.Color()
-  private skyHorizon = new THREE.Color()
+  /** 当前时刻的光照（太阳、月亮、天色、曝光…），见 aerial/daylight.ts */
+  private dl: Daylight
+  /** 夜里的城市灯火 */
+  private lights = new CityLights()
+  /** 上次重画阴影贴图时的主光方向（昼夜循环时按角度节流） */
+  private shadowDir = new THREE.Vector3()
+  private shadowMoon = false
+  /** 昼夜循环：一整天的秒数 */
+  dayLength = 60
+  /** 昼夜循环推进时刻时通知界面（约 10 次每秒） */
+  onTimeChange: ((h: number) => void) | null = null
+  private lastTimeNotify = 0
   private clock = new THREE.Clock()
   private opts: View3DOptions
   private labelLayer: HTMLDivElement
@@ -126,6 +143,7 @@ export class Scene3D {
 
   constructor(private container: HTMLElement, opts: View3DOptions) {
     this.opts = { ...opts }
+    this.dl = daylight(this.opts.timeOfDay, this.opts.sunAzimuth, this.opts.sunElevation)
     // 抗锯齿在后期管线的 MSAA 场景目标与时间累积里做，画布本身不需要
     this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: true })
     // 色调映射与调色在后期管线的终合成里做
@@ -167,6 +185,7 @@ export class Scene3D {
     this.scene.add(this.group)
     this.diorama = new Diorama(this.renderer)
     this.scene.add(this.diorama.group)
+    this.scene.add(this.lights.object)
 
     this.labelLayer = document.createElement('div')
     this.labelLayer.className = 'labels3d'
@@ -220,6 +239,7 @@ export class Scene3D {
       if (!this.active) return
       const dt = this.lastRaf2 ? (now - this.lastRaf2) / 1000 : 0
       this.lastRaf2 = now
+      if (this.opts.dayCycle && this.world) this.advanceTime(Math.min(dt, 0.1), now)
       if (this.tour.active) {
         // 运镜接管镜头；焦点跟着镜头的主体
         this.tour.update(dt, this.camera, this.controls.target)
@@ -265,6 +285,31 @@ export class Scene3D {
       else if (this.tour.active && (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N')) this.tour.next()
       else if (this.tour.active && e.key === 'Escape') this.stopTour()
     })
+  }
+
+  // —— 昼夜 ——
+  /**
+   * 设定时刻（小时，0~24 循环）并立即更新全部光照：阴影贴图重画、累积重来，没有任何平滑。
+   * 离线逐帧截图时用：setTimeOfDay(h) 之后渲染的第一帧就是这个时刻。
+   */
+  setTimeOfDay(h: number) {
+    this.opts.timeOfDay = ((h % 24) + 24) % 24
+    this.updateSun()
+    this.onTimeChange?.(this.opts.timeOfDay)
+  }
+
+  get timeOfDay() {
+    return this.opts.timeOfDay
+  }
+
+  /** 昼夜循环推进一帧：光照每帧更新，阴影按角度节流，累积不打断（上限之后是滑动平均，缓慢的光照变化不拖影） */
+  private advanceTime(dt: number, now: number) {
+    this.opts.timeOfDay = (this.opts.timeOfDay + (dt * 24) / this.dayLength) % 24
+    this.applyDaylight(false)
+    if (now - this.lastTimeNotify > 100) {
+      this.lastTimeNotify = now
+      this.onTimeChange?.(this.opts.timeOfDay)
+    }
   }
 
   // —— 巡览 ——
@@ -418,6 +463,7 @@ export class Scene3D {
     const scale = moved ? this.motionScale : 1
     this.lastScale = moved ? scale : 0
     this.timer.tag = this.lastScale
+    this.lights.viewportHeight = this.container.clientHeight * this.renderer.getPixelRatio() * scale
     this.post.render(this.renderer, this.scene, cam, focus, aperture, this.opts.clouds ? this.clouds : null, this.timer, scale)
   }
 
@@ -503,7 +549,8 @@ export class Scene3D {
 
   /** 阴影软硬：PCF 半径以纹素计，按阴影贴图尺寸换算成同样的世界尺度 */
   private applyShadow() {
-    this.sun.shadow.radius = Math.max(1, (this.opts.shadowSoftness * this.sun.shadow.mapSize.x) / 4096)
+    // 月光的阴影更柔
+    this.sun.shadow.radius = Math.max(1, (this.opts.shadowSoftness * this.dl.shadowSoft * this.sun.shadow.mapSize.x) / 4096)
     this.renderer.shadowMap.needsUpdate = true
     this.post.reset()
   }
@@ -521,54 +568,76 @@ export class Scene3D {
     this.updateSun()
   }
 
-  /** 光照变了（太阳、天色、空气感）：阴影与累积的历史都要重来 */
+  /** 光照变了（时刻、太阳、天色、空气感）：阴影与累积的历史都要重来 */
   private updateSun() {
-    this.renderer.shadowMap.needsUpdate = true
-    this.post.reset()
-    const az = (this.opts.sunAzimuth * Math.PI) / 180
-    const el = (this.opts.sunElevation * Math.PI) / 180
-    const d = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az))
+    this.applyDaylight(true)
+  }
+
+  /**
+   * 按当前时刻铺开整套光照（aerial/daylight.ts 算好的数值分发给各个材质）。
+   * immediate：阴影贴图立即重画、累积重来；昼夜循环逐帧推进时为 false——
+   * 阴影只在主光转过 SHADOW_STEP 或日月交接时重画，累积不打断。
+   */
+  private applyDaylight(immediate: boolean) {
+    const dl = daylight(this.opts.timeOfDay, this.opts.sunAzimuth, this.opts.sunElevation)
+    const softChanged = dl.shadowSoft !== this.dl.shadowSoft
+    this.dl = dl
+    const d = dl.keyDir
+    if (immediate || dl.moonKey !== this.shadowMoon || this.shadowDir.angleTo(d) > SHADOW_STEP) {
+      this.renderer.shadowMap.needsUpdate = true
+      this.shadowDir.copy(d)
+      this.shadowMoon = dl.moonKey
+    }
+    if (immediate) this.post.reset()
+    if (softChanged) this.sun.shadow.radius = Math.max(1, (this.opts.shadowSoftness * dl.shadowSoft * this.sun.shadow.mapSize.x) / 4096)
+    // 主光：白天是太阳，夜里是月亮（同一盏投影的平行光）
     this.sun.position.copy(d).multiplyScalar(150)
     this.sun.target.position.set(0, 0, 0)
-    // 低太阳角：暖色、光弱；高角度：白光
-    const warm = 1 - Math.min(1, Math.max(0, (this.opts.sunElevation - 4) / 40))
-    this.sun.color.setRGB(1, 0.95 - 0.2 * warm, 0.86 - 0.36 * warm)
-    const k = Math.min(1, Math.max(0.15, Math.sin(el) * 2.2))
-    // 天光弱、日光强，地形明暗对比更像真实照片
-    this.sun.intensity = 3.8 * k
-    this.hemi.intensity = 0.42 + 0.3 * k
+    this.sun.color.copy(dl.keyColor)
+    this.sun.intensity = dl.keyIntensity
+    this.hemi.color.copy(dl.hemiSky)
+    this.hemi.groundColor.copy(dl.hemiGround)
+    this.hemi.intensity = dl.hemiIntensity
+    // 水面的高光：太阳，或夜里月亮的一道碎银
+    const glint = dl.moonKey ? 0.22 * dl.moonUp : 1
     if (this.waterMat) {
-      this.waterMat.uniforms.uSunDir.value.copy(d)
-      this.waterMat.uniforms.uSunColor.value.copy(this.sun.color)
-      this.waterMat.uniforms.uLight.value = 0.45 + 0.55 * k
+      const u = this.waterMat.uniforms
+      u.uSunDir.value.copy(d)
+      u.uSunColor.value.copy(dl.keyColor).multiplyScalar(glint)
+      u.uLight.value = dl.light
+      u.uSkyTop.value.copy(dl.skyTop)
+      u.uSkyHorizon.value.copy(dl.skyHorizon)
     }
-    this.diorama.setLight(0.45 + 0.55 * k, this.sun.color)
-    // 天空随太阳高度变暗、偏暖
-    this.skyTop.copy(SKY_TOP).multiplyScalar(0.35 + 0.65 * k)
-    this.skyHorizon.copy(HAZE).lerp(new THREE.Color('#f0c59a'), warm * 0.45).multiplyScalar(0.45 + 0.55 * k)
-    if (this.waterMat) {
-      this.waterMat.uniforms.uSkyTop.value.copy(this.skyTop)
-      this.waterMat.uniforms.uSkyHorizon.value.copy(this.skyHorizon)
+    this.diorama.setLight(dl.light, this.tmpColor.copy(dl.keyColor).multiplyScalar(dl.moonKey ? 0.25 * dl.moonUp : dl.sunFade))
+    this.diorama.setSky(dl.night, dl.stars, dl.moonDir, dl.moonUp, dl.twilight)
+    if (this.terrainU) {
+      this.terrainU.uSun.value.copy(d)
+      this.terrainU.uNightGlow.value = dl.cityLights
     }
-    if (this.terrainU) this.terrainU.uSun.value.copy(d)
     if (this.clouds) {
       const u = this.clouds.march.uniforms
       u.uSun.value.copy(d)
-      u.uSunColor.value.copy(this.sun.color).multiplyScalar(0.35 + 0.65 * k)
-      u.uSkyTop.value.copy(this.skyTop)
-      u.uSkyHorizon.value.copy(this.skyHorizon)
-      u.uFogColor.value.copy(this.skyHorizon)
+      u.uSunColor.value.copy(dl.cloudSun)
+      u.uSkyTop.value.copy(dl.skyTop)
+      u.uSkyHorizon.value.copy(dl.skyHorizon)
+      u.uFogColor.value.copy(dl.skyHorizon)
       u.uFogDensity.value = this.opts.haze ? CLOUD_FOG : 0
     }
-    // 空气感：霾色随天空，顺光方向有太阳散射光晕；低空薄雾高度约 0.9 km
+    // 空气感：霾色随天空，顺光方向有太阳（月亮）散射光晕；低空薄雾高度约 0.9 km
     const c = this.post.comp.uniforms
     c.uSun.value.copy(d)
-    c.uSunColor.value.copy(this.sun.color).multiplyScalar(0.25 + 0.35 * k)
-    c.uHaze.value.copy(this.skyHorizon).multiplyScalar(0.9)
+    c.uSunColor.value.copy(dl.hazeSun)
+    c.uHaze.value.copy(dl.skyHorizon).multiplyScalar(0.9)
     c.uFogHeight.value = this.vScale * 0.9
     c.uHazeDensity.value = this.opts.haze ? 0.0026 : 0
     c.uFogDensity.value = this.opts.haze ? 0.035 : 0
+    // 夜里提亮曝光（只在终合成，不打断累积）
+    this.post.setExposureComp(dl.exposure, dl.night)
+    this.lights.level = dl.cityLights
   }
+  private tmpColor = new THREE.Color()
+  /** 最近一次烘焙的地表高度采样（读回按块缓存，重建几何前一直有效） */
+  private bakedFn: ((x: number, z: number) => number) | null = null
 
   setWorld(world: World, color: HTMLCanvasElement, rough: HTMLCanvasElement, rivers: SmoothRiver[] = []) {
     this.stopTour()
@@ -718,7 +787,9 @@ export class Scene3D {
       m.geometry.dispose()
       ;(m.material as THREE.Material).dispose()
     }
-    const bridges = buildBridges(w, this.riverList, SX, this.SZ, this.bakedHeight())
+    const baked = this.bakedHeight()
+    this.bakedFn = baked
+    const bridges = buildBridges(w, this.riverList, SX, this.SZ, baked)
     if (bridges) {
       bridges.userData.bridge = true
       this.group.add(bridges)
@@ -742,6 +813,8 @@ export class Scene3D {
     this.group.add(...this.skirts(w, vs, base))
     this.diorama.setBase(base)
     for (const l of this.labelEls) l.pos.y = this.labelY(l.kind, l.pos.x, l.pos.z)
+    // 城市灯火钉在真实地表上（随垂直夸张重建）
+    this.lights.build(w, { SX, SZ: this.SZ, height: baked })
     this.buildClouds()
     this.applyLook()
   }
@@ -1002,7 +1075,10 @@ export class Scene3D {
   }
 
   refreshLabels() {
-    if (this.world) this.buildLabels()
+    if (!this.world) return
+    this.buildLabels()
+    // 地点增删、挪动后灯火跟着走
+    if (this.bakedFn) this.lights.build(this.world, { SX, SZ: this.SZ, height: this.bakedFn })
   }
 
   /** 只改了某个地点的名字：换那一个地名的文字，不重建整层 */

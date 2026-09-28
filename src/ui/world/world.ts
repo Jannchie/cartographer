@@ -11,6 +11,7 @@ import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { smoothRivers, type SmoothRiver } from '../../render/rivers'
 import { Scene3D, type View3DOptions } from '../../render/scene3d'
 import { LOOKS, QUALITIES, type Look, type QualityId } from '../../render/aerial/looks'
+import { DEFAULT_TIME } from '../../render/aerial/daylight'
 import { buildPhysicalTexture } from '../../render/texture'
 import type { WorkerOut } from '../../worker'
 import GenWorker from '../../worker?worker'
@@ -45,6 +46,12 @@ function loadLook(): Look {
   }
 }
 
+/** 上次的时刻（没存过、或存的不是 0~24 的数就是正午） */
+function loadTime() {
+  const h = Number(storeGet('timeOfDay') ?? DEFAULT_TIME)
+  return Number.isFinite(h) && h >= 0 && h <= 24 ? h : DEFAULT_TIME
+}
+
 // —— 界面状态（响应式） ——
 export const ws = reactive({
   params: { ...DEFAULT_PARAMS, ...readQuery(initialQuery('world') ?? new URLSearchParams(storeGet('worldQuery') ?? '')) } as WorldParams,
@@ -53,6 +60,8 @@ export const ws = reactive({
     labels: true,
     sunAzimuth: 225,
     sunElevation: 32,
+    timeOfDay: loadTime(),
+    dayCycle: storeGet('dayCycle') === '1',
     clouds: true,
     haze: true,
     dof: 0.25,
@@ -136,6 +145,17 @@ export function mountWorld(e: NonNullable<typeof els>) {
   els = e
   scene = markRaw(new Scene3D(e.v3, structuredClone(toRaw(ws.view3d))))
   scene.onTourChange = (on) => (ws.touring = on)
+  // 昼夜循环推进的时刻反映到滑杆上（不再回传给场景）
+  let savedAt = 0
+  scene.onTimeChange = (h) => {
+    ws.view3d.timeOfDay = h
+    // 循环中每 2 秒记一次
+    const now = performance.now()
+    if (now - savedAt > 2000) {
+      savedAt = now
+      storeSet('timeOfDay', h.toFixed(2))
+    }
+  }
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__scene = scene
   syncActive()
   bindPanZoom(e.v2, map, applyMap, { min: 0.15, max: 24, fit: fitMap })
@@ -207,6 +227,8 @@ export function set3d(patch: Partial<View3DOptions>) {
   Object.assign(ws.view3d, patch)
   if (patch.quality) storeSet('quality', patch.quality)
   if (patch.shadowSoftness !== undefined) persistLater('shadowSoftness', () => String(ws.view3d.shadowSoftness))
+  if (patch.timeOfDay !== undefined) persistLater('timeOfDay', () => ws.view3d.timeOfDay.toFixed(2))
+  if (patch.dayCycle !== undefined) storeSet('dayCycle', patch.dayCycle ? '1' : '0')
   // 垂直夸张要重建网格：拖动时稍等再应用
   if (patch.exaggeration !== undefined) {
     clearTimeout(exTimer)

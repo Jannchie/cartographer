@@ -28,6 +28,8 @@ export interface TerrainUniforms {
   /** 道路遮罩（roads3d.ts）；uRoadOn 为 0 时不画 */
   uRoads: { value: THREE.Texture | null }
   uRoadOn: { value: number }
+  /** 夜里道路的微光 0~1（昼夜） */
+  uNightGlow: { value: number }
 }
 
 /** 顶点着色器：高度、坡度、侵蚀值都取自烘焙纹理（一次采样） */
@@ -112,6 +114,7 @@ export function createTerrainMaterial(
     uPatch: { value: new THREE.Vector4(0, 0, 0, 0) },
     uRoads: { value: null },
     uRoadOn: { value: 0 },
+    uNightGlow: { value: 0 },
   }
   const compile = (u: TerrainUniforms, isPatch: boolean) => (sh: THREE.WebGLProgramParametersWithUniforms) => {
     Object.assign(sh.uniforms, u)
@@ -144,6 +147,8 @@ uniform float uDetail;
 uniform vec4 uPatch;
 uniform sampler2D uRoads;
 uniform float uRoadOn;
+uniform float uNightGlow;
+float gRoadGlow;
 varying float vErosion;
 ${NOISE_GLSL}
 ${HEIGHT_GLSL}
@@ -401,12 +406,15 @@ if (hKm > 0.0) {
   col *= mix(1.0, 0.76 + 0.44 * smoothstep(0.15, 0.85, gEr.x), gErK);
 }
 // 道路：压实的土路，两侧一道被车辙踩暗的路肩
+gRoadGlow = 0.0;
 if (uRoadOn > 0.5 && hKm > 0.0) {
   vec4 rd = texture2D(uRoads, vWorld.xz / uMapSize + 0.5);
   if (rd.r > 0.004) {
     col = mix(col, col * vec3(0.62, 0.6, 0.55), smoothstep(0.0, 0.3, rd.r) * 0.6);
     vec3 dirt = mix(vec3(0.5, 0.4, 0.25), vec3(0.6, 0.52, 0.36), rd.b) * (0.92 + 0.12 * vnoise(vWorld.xz * 60.0));
     col = mix(col, dirt, smoothstep(0.3, 0.75, rd.r));
+    // 夜里：沿路的零星灯火连成一道淡淡的暖光（干道更亮）
+    gRoadGlow = smoothstep(0.2, 0.8, rd.r) * (0.35 + 0.65 * rd.b);
   }
 }
 col *= mix(1.0, gAO, 0.5);
@@ -460,7 +468,8 @@ if (uCloudOn > 0.5) {
   reflectedLight.directDiffuse *= cs;
   reflectedLight.directSpecular *= cs;
 }
-reflectedLight.indirectDiffuse *= mix(1.0, gAO, 0.6);`,
+reflectedLight.indirectDiffuse *= mix(1.0, gAO, 0.6);
+if (uNightGlow > 0.0) totalEmissiveRadiance += vec3(1.0, 0.52, 0.2) * gRoadGlow * uNightGlow * 0.06;`,
       )
   }
   mat.customProgramCacheKey = () => 'terrain'

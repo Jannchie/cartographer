@@ -6,6 +6,7 @@ import { DEFAULT_PARAMS } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
+import { DEFAULT_TIME, fmtTime } from '../../render/aerial/daylight'
 import { t } from '../i18n'
 import Dropdown from '../kit/Dropdown.vue'
 import Field from '../kit/Field.vue'
@@ -181,8 +182,20 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         :model-value="Math.round(v.dof * 100)"
         @update:model-value="(x) => W.set3d({ dof: x / 100 })"
       />
-      <Scale label="太阳方位" :min="0" :max="360" :step="1" :reset="225" :fmt="(x) => `${x}°`" :model-value="v.sunAzimuth" @update:model-value="(x) => W.set3d({ sunAzimuth: x })" />
-      <Scale label="太阳高度" :min="2" :max="88" :step="1" :reset="32" :fmt="(x) => `${x}°`" :model-value="v.sunElevation" @update:model-value="(x) => W.set3d({ sunElevation: x })" />
+      <Scale
+        label="时间"
+        title="一天中的时刻：12:00 为正午，入夜后城镇亮起灯火"
+        :min="0"
+        :max="24"
+        :step="0.1"
+        :reset="DEFAULT_TIME"
+        :fmt="fmtTime"
+        :model-value="v.timeOfDay"
+        @update:model-value="(x) => W.set3d({ timeOfDay: x })"
+      />
+      <Legend :items="[{ label: '昼夜循环', on: v.dayCycle, title: '时间自动流逝，约一分钟过完一天' }]" @toggle="W.set3d({ dayCycle: !v.dayCycle })" />
+      <Scale label="太阳方位" title="正午时太阳所在的方位：日出、日落的方向随之转动" :min="0" :max="360" :step="1" :reset="225" :fmt="(x) => `${x}°`" :model-value="v.sunAzimuth" @update:model-value="(x) => W.set3d({ sunAzimuth: x })" />
+      <Scale label="正午高度" title="太阳一天中升到的最高角度（夜里月亮也升到这么高）" :min="2" :max="88" :step="1" :reset="32" :fmt="(x) => `${x}°`" :model-value="v.sunElevation" @update:model-value="(x) => W.set3d({ sunElevation: x })" />
       <Field label="画质">
         <Seg :options="QUALITIES.map((q) => ({ value: q.id, label: q.name }))" :model-value="v.quality" @update:model-value="(q) => W.set3d({ quality: q })" />
       </Field>
