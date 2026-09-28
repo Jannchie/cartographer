@@ -106,3 +106,7 @@ pnpm showcase                                                      # この READ
 ```
 
 このほか `preview:png`（植生帯のプレビューと生成工程ごとの所要時間）と `shade:png`（地形の陰影起伏のみを含む基図）を備える。
+
+## ライセンス
+
+[MIT](LICENSE)

@@ -106,3 +106,7 @@ pnpm showcase                                                      # 重新生�
 ```
 
 另有 `preview:png`（生物群系预览及各生成阶段耗时）与 `shade:png`（仅含地形晕渲的底图）。
+
+## 许可证
+
+[MIT](LICENSE)

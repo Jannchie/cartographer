@@ -106,3 +106,7 @@ pnpm showcase                                                      # regenerate 
 ```
 
 Additional scripts: `preview:png` (biome preview with timing for each generation stage) and `shade:png` (a base map containing only terrain relief shading).
+
+## License
+
+[MIT](LICENSE)
