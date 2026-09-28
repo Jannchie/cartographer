@@ -33,6 +33,8 @@ function genHash(): Plugin {
 }
 
 export default defineConfig({
+  // 相对路径：同一份构建既能放在根路径，也能放在 GitHub Pages 的 /cartographer/ 子路径下
+  base: './',
   plugins: [vue(), genHash()],
   worker: { format: 'es', plugins: () => [genHash()] },
   // Git Bash 崩溃时会在工作目录留下 bash.exe.stackdump，被监听时锁着会让开发服务器退出

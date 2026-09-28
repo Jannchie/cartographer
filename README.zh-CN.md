@@ -2,6 +2,8 @@
 
 <p align="center">由单个种子生成完整的虚构世界：经板块造山、侵蚀、气候与水系推演形成的大陆，<br>以及大陆上各城镇的街区级平面图。</p>
 
+<p align="center"><b><a href="https://jannchie.github.io/cartographer/">在线演示</a></b></p>
+
 <p align="center"><a href="README.md">English</a> · <b>中文</b> · <a href="README.ja.md">日本語</a></p>
 
 Cartographer 依次模拟板块碰撞、流水侵蚀、季风降水与河网汇流，生成成因可解释的大陆地形，并以纸质地图或 3D 沙盘呈现。选择世界地图上的任一城镇即可生成其街区平面图：街巷依地形布设，城墙、宫殿、寺社、市集、港口与农田按所属文明的形制配置。
