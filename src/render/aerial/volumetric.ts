@@ -165,6 +165,7 @@ const MARCH_FRAG = /* glsl */ `
   uniform float uSteps;
   uniform vec4 uMapRect;
   uniform float uFrame;
+  uniform vec4 uSub;
   varying vec2 vUv;
 
   float hash12(vec2 p) {
@@ -210,7 +211,8 @@ const MARCH_FRAG = /* glsl */ `
   }
 
   void main() {
-    float depth = texture(uDepth, vUv).r;
+    // 场景深度可能只画在左下角的一块（动态分辨率）
+    float depth = texture(uDepth, min(vUv * uSub.xy, uSub.zw)).r;
     vec2 ndc = vUv * 2.0 - 1.0;
     vec4 vp = uInvProj * vec4(ndc, depth * 2.0 - 1.0, 1.0);
     vp /= vp.w;
@@ -243,7 +245,8 @@ const MARCH_FRAG = /* glsl */ `
     if (t1 <= t0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
     // 步长有上限：平视时路径长，按长度增加步数，而不是把步子拉大到跨过整朵云
-    float maxStep = (uTop - uBase) * 0.12;
+    // uSteps 为画质档位的步进密度（44 时步长为云层厚度的 12%）
+    float maxStep = (uTop - uBase) * 5.28 / uSteps;
     int N = int(clamp(ceil((t1 - t0) / maxStep), uSteps * 0.5, 128.0));
     float dt = (t1 - t0) / float(N);
     // 逐像素抖动（交错梯度噪声）：镜头动时固定不变（平视不闪烁），静止累积时逐帧错开，噪点被平均掉
@@ -260,7 +263,8 @@ const MARCH_FRAG = /* glsl */ `
     for (int i = 0; i < 128; i++) {
       if (i >= N) break;
       vec3 p = uCamPos + dir * t;
-      float d = density(p, false);
+      // 离镜头很近的云淡出：贴近拍摄（手动拉近或巡览）时不会糊一脸云
+      float d = density(p, false) * smoothstep(2.5, 8.0, t);
       if (d > 0.003) {
         if (firstHit < 0.0) firstHit = t;
         // 向太阳的自阴影
@@ -334,6 +338,7 @@ export class VolumetricClouds implements CloudLayer {
         uSteps: { value: 44 },
         uMapRect: { value: new THREE.Vector4(-SX / 2, -SZ / 2, SX, SZ) },
         uFrame: { value: 0 },
+        uSub: { value: new THREE.Vector4(1, 1, 1, 1) },
       },
     })
   }
@@ -342,8 +347,11 @@ export class VolumetricClouds implements CloudLayer {
     return this.cloudRT.texture
   }
 
+  /** 相对画布的渲染分辨率 */
+  scale = 0.5
+
   setSize(w: number, h: number) {
-    this.cloudRT.setSize(Math.max(1, Math.floor(w / 2)), Math.max(1, Math.floor(h / 2)))
+    this.cloudRT.setSize(Math.max(1, Math.floor(w * this.scale)), Math.max(1, Math.floor(h * this.scale)))
   }
 
   /** 云的演化时间（秒） */
@@ -352,8 +360,17 @@ export class VolumetricClouds implements CloudLayer {
   }
 
   /** 半分辨率步进云层（要在场景深度渲染之后调用）；frame 为累积帧序号，0 表示镜头在动 */
-  render(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, frame: number) {
+  /** 动态分辨率时云也只画到目标左下角同样比例的一块；合成时按 sub 读取 */
+  readonly sub = new THREE.Vector4(1, 1, 1, 1)
+
+  render(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, frame: number, sub: THREE.Vector4) {
     const u = this.march.uniforms
+    u.uSub.value.copy(sub)
+    const rt = this.cloudRT
+    const cw = Math.max(1, Math.round(rt.width * sub.x))
+    const ch = Math.max(1, Math.round(rt.height * sub.y))
+    rt.viewport.set(0, 0, cw, ch)
+    this.sub.set(cw / rt.width, ch / rt.height, (cw - 0.5) / rt.width, (ch - 0.5) / rt.height)
     u.uInvProj.value.copy(camera.projectionMatrixInverse)
     u.uCamWorld.value.copy(camera.matrixWorld)
     u.uCamPos.value.setFromMatrixPosition(camera.matrixWorld)

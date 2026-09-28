@@ -3,11 +3,19 @@ import { RNG } from './rng'
 import type { Label, Realm } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
 
+/** 政区划分（不含名字）：hints 是给每个国家起名用的随机数，按生成顺序预先取好 */
+export interface RealmMap {
+  realm: Int16Array
+  realms: Omit<Realm, 'name' | 'zh' | 'ja'>[]
+  hints: number[]
+}
+
 /**
  * 政区：以都城和大城市为种子做"地形代价"扩张（Dijkstra）。
  * 翻山、跨大河、渡海代价高，于是国界自然落在山脊、大河与海峡上。
+ * 划分只取决于地形与城市位置，与命名无关（只改命名时可以沿用，再用 nameRealms 起名）。
  */
-export function buildRealms(
+export function realmMap(
   elev: Float32Array,
   flow: Float32Array,
   labels: Label[],
@@ -15,9 +23,8 @@ export function buildRealms(
   H: number,
   kmPerCell: number,
   riverThr: number,
-  namer: Namer,
   rng: RNG,
-): { realm: Int16Array; realms: Realm[] } {
+): RealmMap {
   const N = W * H
   let landCells = 0
   for (let i = 0; i < N; i++) if (elev[i] > 0) landCells++
@@ -118,13 +125,11 @@ export function buildRealms(
     cnt[r]++
     if (pole[r] < 0 || inner[i] > inner[pole[r]]) pole[r] = i
   }
-  const realms: Realm[] = seeds.map((s, id) => {
+  const hints: number[] = []
+  const realms = seeds.map((s, id) => {
     const best = pole[id] >= 0 ? pole[id] : Math.floor(s.y) * W + Math.floor(s.x)
-    const n = namer.name('realm', rng.next())
+    hints.push(rng.next())
     return {
-      name: n.en,
-      zh: n.zh,
-      ja: n.ja,
       color: color[id],
       x: best % W,
       y: Math.floor(best / W),
@@ -133,5 +138,12 @@ export function buildRealms(
       room: pole[id] >= 0 ? inner[pole[id]] : 1,
     }
   })
-  return { realm, realms }
+  return { realm, realms, hints }
+}
+
+export function nameRealms(map: RealmMap, namer: Namer): Realm[] {
+  return map.realms.map((r, i) => {
+    const n = namer.name('realm', map.hints[i])
+    return { ...r, name: n.en, zh: n.zh, ja: n.ja }
+  })
 }

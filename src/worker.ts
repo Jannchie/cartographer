@@ -1,15 +1,14 @@
-import { generateWorld, type TerrainStage } from './gen/world'
+import { generateWorld, groundKey, type WorldCache } from './gen/world'
 import type { World, WorldEdits, WorldParams } from './gen/types'
 import { loadWorld, saveWorld, worldKey } from './gen/cache'
 
 export type WorkerIn = { id: number; params: WorldParams; edits?: WorldEdits }
 export type WorkerOut =
   | { id: number; type: 'progress'; stage: string; frac: number }
-  | { id: number; type: 'done'; world: World; cached: boolean }
+  | { id: number; type: 'done'; world: World; cached: boolean; ground: string }
   | { id: number; type: 'error'; message: string }
 
-/** 侵蚀结束时的地形缓存：只改气候或地点时直接沿用 */
-const cache: { stage?: TerrainStage } = {}
+const cache: WorldCache = {}
 
 /** 没有任何编辑：结果只由参数决定，可以整份缓存 */
 const pristine = (e?: WorldEdits) => !e || Object.values(e).every((v) => v === undefined)
@@ -37,7 +36,10 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
       world.coastDist.buffer,
       world.realm.buffer,
     ]
-    post({ id, type: 'done', world, cached }, transfer)
+    // ground：地面（高度、气候、水文、群系）的版本；与上次相同时主线程只需换地名
+    const ground = groundKey(params, edits)
+    // 从持久缓存读出时 Worker 里还没有地形与地面缓存：不预热，等之后的请求真用到时由 generateWorld 按需补算
+    post({ id, type: 'done', world, cached, ground }, transfer)
   } catch (e) {
     post({ id, type: 'error', message: e instanceof Error ? e.stack ?? e.message : String(e) })
   }

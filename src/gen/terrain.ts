@@ -72,19 +72,55 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
   const gain = 0.44 + 0.14 * p.coastRoughness
   const mStr = p.mountains
 
-  for (let y = 0; y < H; y++) {
-    const v = y / H
-    for (let x = 0; x < W; x++) {
-      const u = x / H
+  // 低频噪声（域扭曲、各种掩码，最短周期约 H/17 格）在粗网格上求值再双线性插值，
+  // 省掉每格一半的 simplex 调用
+  const S = Math.max(1, Math.round(H / 160))
+  const CW = Math.ceil((W - 1) / S) + 2
+  const CH = Math.ceil((H - 1) / S) + 2
+  const LF = 8
+  const low = new Float32Array(CW * CH * LF)
+  for (let gy = 0; gy < CH; gy++) {
+    const v = (gy * S) / H
+    for (let gx = 0; gx < CW; gx++) {
+      const u = (gx * S) / H
+      const o = (gy * CW + gx) * LF
       // 两级域扭曲：大尺度弯曲 + 小尺度破碎，海岸线呈分形
       const w1x = nWarp.fbm(u * 1.2, v * 1.2, 4)
       const w1y = nWarp.fbm(u * 1.2 + 5.2, v * 1.2 + 1.3, 4)
       const qu = u + 0.28 * w1x
       const qv = v + 0.28 * w1y
-      const w2x = nWarp.fbm(qu * 4 + 11.1, qv * 4 - 3.3, 3)
-      const w2y = nWarp.fbm(qu * 4 - 7.7, qv * 4 + 9.9, 3)
-      const su = qu + 0.05 * w2x * (0.4 + p.coastRoughness)
-      const sv = qv + 0.05 * w2y * (0.4 + p.coastRoughness)
+      low[o] = w1x
+      low[o + 1] = w1y
+      low[o + 2] = nWarp.fbm(qu * 4 + 11.1, qv * 4 - 3.3, 3)
+      low[o + 3] = nWarp.fbm(qu * 4 - 7.7, qv * 4 + 9.9, 3)
+      low[o + 4] = nMnt.fbm(u * 3, v * 3, 2)
+      low[o + 5] = nMnt.fbm(u * 4.2 + 3, v * 4.2, 3)
+      low[o + 6] = nDet.fbm(u * 1.3 + 9, v * 1.3, 3)
+      low[o + 7] = nDet.fbm(u * 2.2 - 4, v * 2.2 + 8, 3)
+    }
+  }
+  const lf = new Float32Array(LF)
+  // 板块软分配里权重小于 e^-24 的项忽略不计
+  const softCut = 0.012 * 24
+
+  for (let y = 0; y < H; y++) {
+    const v = y / H
+    const gy = Math.floor(y / S)
+    const fy = y / S - gy
+    for (let x = 0; x < W; x++) {
+      const u = x / H
+      const gx = Math.floor(x / S)
+      const fx = x / S - gx
+      const o00 = (gy * CW + gx) * LF
+      const o10 = o00 + LF
+      const o01 = o00 + CW * LF
+      const o11 = o01 + LF
+      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy
+      for (let c = 0; c < LF; c++) lf[c] = low[o00 + c] * w00 + low[o10 + c] * w10 + low[o01 + c] * w01 + low[o11 + c] * w11
+      const qu = u + 0.28 * lf[0]
+      const qv = v + 0.28 * lf[1]
+      const su = qu + 0.05 * lf[2] * (0.4 + p.coastRoughness)
+      const sv = qv + 0.05 * lf[3] * (0.4 + p.coastRoughness)
 
       // 板块：最近与次近
       let i1 = 0
@@ -107,7 +143,9 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       let bs = 0
       let ws = 0
       for (let k = 0; k < K; k++) {
-        const w = Math.exp(-(d2[k] - d2[i1]) / 0.012)
+        const dd = d2[k] - d2[i1]
+        if (dd > softCut) continue
+        const w = Math.exp(-dd / 0.012)
         bs += w * plates[k].bias
         ws += w
       }
@@ -126,11 +164,11 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       const landF = smoothstep(-0.2, 0.15, cont)
 
       // 汇聚边界 → 造山带
-      const bw = 0.04 * (0.75 + 0.5 * (nMnt.fbm(u * 3, v * 3, 2) * 0.5 + 0.5))
+      const bw = 0.04 * (0.75 + 0.5 * (lf[4] * 0.5 + 0.5))
       const g = Math.exp(-((bd / bw) ** 2))
       const gw = Math.exp(-((bd / (bw * 3.2)) ** 2))
       const up = smoothstep(0.05, 1.1, conv)
-      const chain = 0.35 + 0.65 * smoothstep(-0.35, 0.45, nMnt.fbm(u * 4.2 + 3, v * 4.2, 3))
+      const chain = 0.35 + 0.65 * smoothstep(-0.35, 0.45, lf[5])
       const r = nMnt.ridged(su * 7, sv * 7, 7)
       let t = g * up * chain * (0.3 + 0.7 * landF) * (0.25 + 1.05 * r)
       // 造山带后方的高原
@@ -140,14 +178,14 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       const rg = Math.exp(-((bd / 0.022) ** 2)) * div
       t += rg * (landF > 0.5 ? -0.1 : 0.08 * (0.5 + r))
       // 板块内部的古老褶皱山地（如阿巴拉契亚）
-      const old = nDet.ridged(su * 5, sv * 5, 5) * smoothstep(0.15, 0.55, nDet.fbm(u * 1.3 + 9, v * 1.3, 3)) * 0.3 * landF
+      const old = nDet.ridged(su * 5, sv * 5, 5) * smoothstep(0.15, 0.55, lf[6]) * 0.3 * landF
       t += old
       t *= mStr
 
       const hills = nDet.fbm(su * 11, sv * 11, 5) * (0.035 + 0.05 * landF)
       // 丘陵高地：内陆的脊状起伏，远离海岸更明显，交给侵蚀雕刻成水系
       const inland = smoothstep(0.02, 0.4, cont)
-      const upMask = smoothstep(-0.3, 0.4, nDet.fbm(u * 2.2 - 4, v * 2.2 + 8, 3))
+      const upMask = smoothstep(-0.3, 0.4, lf[7])
       const upland = nDet.ridged(su * 9, sv * 9, 5) * 0.16 * inland * (0.25 + 0.75 * upMask)
 
       const i = y * W + x

@@ -24,28 +24,52 @@ export function priorityFlood(elev: Float32Array, W: number, H: number, eps = 1e
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = y * W + x
-      if (elev[i] <= 0 || x === 0 || y === 0 || x === W - 1 || y === H - 1) {
-        dir[i] = -1
-        heap.push(elev[i], i)
+      if (elev[i] <= 0 || x === 0 || y === 0 || x === W - 1 || y === H - 1) dir[i] = -1
+    }
+  }
+  // 四周全是种子的种子（远洋）弹出时什么也不做，直接排进 order，不进堆——堆小一大半
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x
+      if (dir[i] !== -1) continue
+      let open = false
+      const edge = x === 0 || y === 0 || x === W - 1 || y === H - 1
+      for (let k = 0; k < 8; k++) {
+        if (edge) {
+          const nx = x + dx[k]
+          const ny = y + dy[k]
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue
+        }
+        if (dir[i + off[k]] === -2) {
+          open = true
+          break
+        }
       }
+      if (open) heap.push(elev[i], i)
+      else order[n++] = i
     }
   }
   while (heap.size > 0) {
     const c = heap.pop()
     order[n++] = c
+    const hc = filled[c]
     const cx = c % W
     const cy = (c - cx) / W
-    const hc = filled[c]
+    // 边界格都是种子，只有它们需要判越界；内部格的 8 邻居一定在图内
+    const edge = cx === 0 || cy === 0 || cx === W - 1 || cy === H - 1
     for (let k = 0; k < 8; k++) {
-      const x = cx + dx[k]
-      const y = cy + dy[k]
-      if (x < 0 || y < 0 || x >= W || y >= H) continue
+      if (edge) {
+        const x = cx + dx[k]
+        const y = cy + dy[k]
+        if (x < 0 || y < 0 || x >= W || y >= H) continue
+      }
       const j = c + off[k]
       if (dir[j] !== -2) continue
       dir[j] = c
       const hj = elev[j]
-      filled[j] = hj > hc + eps ? hj : hc + eps
-      heap.push(filled[j], j)
+      const f = Math.fround(hj > hc + eps ? hj : hc + eps)
+      filled[j] = f
+      heap.push(f, j)
     }
   }
   return { filled, dir, order }

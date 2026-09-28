@@ -58,6 +58,8 @@ export type Item = PathItem | TextItem
 export interface Segment {
   /** page：整张纸的坐标；map：地图框内坐标（平移 M 并裁剪到地图框） */
   space: 'page' | 'map'
+  /** 画在地图框里的图廓件（标题、指北针、比例尺、图例）：整页导出时照画，图框模式下由图廓层另画，地图层跳过 */
+  furniture?: boolean
   items: Item[]
 }
 
@@ -91,13 +93,59 @@ export function pathBBox(d: string): BBox {
     if (x + r > x1) x1 = x + r
     if (y + r > y1) y1 = y + r
   }
-  const re = /([MLHVQCATZmlhvz])([^MLHVQCATZmlhvz]*)/g
   let cx = 0
   let cy = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(d))) {
-    const c = m[1]
-    const n = m[2].trim() ? m[2].trim().split(/[\s,]+/).map(Number) : []
+  // 单遍扫描：命令字母切段，段内按空白/逗号切出数字（大路径可达数 MB，正则+split 太慢）
+  const n: number[] = []
+  let c = ''
+  let tok = -1
+  // 数字快速路径：[-]整数[.小数]，尾数 < 2^53 且小数位 ≤ 22 时 M/10^k 正确舍入，与 Number() 逐位相同
+  let mant = 0
+  let frac = -1
+  let neg = false
+  let fast = true
+  let digits = false
+  const L = d.length
+  for (let i = 0; i <= L; i++) {
+    const ch = i < L ? d.charCodeAt(i) : 0
+    const isCmd = i === L || CMD[ch] === 1
+    const isSep = ch === 32 || ch === 44 || (ch >= 9 && ch <= 13)
+    if (isCmd || isSep) {
+      if (tok >= 0) {
+        n.push(fast && digits && frac <= 22 ? (neg ? -1 : 1) * (mant / POW10[frac < 0 ? 0 : frac]) : Number(d.slice(tok, i)))
+        tok = -1
+      }
+      if (!isCmd) continue
+    } else {
+      if (tok < 0) {
+        tok = i
+        mant = 0
+        frac = -1
+        neg = false
+        fast = true
+        digits = false
+        if (ch === 45) {
+          neg = true
+          continue
+        }
+      }
+      if (ch >= 48 && ch <= 57) {
+        digits = true
+        mant = mant * 10 + (ch - 48)
+        if (frac >= 0) frac++
+        if (mant > 9007199254740991) fast = false
+      } else if (ch === 46 && frac < 0) frac = 0
+      else fast = false
+      continue
+    }
+    if (c) flush(c)
+    c = i < L ? d[i] : ''
+    n.length = 0
+  }
+  if (x0 === Infinity) return [0, 0, 0, 0]
+  return [x0, y0, x1, y1]
+
+  function flush(c: string) {
     switch (c) {
       case 'M':
       case 'L':
@@ -138,9 +186,10 @@ export function pathBBox(d: string): BBox {
         break
     }
   }
-  if (x0 === Infinity) return [0, 0, 0, 0]
-  return [x0, y0, x1, y1]
 }
+const CMD = new Uint8Array(128)
+for (const ch of 'MLHVQCATZmlhvz') CMD[ch.charCodeAt(0)] = 1
+const POW10 = Array.from({ length: 23 }, (_, k) => Number('1e' + k))
 
 export function transformBBox(b: BBox, m?: Matrix): BBox {
   if (!m) return b
@@ -176,6 +225,8 @@ export class DisplayList {
   gradients = new Map<string, GradientDef>()
   filters = new Map<string, string>()
   head = ''
+  /** 为真时新写入的指令归入图廓件段（见 Segment.furniture） */
+  furniture = false
   private patternCache = new Map<string, CanvasPattern>()
 
   constructor(
@@ -188,8 +239,8 @@ export class DisplayList {
 
   segment(space: 'page' | 'map') {
     const last = this.segments[this.segments.length - 1]
-    if (last && last.space === space) return last
-    const s: Segment = { space, items: [] }
+    if (last && last.space === space && !!last.furniture === this.furniture) return last
+    const s: Segment = this.furniture ? { space, furniture: true, items: [] } : { space, items: [] }
     this.segments.push(s)
     return s
   }
@@ -203,7 +254,8 @@ export class DisplayList {
   }
 
   text(space: 'page' | 'map', item: Omit<TextItem, 'k'>) {
-    this.segment(space).items.push({ k: 'text', ...item })
+    // bbox 与 path 一样按局部坐标给出：带变换（沿路逐字排布的注记）时换算到图面，视口裁剪才不会误删
+    this.segment(space).items.push({ k: 'text', ...item, bbox: transformBBox(item.bbox, item.m) })
   }
 
   // —————————————————— SVG ——————————————————
@@ -216,11 +268,12 @@ export class DisplayList {
     for (const g of this.gradients.values()) defs.push(g.svg)
     for (const f of this.filters.values()) defs.push(f)
     defs.push(`<clipPath id="mapclip"><rect x="0" y="0" width="${this.MW}" height="${this.MH}"/></clipPath>`)
-    for (const seg of this.segments) {
-      if (seg.space === 'map') out.push(`<g transform="translate(${this.M} ${this.M})" clip-path="url(#mapclip)">`)
+    // 相邻的同空间段（图廓件段与地图段）合成一组
+    this.segments.forEach((seg, i) => {
+      if (seg.space === 'map' && this.segments[i - 1]?.space !== 'map') out.push(`<g transform="translate(${this.M} ${this.M})" clip-path="url(#mapclip)">`)
       for (const it of seg.items) out.push(it.k === 'path' ? svgPath(it) : svgText(it))
-      if (seg.space === 'map') out.push('</g>')
-    }
+      if (seg.space === 'map' && this.segments[i + 1]?.space !== 'map') out.push('</g>')
+    })
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" width="${this.width}" height="${this.height}" viewBox="0 0 ${this.width} ${this.height}">` +
       this.head +
@@ -233,9 +286,9 @@ export class DisplayList {
   // —————————————————— Canvas ——————————————————
   /**
    * 绘制到 Canvas：scale 为页面像素 → 画布像素的缩放，(ox, oy) 为页面原点在画布上的位置。
-   * 只绘制包围盒与画布可见区相交的指令。
+   * 只绘制包围盒与画布可见区相交的指令；only 给出时只画这一层（图框模式下地图与图廓分开画）。
    */
-  render(ctx: CanvasRenderingContext2D, scale: number, ox: number, oy: number) {
+  render(ctx: CanvasRenderingContext2D, scale: number, ox: number, oy: number, only?: 'page' | 'map') {
     const cw = ctx.canvas.width
     const ch = ctx.canvas.height
     // 可见区（页面坐标）
@@ -246,6 +299,8 @@ export class DisplayList {
     ctx.save()
     ctx.setTransform(scale, 0, 0, scale, ox, oy)
     for (const seg of this.segments) {
+      if (only && seg.space !== only) continue
+      if (only === 'map' && seg.furniture) continue
       const dx = seg.space === 'map' ? this.M : 0
       ctx.save()
       if (seg.space === 'map') {

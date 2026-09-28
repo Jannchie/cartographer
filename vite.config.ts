@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import vue from '@vitejs/plugin-vue'
 import { defineConfig, type Plugin } from 'vite'
 
 /**
@@ -9,7 +10,7 @@ import { defineConfig, type Plugin } from 'vite'
  */
 function genHash(): Plugin {
   const id = 'virtual:gen-hash'
-  const dir = resolve(__dirname, 'src/gen')
+  const dir = resolve(import.meta.dirname, 'src/gen')
   return {
     name: 'gen-hash',
     resolveId: (s) => (s === id ? '\0' + id : undefined),
@@ -32,8 +33,9 @@ function genHash(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [genHash()],
+  plugins: [vue(), genHash()],
   worker: { format: 'es', plugins: () => [genHash()] },
-  server: { port: 5190 },
-  build: { chunkSizeWarningLimit: 900 },
+  // Git Bash 崩溃时会在工作目录留下 bash.exe.stackdump，被监听时锁着会让开发服务器退出
+  server: { port: 5190, watch: { ignored: ['**/*.stackdump'] } },
+  build: { chunkSizeWarningLimit: 1100 },
 })

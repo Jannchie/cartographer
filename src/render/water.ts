@@ -125,8 +125,11 @@ const WATER_FRAG = /* glsl */ `
         float h = 0.0;
         h += vnoise(p * 1.3 + vec2(t * 0.12, t * 0.07)) * 0.5;
         h += vnoise(p * 3.1 - vec2(t * 0.2, -t * 0.13)) * 0.25;
-        h += vnoise(p * 7.7 + vec2(-t * 0.33, t * 0.27)) * 0.14 * lod;
-        h += vnoise(p * 17.0 + vec2(t * 0.5, t * 0.41)) * 0.07 * lod;
+        // 远处 lod 为 0：高频两个八度不参与，直接跳过
+        if (lod > 0.0) {
+          h += vnoise(p * 7.7 + vec2(-t * 0.33, t * 0.27)) * 0.14 * lod;
+          h += vnoise(p * 17.0 + vec2(t * 0.5, t * 0.41)) * 0.07 * lod;
+        }
         return h;
       }
 
@@ -136,7 +139,9 @@ const WATER_FRAG = /* glsl */ `
         float terrain = outside ? -4.5 : bakedAt(vWorld.xz).x;
         float level = vWorld.y / uVScale;
         float depth = level - terrain;
-        if (depth < 0.0) discard;
+        // 陆地上方：透明提前返回。不用 discard——着色器里有 discard 又写深度时 GPU 无法做提前深度测试，
+        // 整张水面（铺满全图，陆地下面也有）的每个像素都会先跑完这段很重的着色再被地形挡掉
+        if (depth < 0.0) { gl_FragColor = vec4(0.0); return; }
         #ifdef RIVER
         // 河道：按海水的算法着色，只是水更浑；越近河口越接近海水
         bool lake = false;
@@ -172,14 +177,21 @@ const WATER_FRAG = /* glsl */ `
 
         // —— 水体：海底经吸收后的颜色 + 水的散射色 ——
         vec3 bed = outside ? vec3(0.0) : texture2D(uColor, uv).rgb;
-        // 浅水里的礁盘与海草：大块暗斑，边缘破碎
-        float reef = smoothstep(0.52, 0.62, fbm5(P * 2.4 + 3.0)) * (1.0 - smoothstep(4.0, 45.0, dm)) * smoothstep(1.5, 4.0, dm);
-        bed = mix(bed, bed * vec3(0.35, 0.42, 0.36), reef * 0.85);
-        float grass = smoothstep(0.55, 0.7, fbm3(P * 6.0 - 9.0)) * smoothstep(6.0, 15.0, dm) * (1.0 - smoothstep(25.0, 60.0, dm));
-        bed = mix(bed, bed * vec3(0.45, 0.55, 0.42), grass * 0.5);
-        // 极浅处是湿沙，偏暗；沙滩只在部分岸段出现
-        bed *= mix(0.72, 1.0, smoothstep(0.0, 2.5, dm));
-        float beachy = smoothstep(0.35, 0.6, fbm3(P * 1.7 + 11.0));
+        // 海底细节只在浅水里看得见（水深 60 米外海底已被吸收殆尽），深水跳过这几组噪声
+        float reef = 0.0;
+        if (dm < 60.0) {
+          // 浅水里的礁盘与海草：大块暗斑，边缘破碎
+          if (dm < 45.0 && dm > 1.5) reef = smoothstep(0.52, 0.62, fbm5(P * 2.4 + 3.0)) * (1.0 - smoothstep(4.0, 45.0, dm)) * smoothstep(1.5, 4.0, dm);
+          bed = mix(bed, bed * vec3(0.35, 0.42, 0.36), reef * 0.85);
+          if (dm > 6.0) {
+            float grass = smoothstep(0.55, 0.7, fbm3(P * 6.0 - 9.0)) * smoothstep(6.0, 15.0, dm) * (1.0 - smoothstep(25.0, 60.0, dm));
+            bed = mix(bed, bed * vec3(0.45, 0.55, 0.42), grass * 0.5);
+          }
+          // 极浅处是湿沙，偏暗
+          bed *= mix(0.72, 1.0, smoothstep(0.0, 2.5, dm));
+        }
+        // 沙滩只在部分岸段出现（低频，蓝光穿透深，200 米外海底才完全看不见）
+        float beachy = dm < 200.0 ? smoothstep(0.35, 0.6, fbm3(P * 1.7 + 11.0)) : 0.5;
         bed = mix(bed * vec3(0.8, 0.85, 0.82), bed, beachy);
         // 光在水中往返的衰减（每米）
         vec3 absorb = lake ? vec3(0.16, 0.07, 0.06) : vec3(0.1, 0.03, 0.016);
@@ -192,7 +204,7 @@ const WATER_FRAG = /* glsl */ `
         float diff = (max(L.y, 0.0) * 0.8 + 0.2) * cs;
         vec3 body = bed * T * diff * 1.08 + scatter * (1.0 - T) * (0.6 + 0.4 * cs);
         // 浅水的阳光焦散
-        float caust = pow(abs(sin(P.x * 38.0 + h0 * 9.0) * sin(P.y * 41.0 - hx * 9.0)), 6.0) * (1.0 - smoothstep(1.0, 8.0, dm)) * lod;
+        float caust = dm > 8.0 ? 0.0 : pow(abs(sin(P.x * 38.0 + h0 * 9.0) * sin(P.y * 41.0 - hx * 9.0)), 6.0) * (1.0 - smoothstep(1.0, 8.0, dm)) * lod;
         body += vec3(0.9, 1.0, 0.95) * caust * 0.12 * cs;
         body *= uLight;
 
@@ -208,7 +220,13 @@ const WATER_FRAG = /* glsl */ `
         vec3 col = mix(body, sky * uLight, fres * refl);
         vec3 Hh = normalize(L + V);
         float nh = max(dot(n, Hh), 0.0);
-        float spec = pow(nh, 900.0) * 3.5 + pow(nh, 120.0) * 0.35 + pow(nh, 14.0) * 0.04;
+        // 高光抗锯齿：法线在一个像素内变化越大，高光瓣放得越宽（按能量归一，总亮度不变），
+        // 否则亚像素的闪点会在镜头移动时逐帧跳动
+        vec3 dn = fwidth(n);
+        float nv = min(dot(dn, dn) * 4.0, 1.0);
+        float e1 = 900.0 / (1.0 + 900.0 * nv);
+        float e2 = 120.0 / (1.0 + 120.0 * nv);
+        float spec = pow(nh, e1) * 3.5 * (e1 + 2.0) / 902.0 + pow(nh, e2) * 0.35 * (e2 + 2.0) / 122.0 + pow(nh, 14.0) * 0.04;
         col += uSunColor * spec * sunUp * cs;
 
         // —— 碎浪 ——
@@ -218,17 +236,22 @@ const WATER_FRAG = /* glsl */ `
         #else
         if (!outside) {
         #endif
-          // 沿岸：一道道向岸推进的浪线
-          float band = sin(dm * 1.4 - uTime * 1.3 + fbm3(P * 3.0) * 8.0);
+          // 沿岸：一道道向岸推进的浪线（碎浪带与礁缘之外为 0，跳过这组噪声）
           float breakZone = 1.0 - smoothstep(0.0, lake ? 0.8 : 2.2, dm);
-          shoreFoam = breakZone * (smoothstep(0.6, 0.95, band) * 0.6 + (1.0 - smoothstep(0.0, 0.5, dm)) * 0.6);
-          shoreFoam *= smoothstep(0.35, 0.65, fbm3(P * 7.0 + vec2(uTime * 0.08, 0.0)));
-          // 迎浪岸段碎浪强、背风湾里几乎没有
-          shoreFoam *= smoothstep(0.3, 0.7, fbm3(P * 0.9 - 5.0));
-          // 礁缘碎浪
-          shoreFoam += reef * smoothstep(0.7, 0.85, fbm3(P * 5.0 + uTime * 0.1)) * 0.2 * (1.0 - smoothstep(2.0, 8.0, dm));
-          shoreFoam *= 0.55 + 0.45 * fbm3(P * 26.0 + vec2(uTime * 0.3, 0.0));
-          if (lake) shoreFoam *= 0.25;
+          float reefEdge = reef * (1.0 - smoothstep(2.0, 8.0, dm));
+          if (breakZone > 0.0 || reefEdge > 0.0) {
+            if (breakZone > 0.0) {
+              float band = sin(dm * 1.4 - uTime * 1.3 + fbm3(P * 3.0) * 8.0);
+              shoreFoam = breakZone * (smoothstep(0.6, 0.95, band) * 0.6 + (1.0 - smoothstep(0.0, 0.5, dm)) * 0.6);
+              shoreFoam *= smoothstep(0.35, 0.65, fbm3(P * 7.0 + vec2(uTime * 0.08, 0.0)));
+              // 迎浪岸段碎浪强、背风湾里几乎没有
+              shoreFoam *= smoothstep(0.3, 0.7, fbm3(P * 0.9 - 5.0));
+            }
+            // 礁缘碎浪
+            if (reefEdge > 0.0) shoreFoam += reefEdge * smoothstep(0.7, 0.85, fbm3(P * 5.0 + uTime * 0.1)) * 0.2;
+            shoreFoam *= 0.55 + 0.45 * fbm3(P * 26.0 + vec2(uTime * 0.3, 0.0));
+            if (lake) shoreFoam *= 0.25;
+          }
         }
         // 外海白浪
         float caps = 0.0;
@@ -244,11 +267,14 @@ const WATER_FRAG = /* glsl */ `
 
         // 海冰
         if (!outside) {
+          // 海冰：浮冰噪声最多让气温偏移 ±2.5°，高于 -4° 的海域不可能结冰，跳过
           float Tc = texture2D(uTemp, uv).r;
-          float floe = vnoise(P * 3.0) * 0.6 + vnoise(P * 9.0) * 0.4;
-          float ice = smoothstep(-6.5, -9.5, Tc + (floe - 0.5) * 5.0);
-          vec3 iceCol = mix(vec3(0.78, 0.86, 0.9), vec3(0.95, 0.97, 0.98), floe) * (max(L.y, 0.0) * 0.6 + 0.45) * uLight;
-          col = mix(col, iceCol, ice);
+          if (Tc < -4.0) {
+            float floe = vnoise(P * 3.0) * 0.6 + vnoise(P * 9.0) * 0.4;
+            float ice = smoothstep(-6.5, -9.5, Tc + (floe - 0.5) * 5.0);
+            vec3 iceCol = mix(vec3(0.78, 0.86, 0.9), vec3(0.95, 0.97, 0.98), floe) * (max(L.y, 0.0) * 0.6 + 0.45) * uLight;
+            col = mix(col, iceCol, ice);
+          }
         }
 
         // 岸边与沙滩柔和衔接

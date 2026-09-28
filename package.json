@@ -11,15 +11,18 @@
     "shade:png": "tsx scripts/shade.ts",
     "atlas:png": "tsx scripts/atlas.ts",
     "svg": "tsx scripts/svg.ts",
-    "settlement:png": "tsx scripts/settlement.ts"
+    "settlement:png": "tsx scripts/settlement.ts",
+    "showcase": "tsx scripts/showcase.ts docs/images"
   },
   "dependencies": {
-    "three": "^0.186.1"
+    "three": "^0.186.1",
+    "vue": "^3.5.43"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^1.0.9",
     "@types/pngjs": "^6.0.5",
     "@types/three": "^0.186.0",
+    "@vitejs/plugin-vue": "^6.0.9",
     "pngjs": "^7.0.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { FS_VERT, FullscreenPass } from './fullscreen'
 import { NOISE_GLSL } from './glsl'
+import type { GpuTimer } from './gpuTimer'
+import { whiteBalance, type Look, type Quality } from './looks'
 
 /**
  * 后期管线：
@@ -8,12 +10,18 @@ import { NOISE_GLSL } from './glsl'
  *
  * 镜头静止时逐帧累积：每帧给投影加亚像素抖动、给景深采样换一个旋转角，
  * 画面在几秒内收敛成超采样、散景柔顺的"成片"；镜头一动就从单帧重新开始。
+ *
+ * 动态分辨率：镜头移动时场景、云、合成、景深只画到渲染目标左下角的一块（scale 倍），
+ * 累积时用 Catmull-Rom 放大到全分辨率；静止时回到 scale 1 重新累积。
+ * 渲染目标始终是全尺寸，只改视口，切换缩放不必重新分配显存。
+ * uSub：(纹理坐标缩放 xy, 可采样的最大纹理坐标 zw)，避免双线性采样读到子区域外的旧像素。
  */
 
 /** 空气透视（均匀霾 + 贴海面的高度雾）+ 云（预乘）叠加，输出线性 HDR */
 const COMPOSITE_FRAG = /* glsl */ `
   uniform sampler2D uScene;
   uniform sampler2D uClouds;
+  uniform vec4 uCloudSub;
   uniform sampler2D uDepth;
   uniform mat4 uInvProj;
   uniform mat4 uCamWorld;
@@ -25,11 +33,13 @@ const COMPOSITE_FRAG = /* glsl */ `
   uniform float uFogDensity;
   uniform float uFogHeight;
   uniform vec4 uBox;
+  uniform vec4 uSub;
   varying vec2 vUv;
   void main() {
-    vec4 s = texture2D(uScene, vUv);
+    vec2 suv = min(vUv * uSub.xy, uSub.zw);
+    vec4 s = texture2D(uScene, suv);
     vec3 col = s.rgb;
-    float depth = texture2D(uDepth, vUv).r;
+    float depth = texture2D(uDepth, suv).r;
     if (depth < 0.9999 && s.a > 0.0 && uHazeDensity + uFogDensity > 0.0) {
       // 由深度重建世界坐标
       vec2 ndc = vUv * 2.0 - 1.0;
@@ -65,7 +75,7 @@ const COMPOSITE_FRAG = /* glsl */ `
       col = col * T + inscatter * (1.0 - T) * s.a;
     }
     // 云（预乘，没有云时绑定的是透射率为 1 的空纹理）叠在最上面；背景保持透明
-    vec4 c = texture2D(uClouds, vUv);
+    vec4 c = texture2D(uClouds, min(vUv * uCloudSub.xy, uCloudSub.zw));
     gl_FragColor = vec4(col * c.a + c.rgb, 1.0 - (1.0 - s.a) * c.a);
   }
 `
@@ -86,6 +96,7 @@ const DOF_FRAG = /* glsl */ `
   uniform float uAperture;
   uniform float uMaxCoc;
   uniform float uRot;
+  uniform vec4 uSub;
   varying vec2 vUv;
   const float GOLDEN = 2.39996323;
   float viewZ(vec2 uv) {
@@ -99,8 +110,9 @@ const DOF_FRAG = /* glsl */ `
     return min(uMaxCoc, uAperture * max(0.0, d - 0.07) * smoothstep(0.07, 0.2, d));
   }
   void main() {
-    vec4 center = texture2D(uColor, vUv);
-    float cz = viewZ(vUv);
+    vec2 uv = min(vUv * uSub.xy, uSub.zw);
+    vec4 center = texture2D(uColor, uv);
+    float cz = viewZ(uv);
     float cs = coc(cz);
     vec4 acc = center;
     float tot = 1.0;
@@ -108,7 +120,7 @@ const DOF_FRAG = /* glsl */ `
     float ang = uRot;
     for (int i = 0; i < 120; i++) {
       if (radius >= uMaxCoc) break;
-      vec2 tc = vUv + vec2(cos(ang), sin(ang)) * uTexel * radius;
+      vec2 tc = clamp(uv + vec2(cos(ang), sin(ang)) * uTexel * radius, vec2(0.0), uSub.zw);
       vec4 sc = texture2D(uColor, tc);
       float sz = viewZ(tc);
       float ss = coc(sz);
@@ -123,13 +135,37 @@ const DOF_FRAG = /* glsl */ `
   }
 `
 
+/** 累积；本帧是缩小渲染的（镜头在动）时，用 Catmull-Rom（9 点，由双线性采样合成）放大，比双线性清晰 */
 const ACC_FRAG = /* glsl */ `
   uniform sampler2D uPrev;
   uniform sampler2D uCur;
   uniform float uW;
+  uniform vec4 uSub;
+  uniform vec2 uSize;
   varying vec2 vUv;
+  vec4 tap(vec2 p) {
+    return texture2D(uCur, clamp(p, vec2(0.0), uSub.zw));
+  }
+  vec4 catmullRom(vec2 uv) {
+    vec2 sp = uv * uSize;
+    vec2 t1 = floor(sp - 0.5) + 0.5;
+    vec2 f = sp - t1;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2;
+    vec2 p0 = (t1 - 1.0) / uSize;
+    vec2 p3 = (t1 + 2.0) / uSize;
+    vec2 p12 = (t1 + w2 / w12) / uSize;
+    vec4 r = (tap(vec2(p0.x, p0.y)) * w0.x + tap(vec2(p12.x, p0.y)) * w12.x + tap(vec2(p3.x, p0.y)) * w3.x) * w0.y
+           + (tap(vec2(p0.x, p12.y)) * w0.x + tap(vec2(p12.x, p12.y)) * w12.x + tap(vec2(p3.x, p12.y)) * w3.x) * w12.y
+           + (tap(vec2(p0.x, p3.y)) * w0.x + tap(vec2(p12.x, p3.y)) * w12.x + tap(vec2(p3.x, p3.y)) * w3.x) * w3.y;
+    return max(r, 0.0);
+  }
   void main() {
-    gl_FragColor = mix(texture2D(uPrev, vUv), texture2D(uCur, vUv), uW);
+    vec4 cur = uSub.x < 0.999 ? catmullRom(vUv * uSub.xy) : texture2D(uCur, vUv);
+    gl_FragColor = mix(texture2D(uPrev, vUv), cur, uW);
   }
 `
 
@@ -141,9 +177,15 @@ const DOWN_FRAG = /* glsl */ `
   varying vec2 vUv;
   void main() {
     vec2 o = uTexel;
-    vec4 c = (texture2D(uSrc, vUv + vec2(-o.x, -o.y)) + texture2D(uSrc, vUv + vec2(o.x, -o.y))
-            + texture2D(uSrc, vUv + vec2(-o.x, o.y)) + texture2D(uSrc, vUv + vec2(o.x, o.y))) * 0.25;
+    vec4 a = texture2D(uSrc, vUv + vec2(-o.x, -o.y));
+    vec4 b = texture2D(uSrc, vUv + vec2(o.x, -o.y));
+    vec4 d = texture2D(uSrc, vUv + vec2(-o.x, o.y));
+    vec4 e = texture2D(uSrc, vUv + vec2(o.x, o.y));
+    vec4 c = (a + b + d + e) * 0.25;
     if (uFirst > 0.5) {
+      // Karis 平均：按 1/(1+亮度) 加权，单个过亮的像素（水面闪点）不会炸成逐帧跳动的光斑
+      vec4 w = 1.0 / (1.0 + vec4(max(a.r, max(a.g, a.b)), max(b.r, max(b.g, b.b)), max(d.r, max(d.g, d.b)), max(e.r, max(e.g, e.b))));
+      c = (a * w.x + b * w.y + d * w.z + e * w.w) / (w.x + w.y + w.z + w.w);
       // 柔和阈值：只让偏亮的部分进入泛光，暗部不发雾
       float l = max(c.r, max(c.g, c.b));
       float k = clamp((l - 0.55) / 0.6, 0.0, 1.0);
@@ -170,7 +212,8 @@ const UP_FRAG = /* glsl */ `
 `
 
 /**
- * 终合成：泛光 → 曝光 → AgX（带 punchy 观感）→ 调色（冷暗部/暖亮部、饱和度）→ 暗角 → 胶片颗粒。
+ * 终合成：色差 → 泛光与胶片光晕 → 白平衡、曝光 → 黑白转换 → AgX（饱和度、反差）
+ * → 分离色调（暗部/亮部偏色）→ 褪色 → 暗角 → 胶片颗粒。参数见 looks.ts。
  * 全程预乘 alpha：沙盘浮在页面上，色调映射前先除掉 alpha。
  */
 const FINAL_FRAG = /* glsl */ `
@@ -184,8 +227,15 @@ const FINAL_FRAG = /* glsl */ `
   uniform vec3 uHighTint;
   uniform float uVignette;
   uniform float uGrain;
+  uniform float uGrainSize;
   uniform float uSeed;
   uniform vec2 uRes;
+  uniform vec3 uWB;
+  uniform float uFade;
+  uniform float uMono;
+  uniform vec3 uMonoMix;
+  uniform float uHalation;
+  uniform float uAberration;
   varying vec2 vUv;
   ${NOISE_GLSL}
 
@@ -220,37 +270,54 @@ const FINAL_FRAG = /* glsl */ `
   }
   void main() {
     vec4 s = texture2D(uSrc, vUv);
+    // 色差：越往边角红、蓝两通道沿径向错开越多
+    if (uAberration > 0.0) {
+      vec2 off = (vUv - 0.5) * 2.0 * uAberration / uRes;
+      s.r = texture2D(uSrc, vUv - off).r;
+      s.b = texture2D(uSrc, vUv + off).b;
+    }
     vec3 b = texture2D(uBloom, vUv).rgb;
+    // 光晕：亮处穿过乳剂、被片基反射回来，只曝红层（和部分绿层）
+    vec3 glow = b * uBloomAmt + dot(b, vec3(0.333)) * uHalation * vec3(0.9, 0.22, 0.06);
     float a = s.a;
-    vec3 c = s.rgb + b * uBloomAmt;
-    a = clamp(a + dot(b, vec3(0.333)) * uBloomAmt, 0.0, 1.0);
+    vec3 c = s.rgb + glow;
+    a = clamp(a + dot(glow, vec3(0.333)), 0.0, 1.0);
     if (a <= 0.0005) { gl_FragColor = vec4(0.0); return; }
     c /= a;
     // 暗角：边角稍压曝光
     vec2 q = vUv - 0.5;
     q.x *= uRes.x / uRes.y;
     float v = 1.0 - uVignette * smoothstep(0.35, 1.05, length(q));
+    c *= uWB;
+    // 黑白：在场景线性空间按通道权重转灰（相当于镜头前加滤色镜）
+    c = mix(c, vec3(dot(c, uMonoMix)), uMono);
     c = agx(c * uExposure * v);
-    // 分离色调：暗部偏冷、亮部偏暖
+    // 分离色调：暗部与亮部各自偏色
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
     c *= mix(uShadowTint, uHighTint, smoothstep(0.02, 0.6, l));
-    // 胶片颗粒（中间调最明显），兼做去色带抖动
-    float n = hash12(gl_FragCoord.xy + uSeed * 97.0) + hash12(gl_FragCoord.xy * 1.37 + uSeed * 31.0) - 1.0;
+    // 褪色：黑位抬起，高光略压
+    c = uFade + c * (1.0 - uFade * 1.4);
+    // 胶片颗粒（中间调最明显），兼做去色带抖动；颗粒大于 1 像素时用平滑值噪声
+    vec2 gp = gl_FragCoord.xy / uGrainSize;
+    float n = uGrainSize > 1.01
+      ? (vnoise(gp + uSeed * 17.3) + vnoise(gp * 1.37 + uSeed * 5.1) - 1.0) * 1.6
+      : hash12(gl_FragCoord.xy + uSeed * 97.0) + hash12(gl_FragCoord.xy * 1.37 + uSeed * 31.0) - 1.0;
     c += n * (uGrain * (0.25 + l * (1.0 - l) * 3.0) + 1.0 / 255.0) * sqrt(max(c, 0.0));
     gl_FragColor = vec4(max(c, 0.0) * a, a);
     #include <colorspace_fragment>
   }
 `
 
+const ONE = new THREE.Vector4(1, 1, 1, 1)
+
 /** 云层：半分辨率步进到自己的目标里（预乘），合成时叠加 */
 export interface CloudLayer {
   readonly texture: THREE.Texture
+  /** 本帧实际画到的子区域（同 uSub 的格式） */
+  readonly sub: THREE.Vector4
   /** frame：累积帧序号（0 表示镜头刚动），用来逐帧错开步进抖动 */
-  render(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, frame: number): void
+  render(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, frame: number, sub: THREE.Vector4): void
 }
-
-/** 累积上限：水面、云在动，历史只保留最近这么多帧 */
-const MAX_SAMPLES = 12
 
 const hdr = (w = 1, h = 1) =>
   new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter })
@@ -281,6 +348,12 @@ export class PostPipeline {
   private lastFocus = 0
   private lastAperture = 0
   private jitterIdx = 0
+  /** 累积上限：水面、云在动，历史只保留最近这么多帧 */
+  private maxSamples = 12
+  private bloomLevels = 6
+  /** 上一帧的渲染缩放：变了就重新累积（不把低清帧混进成片） */
+  private lastScale = 1
+  private sub = new THREE.Vector4(1, 1, 1, 1)
 
   constructor() {
     this.sceneRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
@@ -292,6 +365,7 @@ export class PostPipeline {
     this.comp = mat(COMPOSITE_FRAG, {
       uScene: { value: this.sceneRT.texture },
       uClouds: { value: this.empty },
+      uCloudSub: { value: new THREE.Vector4(1, 1, 1, 1) },
       uDepth: { value: this.sceneRT.depthTexture },
       uInvProj: { value: new THREE.Matrix4() },
       uCamWorld: { value: new THREE.Matrix4() },
@@ -303,6 +377,7 @@ export class PostPipeline {
       uFogDensity: { value: 0.035 },
       uFogHeight: { value: 0.5 },
       uBox: { value: new THREE.Vector4(-1e4, -1e4, 1e4, 1e4) },
+      uSub: { value: this.sub },
     })
     this.dof = mat(DOF_FRAG, {
       uColor: { value: this.hdrRT.texture },
@@ -314,8 +389,9 @@ export class PostPipeline {
       uAperture: { value: 0 },
       uMaxCoc: { value: 16 },
       uRot: { value: 0 },
+      uSub: { value: this.sub },
     })
-    this.accMat = mat(ACC_FRAG, { uPrev: { value: null }, uCur: { value: null }, uW: { value: 1 } })
+    this.accMat = mat(ACC_FRAG, { uPrev: { value: null }, uCur: { value: null }, uW: { value: 1 }, uSub: { value: this.sub }, uSize: { value: new THREE.Vector2(1, 1) } })
     this.down = mat(DOWN_FRAG, { uSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uFirst: { value: 0 } })
     this.up = mat(UP_FRAG, { uSrc: { value: null }, uBase: { value: null }, uTexel: { value: new THREE.Vector2() } })
     this.final = mat(FINAL_FRAG, {
@@ -329,13 +405,56 @@ export class PostPipeline {
       uHighTint: { value: new THREE.Color(1.03, 1.0, 0.96) },
       uVignette: { value: 0.28 },
       uGrain: { value: 0.035 },
+      uGrainSize: { value: 1 },
       uSeed: { value: 0 },
       uRes: { value: new THREE.Vector2(1, 1) },
+      uWB: { value: new THREE.Vector3(1, 1, 1) },
+      uFade: { value: 0 },
+      uMono: { value: 0 },
+      uMonoMix: { value: new THREE.Vector3(0.2126, 0.7152, 0.0722) },
+      uHalation: { value: 0 },
+      uAberration: { value: 0 },
     })
     this.final.toneMapped = false
   }
 
+  /** 观感只影响终合成，不需要重新累积 */
+  setLook(k: Look) {
+    const u = this.final.uniforms
+    u.uExposure.value = 1.35 * 2 ** k.ev
+    u.uSat.value = k.saturation
+    u.uContrast.value = k.contrast
+    u.uShadowTint.value.setRGB(...k.shadowTint)
+    u.uHighTint.value.setRGB(...k.highTint)
+    u.uVignette.value = k.vignette
+    u.uGrain.value = k.grain
+    u.uGrainSize.value = k.grainSize
+    u.uBloomAmt.value = k.bloom
+    u.uWB.value.set(...whiteBalance(k.temp))
+    u.uFade.value = k.fade
+    u.uMono.value = k.mono
+    u.uMonoMix.value.set(...k.monoMix)
+    u.uHalation.value = k.halation
+    // 色差按 1000 像素高归一，换分辨率时观感不变
+    this.aberration = k.aberration
+    u.uAberration.value = (k.aberration * this.h) / 1000
+  }
+  private aberration = 0
+
+  /** 画质：MSAA、泛光级数、累积上限（尺寸由调用方随后 setSize） */
+  setQuality(q: Quality, maxMsaa: number) {
+    const msaa = Math.min(q.msaa, maxMsaa)
+    if (this.sceneRT.samples !== msaa) {
+      this.sceneRT.samples = msaa
+      // 释放旧的 GPU 资源，下次使用时按新的采样数重建
+      this.sceneRT.dispose()
+    }
+    this.maxSamples = q.accumulate
+    this.bloomLevels = q.bloomLevels
+  }
+
   setSize(w: number, h: number) {
+    if (w === this.w && h === this.h && this.bloomRTs.length === this.bloomLevels) return
     this.w = w
     this.h = h
     this.sceneRT.setSize(w, h)
@@ -345,7 +464,7 @@ export class PostPipeline {
     this.bloomUp = []
     let bw = w
     let bh = h
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < this.bloomLevels; i++) {
       bw = Math.max(1, bw >> 1)
       bh = Math.max(1, bh >> 1)
       this.bloomRTs.push(hdr(bw, bh))
@@ -353,6 +472,8 @@ export class PostPipeline {
     }
     this.final.uniforms.uRes.value.set(w, h)
     this.dof.uniforms.uTexel.value.set(1 / w, 1 / h)
+    this.accMat.uniforms.uSize.value.set(w, h)
+    this.final.uniforms.uAberration.value = (this.aberration * h) / 1000
     this.reset()
   }
 
@@ -373,7 +494,8 @@ export class PostPipeline {
 
   /**
    * 渲染一帧（先调用 cameraChanged）。云在场景渲染之后、合成之前步进（它要读场景深度）。
-   * `focus`：对焦点的视空间深度；`aperture`：弥散圆强度（像素，按 1000 像素高归一）。
+   * `focus`：对焦点的视空间深度；`aperture`：弥散圆强度（像素，按 1000 像素高归一）；
+   * `scale`：渲染缩放（动态分辨率，镜头移动时小于 1）。
    */
   render(
     renderer: THREE.WebGLRenderer,
@@ -382,7 +504,20 @@ export class PostPipeline {
     focus: number,
     aperture: number,
     clouds: CloudLayer | null,
+    timer?: GpuTimer,
+    scale = 1,
   ) {
+    // 缩放变了（开始移动 / 停下）：从头累积
+    if (scale !== this.lastScale) this.samples = 0
+    this.lastScale = scale
+    const sw = Math.max(1, Math.round(this.w * scale))
+    const sh = Math.max(1, Math.round(this.h * scale))
+    this.sub.set(sw / this.w, sh / this.h, (sw - 0.5) / this.w, (sh - 0.5) / this.h)
+    for (const rt of [this.sceneRT, this.hdrRT, this.dofRT]) {
+      rt.viewport.set(0, 0, sw, sh)
+      rt.scissor.set(0, 0, sw, sh)
+      rt.scissorTest = scale < 1
+    }
     // 焦点或光圈变了也要重新累积（景深关着时焦点怎么变都不影响画面）
     if (aperture !== this.lastAperture || (aperture > 0 && Math.abs(focus - this.lastFocus) > focus * 0.002)) this.samples = 0
     this.lastFocus = focus
@@ -394,6 +529,7 @@ export class PostPipeline {
       camera.setViewOffset(this.w, this.h, halton(this.jitterIdx + 1, 2) - 0.5, halton(this.jitterIdx + 1, 3) - 0.5, this.w, this.h)
     }
 
+    timer?.begin('场景（含阴影）')
     renderer.setRenderTarget(this.sceneRT)
     renderer.render(scene, camera)
 
@@ -401,8 +537,11 @@ export class PostPipeline {
     cu.uInvProj.value.copy(camera.projectionMatrixInverse)
     cu.uCamWorld.value.copy(camera.matrixWorld)
     cu.uCamPos.value.setFromMatrixPosition(camera.matrixWorld)
-    clouds?.render(renderer, camera, n)
+    timer?.begin('体积云')
+    clouds?.render(renderer, camera, n, this.sub)
     cu.uClouds.value = clouds ? clouds.texture : this.empty
+    cu.uCloudSub.value.copy(clouds ? clouds.sub : ONE)
+    timer?.begin('空气透视合成')
     this.fs.render(renderer, this.comp, this.hdrRT)
     if (n > 0) camera.clearViewOffset()
 
@@ -413,25 +552,28 @@ export class PostPipeline {
       du.uNear.value = camera.near
       du.uFar.value = camera.far
       du.uFocus.value = focus
-      const k = this.h / 1000
+      // 弥散圆以实际渲染的像素计：缩小渲染时半径同比缩小（景深的开销随缩放四次方下降）
+      const k = (this.h / 1000) * scale
       du.uAperture.value = aperture * k
-      du.uMaxCoc.value = Math.max(2, 18 * k)
+      du.uMaxCoc.value = Math.max(1.5, 18 * k)
       du.uRot.value = n * 2.39996323 * 0.37 + (n % 2) * 1.3
+      timer?.begin('景深')
       this.fs.render(renderer, this.dof, this.dofRT)
       cur = this.dofRT
     }
 
+    timer?.begin('累积')
     // 累积：1/n 的等权平均，上限之后变成指数滑动平均（动的东西不会拖影太久）
     const prev = this.acc[this.accIdx]
     const next = this.acc[1 - this.accIdx]
     this.accMat.uniforms.uPrev.value = prev.texture
     this.accMat.uniforms.uCur.value = cur.texture
-    this.accMat.uniforms.uW.value = 1 / Math.min(n + 1, MAX_SAMPLES)
+    this.accMat.uniforms.uW.value = 1 / Math.min(n + 1, this.maxSamples)
     this.fs.render(renderer, this.accMat, next)
     this.accIdx = 1 - this.accIdx
     this.samples = n + 1
 
-    // 泛光
+    timer?.begin('泛光')
     let src: THREE.Texture = next.texture
     for (let i = 0; i < this.bloomRTs.length; i++) {
       const rt = this.bloomRTs[i]
@@ -451,6 +593,7 @@ export class PostPipeline {
       upSrc = rt.texture
     }
 
+    timer?.begin('调色与输出')
     const fu = this.final.uniforms
     fu.uSrc.value = next.texture
     fu.uBloom.value = upSrc

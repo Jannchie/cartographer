@@ -4,7 +4,7 @@ import { Namer, type Tri } from './naming'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
-import { buildRealms } from './realms'
+import { nameRealms, realmMap, type RealmMap } from './realms'
 import { Noise } from './noise'
 import { RNG, hashString } from './rng'
 import { buildTerrain } from './terrain'
@@ -26,12 +26,22 @@ export interface TerrainStage {
   basins: { x: number; y: number; r: number }[]
 }
 
+/** Worker 里的分阶段缓存：改了哪一级的参数，就只从那一级往下重算 */
+export interface WorldCache {
+  /** 侵蚀结束时的地形（只改气候时沿用） */
+  stage?: TerrainStage
+  /** 地名之前的地面（只改命名时沿用） */
+  ground?: GroundStage
+  /** 政区划分与道路（地点位置不变时沿用） */
+  places?: { key: string; map: RealmMap; roads: World['roads'] }
+}
+
 /** 影响地形阶段的参数与地形编辑版本 */
 export function terrainKey(p: WorldParams, edits?: WorldEdits) {
   return JSON.stringify([p.seed, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, edits?.terrain ? edits.terrainRev ?? 1 : 0])
 }
 
-export function generateWorld(p: WorldParams, progress: Progress = () => {}, edits: WorldEdits = {}, cache?: { stage?: TerrainStage }): World {
+export function generateWorld(p: WorldParams, progress: Progress = () => {}, edits: WorldEdits = {}, cache?: WorldCache): World {
   const t0 = performance.now()
   const W = p.width
   const H = p.height
@@ -50,9 +60,124 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     stage = terrainStage(p, progress, edits, W, H, kmPerCell, rTerrain, rErode, key)
     if (cache) cache.stage = stage
   } else progress('沿用已演算的地形', 0.72)
-  // 后续阶段会改动高度（河道下切），缓存要保持原样
-  const elev = Float32Array.from(stage.elev)
+  const gk = groundKey(p, edits)
+  let ground = cache?.ground?.key === gk ? cache.ground : undefined
+  if (!ground) {
+    ground = groundStage(p, progress, edits, stage, W, H, kmPerCell, rClimate, gk)
+    if (cache) cache.ground = ground
+  } else progress('沿用已演算的地形与气候', 0.94)
+  // 结果里的数组会转移给主线程，缓存要保持原样：输出用副本，后续阶段只读缓存
+  const { elev, coastDist, temperature, precipitation, hydro, rivers, water, biome } = ground
   const terr = { basins: stage.basins }
+
+  // —— 地名与标注 ——
+  progress('命名与标注', 0.95)
+  const namer = new Namer(p, rNames)
+  const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, namer, rPlace, terr.basins)
+  // 地点编辑：用户改过的列表整体替换生成结果（政区按新的都城重算）；缺译名的旧数据用英文名兜底
+  const ja = new JaNamer()
+  const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || l.name, ja: l.ja || ja.name(l.kind, l.name) })) : generated
+  // 政区划分与道路只取决于地面和地点的位置、类型，与名字无关：只改命名时沿用
+  const pk = gk + '|' + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
+  let places = cache?.places?.key === pk ? cache.places : undefined
+  if (!places) {
+    progress('划分政区', 0.96)
+    const map = realmMap(elev, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W), rPlace.fork())
+    progress('道路与航线', 0.97)
+    const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W))
+    places = { key: pk, map, roads }
+    if (cache) cache.places = places
+  }
+  const realm = places.map.realm.slice()
+  const realms = nameRealms(places.map, namer)
+  const roads = places.roads
+  const genName = namer.name('world')
+  const worldName = edits.worldName ?? genName.en
+
+  let land = 0
+  let peak = -Infinity
+  let trench = Infinity
+  for (let i = 0; i < N; i++) {
+    if (elev[i] > 0) land++
+    if (elev[i] > peak) peak = elev[i]
+    if (elev[i] < trench) trench = elev[i]
+  }
+  progress('完成', 1)
+  return {
+    params: p,
+    W,
+    H,
+    elevation: elev.slice(),
+    water: water.slice(),
+    temperature: temperature.slice(),
+    precipitation: precipitation.slice(),
+    flow: hydro.flow.slice(),
+    biome: biome.slice(),
+    coastDist: coastDist.slice(),
+    rivers,
+    labels,
+    realm,
+    realms,
+    roads,
+    worldName,
+    worldNameZh: edits.worldNameZh ?? (edits.worldName ? edits.worldName : genName.zh),
+    worldNameJa: edits.worldNameJa ?? (edits.worldName ? ja.name('world', edits.worldName) : genName.ja),
+    kmPerCell,
+    stats: {
+      land: land / N,
+      peak,
+      trench,
+      lakes: hydro.lakes.filter((l) => l.cells.length > 0).length,
+      rivers: rivers.length,
+      ms: performance.now() - t0,
+    },
+  }
+}
+
+/** 影响地面（高度、气候、水文、群系）的全部输入：除命名以外的参数 + 地形与气候编辑 */
+export function groundKey(p: WorldParams, edits: WorldEdits = {}) {
+  const { naming: _naming, ...rest } = p
+  return JSON.stringify([terrainKey(p, edits), rest, arrayHash(edits.temp), arrayHash(edits.rain)])
+}
+
+function arrayHash(a?: ArrayLike<number>) {
+  if (!a) return 0
+  // 已经是 Float32Array 就直接按位读，不复制整张图
+  const f = a instanceof Float32Array ? a : Float32Array.from(a)
+  const u = new Uint32Array(f.buffer, f.byteOffset, f.length)
+  let h = 2166136261
+  for (let i = 0; i < u.length; i++) h = Math.imul(h ^ u[i], 16777619)
+  return h >>> 0
+}
+
+/** 地名之前的全部结果：只改命名时直接沿用（地点位置用独立的随机数流，与命名无关） */
+export interface GroundStage {
+  key: string
+  elev: Float32Array
+  coastDist: Float32Array
+  temperature: Float32Array
+  precipitation: Float32Array
+  hydro: HydroResult
+  rivers: River[]
+  water: Float32Array
+  biome: Uint8Array
+}
+
+/** 海岸距离、气候、水文、河道下切、水面与生物群系 */
+function groundStage(
+  p: WorldParams,
+  progress: Progress,
+  edits: WorldEdits,
+  stage: TerrainStage,
+  W: number,
+  H: number,
+  kmPerCell: number,
+  rClimate: RNG,
+  key: string,
+): GroundStage {
+  // 河道下切会改动高度，地形缓存要保持原样
+  const elev = Float32Array.from(stage.elev)
+  const N = W * H
 
   // —— 海岸距离（有符号） ——
   progress('海岸线与大陆架', 0.72)
@@ -143,57 +268,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     biome[i] = b
   }
 
-  // —— 地名与标注 ——
-  progress('命名与标注', 0.95)
-  const namer = new Namer(p, rNames)
-  const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, namer, rPlace, terr.basins)
-  // 地点编辑：用户改过的列表整体替换生成结果（政区按新的都城重算）；缺译名的旧数据用英文名兜底
-  const ja = new JaNamer()
-  const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || l.name, ja: l.ja || ja.name(l.kind, l.name) })) : generated
-  const { realm, realms } = buildRealms(elev, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W), namer, rPlace.fork())
-  progress('道路与航线', 0.97)
-  const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W))
-  const genName = namer.name('world')
-  const worldName = edits.worldName ?? genName.en
-
-  let land = 0
-  let peak = -Infinity
-  let trench = Infinity
-  for (let i = 0; i < N; i++) {
-    if (elev[i] > 0) land++
-    if (elev[i] > peak) peak = elev[i]
-    if (elev[i] < trench) trench = elev[i]
-  }
-  progress('完成', 1)
-  return {
-    params: p,
-    W,
-    H,
-    elevation: elev,
-    water,
-    temperature,
-    precipitation,
-    flow: hydro.flow,
-    biome,
-    coastDist,
-    rivers,
-    labels,
-    realm,
-    realms,
-    roads,
-    worldName,
-    worldNameZh: edits.worldNameZh ?? (edits.worldName ? edits.worldName : genName.zh),
-    worldNameJa: edits.worldNameJa ?? (edits.worldName ? ja.name('world', edits.worldName) : genName.ja),
-    kmPerCell,
-    stats: {
-      land: land / N,
-      peak,
-      trench,
-      lakes: hydro.lakes.filter((l) => l.cells.length > 0).length,
-      rivers: rivers.length,
-      ms: performance.now() - t0,
-    },
-  }
+  return { key, elev, coastDist, temperature, precipitation, hydro, rivers, water, biome }
 }
 
 /** 造山 + 地形编辑 + 各级侵蚀，得到侵蚀结束时的地形 */

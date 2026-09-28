@@ -130,6 +130,7 @@ if (uPatch.w > 0.5 && all(lessThan(abs(vWorld.xz - uPatch.xy), vec2(uPatch.z * 0
       .replace(
         '#include <common>',
         `#include <common>
+${BAKED_GLSL}
 varying vec3 vWorld;
 uniform sampler2D uMask;
 uniform sampler2D uMask2;
@@ -250,8 +251,9 @@ float fw = length(fwidth(P));
 gLod1 = 1.0 - smoothstep(0.02, 0.07, fw);
 gLod2 = 1.0 - smoothstep(0.006, 0.025, fw);
 // 类别边界（森林 / 沙地 / 旱地 / 湿地 / 盐壳）按噪声阈值成形，放大后是自然的不规则轮廓
-{
-  float edgeLod = 1.0 - smoothstep(0.006, 0.04, fw);
+// 远处（edgeLod 为 0）organic 原样返回覆盖度，跳过这四组噪声
+float edgeLod = 1.0 - smoothstep(0.006, 0.04, fw);
+if (edgeLod > 0.0) {
   float nEdge = fbm3(P * 14.0 + wv * 3.0);
   gMask.r = organic(gMask.r, nEdge, edgeLod);
   gMask.b = organic(gMask.b, fbm3(P * 11.0 + 9.1), edgeLod);
@@ -259,7 +261,9 @@ gLod2 = 1.0 - smoothstep(0.006, 0.025, fw);
   gMask2.a = organic(gMask2.a, fbm3(P * 13.0 + 2.2), edgeLod);
 }
 float hKm = vWorld.y / uVScale;
-vec3 wN0 = normalize(inverseTransformDirection(normalize(vNormal), viewMatrix));
+// 法线逐像素取自烘焙纹理：光照细节与网格疏密无关，网格可以稀疏很多
+vec4 gB = bakedAt(vWorld.xz);
+vec3 wN0 = normalize(vec3(-gB.y * uVScale, 1.0, -gB.z * uVScale));
 float slope = 1.0 - wN0.y;
 // 顺坡的细冲沟（侵蚀噪声）：颜色与法线共用一次计算
 gErK = smoothstep(0.08, 0.4, slope) * smoothstep(0.15, 0.8, hKm) * gLod1;
@@ -277,26 +281,31 @@ if (hKm > 0.0) {
   float lum = dot(col, vec3(0.3, 0.59, 0.11));
   col = mix(vec3(lum), col, 0.86);
   // 草地与灌丛的细斑驳（幅度小、频率高，远处淡出）
-  float patchy = fbm3(P * 11.0);
+  // （以下各项细节在对应 LOD 为 0 时不参与，直接跳过噪声计算）
+  float patchy = gLod1 > 0.0 ? fbm3(P * 11.0) : 0.5;
   col *= 0.95 + 0.1 * mix(0.5, patchy, gLod1);
   // 近景细节：草丛/灌丛的颗粒与细碎明暗，按屏幕导数逐级淡出，远处不闪烁
-  float g1 = fbm3(P * 42.0 + 3.1);
-  float g2 = vnoise(P * 150.0) * 0.6 + vnoise(P * 380.0) * 0.4;
+  float g1 = gLod2 > 0.0 ? fbm3(P * 42.0 + 3.1) : 0.5;
   float gLod3 = 1.0 - smoothstep(0.002, 0.008, fw);
+  float g2 = gLod3 > 0.0 ? vnoise(P * 150.0) * 0.6 + vnoise(P * 380.0) * 0.4 : 0.5;
   col *= (0.93 + 0.14 * mix(0.5, g1, gLod2)) * (0.95 + 0.1 * mix(0.5, g2, gLod3));
   vec4 m2 = gMask2;
   // 草地斑驳只画在缓坡上：坡面上的软边色斑像水渍
   float nonF = (1.0 - gMask.r) * (1.0 - gMask.b * 0.6) * (1.0 - smoothstep(0.12, 0.3, slope));
   // 草地上大小不一的枯黄斑与深绿斑（扭曲噪声，形状自然）
-  float dry = smoothstep(0.52, 0.78, fbm3(P * 2.3 + wv * 3.0 + 13.0));
-  float lush = smoothstep(0.55, 0.8, fbm3(P * 3.7 - wv * 2.0 + 71.0));
-  col = mix(col, col * vec3(1.3, 1.12, 0.62), dry * nonF * (1.0 - m2.r) * 0.75);
-  col = mix(col, col * vec3(0.72, 0.9, 0.72), lush * nonF * 0.55);
-  // 中尺度的草甸斑驳：土壤水分的细碎差异
-  float mott = fbm3(P * 9.0 + wv * 2.5 + 29.0);
-  col *= mix(vec3(1.0), mix(0.86, 1.12, mott) * mix(vec3(1.0), vec3(1.06, 1.02, 0.9), mott), nonF * gLod1);
+  if (nonF > 0.0) {
+    float dry = smoothstep(0.52, 0.78, fbm3(P * 2.3 + wv * 3.0 + 13.0));
+    float lush = smoothstep(0.55, 0.8, fbm3(P * 3.7 - wv * 2.0 + 71.0));
+    col = mix(col, col * vec3(1.3, 1.12, 0.62), dry * nonF * (1.0 - m2.r) * 0.75);
+    col = mix(col, col * vec3(0.72, 0.9, 0.72), lush * nonF * 0.55);
+    // 中尺度的草甸斑驳：土壤水分的细碎差异
+    if (gLod1 > 0.0) {
+      float mott = fbm3(P * 9.0 + wv * 2.5 + 29.0);
+      col *= mix(vec3(1.0), mix(0.86, 1.12, mott) * mix(vec3(1.0), vec3(1.06, 1.02, 0.9), mott), nonF * gLod1);
+    }
+  }
   // 灌丛：成片分布的小灌木团，受光面亮、背光面暗
-  float shrubZone = smoothstep(0.45, 0.75, fbm3(P * 5.0 + 3.3)) * nonF;
+  float shrubZone = nonF * gLod2 > 0.01 ? smoothstep(0.45, 0.75, fbm3(P * 5.0 + 3.3)) * nonF : 0.0;
   if (shrubZone * gLod2 > 0.01) {
     vec3 sc = crownCell(P * 110.0);
     float inS = 1.0 - smoothstep(0.24, 0.3, sc.z);
@@ -306,12 +315,14 @@ if (hKm > 0.0) {
   // 河岸：沿河谷的茂密湿润植被
   col = mix(col, col * vec3(0.72, 0.9, 0.7), m2.r * (1.0 - gMask.b * 0.5) * 0.65);
   // 湿地：星罗棋布的小水塘
-  float pn = vnoise(P * 55.0 + 5.0) * 0.7 + vnoise(P * 140.0) * 0.3;
-  float pond = smoothstep(0.76, 0.79, pn) * smoothstep(0.5, 0.9, m2.b) * gLod1;
-  // 水塘：映出天光的灰蓝水面，外圈一道深绿的水生植被
-  float reed = smoothstep(0.7, 0.76, pn) * smoothstep(0.5, 0.9, m2.b) * gLod1;
-  col = mix(col, col * vec3(0.7, 0.85, 0.7), reed * 0.6);
-  col = mix(col, vec3(0.1, 0.15, 0.18), pond * 0.85);
+  if (m2.b > 0.5 && gLod1 > 0.0) {
+    float pn = vnoise(P * 55.0 + 5.0) * 0.7 + vnoise(P * 140.0) * 0.3;
+    float pond = smoothstep(0.76, 0.79, pn) * smoothstep(0.5, 0.9, m2.b) * gLod1;
+    // 水塘：映出天光的灰蓝水面，外圈一道深绿的水生植被
+    float reed = smoothstep(0.7, 0.76, pn) * smoothstep(0.5, 0.9, m2.b) * gLod1;
+    col = mix(col, col * vec3(0.7, 0.85, 0.7), reed * 0.6);
+    col = mix(col, vec3(0.1, 0.15, 0.18), pond * 0.85);
+  }
   // 平原汇水细沟：沟里湿润、植被更深更绿（沙地与雪地不画）
   float rill = 1.0 - smoothstep(0.1, 0.55, gEr.x);
   col = mix(col, col * vec3(0.7, 0.86, 0.68), rill * gPlainK * (1.0 - gMask.g) * 0.85);
@@ -321,8 +332,8 @@ if (hKm > 0.0) {
   if (f > 0.01) {
     vec3 Ls = normalize(uSun);
     // 单株树冠 + 近景细冠；远处淡出为均匀的林冠色，不再出现大块斑
-    float s1 = crownShade2(crownCell2(P * 16.0), Ls);
-    float s2 = crownShade2(crownCell2(P * 44.0 + 3.1), Ls);
+    float s1 = gLod1 > 0.0 ? crownShade2(crownCell2(P * 16.0), Ls) : 0.8;
+    float s2 = gLod2 > 0.0 ? crownShade2(crownCell2(P * 44.0 + 3.1), Ls) : 0.9;
     float crown = mix(0.8, s1, gLod1 * 0.8) * mix(0.9, s2, gLod2 * 0.7);
     vec3 leaf = base * mix(vec3(0.74, 0.8, 0.72), vec3(1.14, 1.16, 1.02), clamp(crown * 0.95, 0.0, 1.0));
     leaf *= mix(vec3(0.95, 1.0, 0.92), vec3(1.05, 1.02, 0.85), fbm3(P * 3.1 + 7.0));
@@ -358,26 +369,31 @@ if (hKm > 0.0) {
   }
   // 沙滩与湿沙
   float s = gMask.g;
-  vec3 sand = vec3(0.84, 0.75, 0.58) * (0.93 + 0.12 * fbm3(P * 20.0));
-  vec3 wet = vec3(0.6, 0.55, 0.45);
-  sand = mix(wet, sand, smoothstep(0.0015, 0.012, hKm));
-  col = mix(col, sand, smoothstep(0.45, 0.9, s) * (1.0 - smoothstep(0.3, 0.5, slope)));
+  if (s > 0.45) {
+    vec3 sand = vec3(0.84, 0.75, 0.58) * (0.93 + 0.12 * fbm3(P * 20.0));
+    vec3 wet = vec3(0.6, 0.55, 0.45);
+    sand = mix(wet, sand, smoothstep(0.0015, 0.012, hKm));
+    col = mix(col, sand, smoothstep(0.45, 0.9, s) * (1.0 - smoothstep(0.3, 0.5, slope)));
+  }
   // 岩石：陡坡露出基岩，带层理
-  // 三平面投影：陡崖上的纹理不被拉伸
-  vec3 bw = pow(abs(wN0), vec3(4.0));
-  bw /= (bw.x + bw.y + bw.z);
-  float rn = fbm3(vWorld.zy * 9.0) * bw.x + fbm3(vWorld.xz * 9.0) * bw.y + fbm3(vWorld.xy * 9.0) * bw.z;
-  float cr = (1.0 - smoothstep(0.0, 0.08, abs(vnoise(vWorld.xz * 14.0 + vWorld.y * 6.0) - 0.5))) * gLod1;
-  float strata = sin(vWorld.y * 70.0 + rn * 6.0) * 0.5 + 0.5;
-  vec3 rock = mix(vec3(0.44, 0.41, 0.37), vec3(0.68, 0.64, 0.58), rn) * (0.82 + 0.25 * strata * gLod1) * (1.0 - cr * 0.35);
-  // 岩性：不同山体偏暖（砂岩、红层）或偏冷（花岗岩、板岩）
-  rock *= mix(vec3(1.08, 0.94, 0.82), vec3(0.9, 0.95, 1.03), fbm3(P * 0.7 + 40.0));
   // 陡坡上岩石与植被斑驳相间，只有近乎垂直的崖壁才整片裸露
   // 露岩跟着侵蚀结构走：刃脊与陡崖露岩，冲沟里留着土和植被
-  float rk = smoothstep(0.42, 0.72, slope + (vErosion - 0.5) * 0.45 + (fbm3(P * 8.0) - 0.5) * 0.1) * (1.0 - gMask.r * 0.4);
+  // （坡度低于 0.14 时下式恒为 0：侵蚀项最多 +0.225、噪声项最多 +0.05，平地跳过整段岩石计算）
+  float rk = slope > 0.14 ? smoothstep(0.42, 0.72, slope + (vErosion - 0.5) * 0.45 + (fbm3(P * 8.0) - 0.5) * 0.1) * (1.0 - gMask.r * 0.4) : 0.0;
   // 雪上不画岩
   float snowy = smoothstep(0.75, 0.9, min(base.r, min(base.g, base.b)));
-  col = mix(col, rock, rk * (1.0 - snowy) * 0.9);
+  if (rk * (1.0 - snowy) > 0.0) {
+    // 三平面投影：陡崖上的纹理不被拉伸
+    vec3 bw = pow(abs(wN0), vec3(4.0));
+    bw /= (bw.x + bw.y + bw.z);
+    float rn = fbm3(vWorld.zy * 9.0) * bw.x + fbm3(vWorld.xz * 9.0) * bw.y + fbm3(vWorld.xy * 9.0) * bw.z;
+    float cr = gLod1 > 0.0 ? (1.0 - smoothstep(0.0, 0.08, abs(vnoise(vWorld.xz * 14.0 + vWorld.y * 6.0) - 0.5))) * gLod1 : 0.0;
+    float strata = sin(vWorld.y * 70.0 + rn * 6.0) * 0.5 + 0.5;
+    vec3 rock = mix(vec3(0.44, 0.41, 0.37), vec3(0.68, 0.64, 0.58), rn) * (0.82 + 0.25 * strata * gLod1) * (1.0 - cr * 0.35);
+    // 岩性：不同山体偏暖（砂岩、红层）或偏冷（花岗岩、板岩）
+    rock *= mix(vec3(1.08, 0.94, 0.82), vec3(0.9, 0.95, 1.03), fbm3(P * 0.7 + 40.0));
+    col = mix(col, rock, rk * (1.0 - snowy) * 0.9);
+  }
   // 风化：冲沟暗、刃脊亮，山地越陡越明显
   float mnt = smoothstep(0.12, 0.45, slope) * smoothstep(0.2, 1.2, hKm);
   col *= mix(1.0, mix(0.78, 1.12, smoothstep(0.15, 0.85, vErosion)), mnt);
@@ -396,6 +412,15 @@ if (uRoadOn > 0.5 && hKm > 0.0) {
 col *= mix(1.0, gAO, 0.5);
 diffuseColor.rgb *= col;
 `,
+      )
+      .replace(
+        '#include <normal_fragment_begin>',
+        `#include <normal_fragment_begin>
+{
+  vec4 nB = bakedAt(vWorld.xz);
+  normal = normalize((viewMatrix * vec4(normalize(vec3(-nB.y * uVScale, 1.0, -nB.z * uVScale)), 0.0)).xyz);
+  nonPerturbedNormal = normal;
+}`,
       )
       .replace(
         '#include <normal_fragment_maps>',

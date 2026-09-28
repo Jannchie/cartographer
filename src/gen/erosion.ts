@@ -77,11 +77,12 @@ export function streamPowerErosion(
     }
     // 5. 隐式更新：下游先解，上游用已更新的受水点高度
     const { kf, m, upliftRate } = opts
+    const sqrtM = m === 0.5
     for (let q = 0; q < N; q++) {
       const i = stack[q]
       const r = rec[i]
       if (r === i) continue
-      const f = (kf * Math.pow(area[i], m)) / recD[i]
+      const f = (kf * (sqrtM ? Math.sqrt(area[i]) : Math.pow(area[i], m))) / recD[i]
       const hi = elev[i] + upliftRate * uplift[i]
       const hr = elev[r]
       elev[i] = (hi + f * hr) / (1 + f)
@@ -139,20 +140,21 @@ export function dropletErosion(
   const radius = 2
 
   // 侵蚀刷子
-  const bOff: number[] = []
-  const bW: number[] = []
+  const bOffA: number[] = []
+  const bWA: number[] = []
   let wsum = 0
   for (let y = -radius; y <= radius; y++) {
     for (let x = -radius; x <= radius; x++) {
       const d = Math.hypot(x, y)
       if (d > radius) continue
       const w = radius - d + 0.2
-      bOff.push(y * W + x)
-      bW.push(w)
+      bOffA.push(y * W + x)
+      bWA.push(w)
       wsum += w
     }
   }
-  for (let k = 0; k < bW.length; k++) bW[k] /= wsum
+  const bOff = Int32Array.from(bOffA)
+  const bW = Float64Array.from(bWA, (w) => w / wsum)
   const nb = bW.length
 
   const h = elev
@@ -198,7 +200,7 @@ export function dropletErosion(
 
       dirX = dirX * inertia - gx * (1 - inertia)
       dirY = dirY * inertia - gy * (1 - inertia)
-      const len = Math.hypot(dirX, dirY)
+      const len = Math.sqrt(dirX * dirX + dirY * dirY)
       if (len < 1e-9) {
         const a = rng.next() * Math.PI * 2
         dirX = Math.cos(a)

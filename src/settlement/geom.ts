@@ -9,6 +9,12 @@ export type Poly = P[]
 
 export const dist = (a: P, b: P) => Math.hypot(a[0] - b[0], a[1] - b[1])
 export const lerpP = (a: P, b: P, t: number): P => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+export const rot = (v: P, a: number): P => [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a)]
+export const add = (a: P, b: P, k = 1): P => [a[0] + b[0] * k, a[1] + b[1] * k]
+export const unit = (v: P): P => {
+  const L = Math.hypot(v[0], v[1]) || 1
+  return [v[0] / L, v[1] / L]
+}
 
 /** 有向面积（y 向下的屏幕坐标里，正值为顺时针） */
 export function signedArea(poly: Poly) {
@@ -61,6 +67,21 @@ export function orient(poly: Poly): Poly {
 /**
  * 半平面裁剪（Sutherland–Hodgman 单边）：保留 (p - o)·n ≤ 0 的部分。
  */
+/** 多边形与凸多边形 clip 的交（逐边半平面裁剪） */
+export function clipConvex(poly: Poly, clip: Poly): Poly {
+  const c = centroid(clip)
+  let out = poly
+  for (let i = 0; i < clip.length && out.length >= 3; i++) {
+    const a = clip[i]
+    const b = clip[(i + 1) % clip.length]
+    let n: P = [b[1] - a[1], a[0] - b[0]]
+    // 法向朝外（clipHalf 保留法向反侧）
+    if ((c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1] > 0) n = [-n[0], -n[1]]
+    out = clipHalf(out, a, n)
+  }
+  return out
+}
+
 export function clipHalf(poly: Poly, o: P, n: P): Poly {
   const out: Poly = []
   const len = poly.length
@@ -132,6 +153,27 @@ export function insetConvex(poly: Poly, d: number | number[]): Poly {
   return out
 }
 
+/** 凸多边形向外扩 d 米（各边外移 d，相邻两边的交点是新顶点）；insetConvex 只能往里收 */
+export function growConvex(poly: Poly, d: number): Poly {
+  const p = orient(poly)
+  const n = p.length
+  // 有向面积为正（屏幕坐标顺时针）时，外法向为 (ey, -ex)
+  const lines = p.map((a, i) => {
+    const b = p[(i + 1) % n]
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    const o: P = [(b[1] - a[1]) / L, -(b[0] - a[0]) / L]
+    return { a: [a[0] + o[0] * d, a[1] + o[1] * d] as P, u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] as P }
+  })
+  return p.map((_, i) => {
+    const l0 = lines[(i - 1 + n) % n]
+    const l1 = lines[i]
+    const den = l0.u[0] * l1.u[1] - l0.u[1] * l1.u[0]
+    if (Math.abs(den) < 1e-9) return l1.a
+    const t = ((l1.a[0] - l0.a[0]) * l1.u[1] - (l1.a[1] - l0.a[1]) * l1.u[0]) / den
+    return [l0.a[0] + l0.u[0] * t, l0.a[1] + l0.u[1] * t] as P
+  })
+}
+
 export function pointInPoly(p: P, poly: Poly) {
   let inside = false
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -149,13 +191,32 @@ export function segDist(p: P, a: P, b: P): { d: number; t: number } {
   const L = dx * dx + dy * dy
   let t = L ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L : 0
   t = Math.max(0, Math.min(1, t))
-  return { d: Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t), t }
+  const ex = p[0] - a[0] - dx * t
+  const ey = p[1] - a[1] - dy * t
+  return { d: Math.sqrt(ex * ex + ey * ey), t }
+}
+
+/** 点到线段距离的平方（热路径用：不分配对象、不开方） */
+function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+  const dx = bx - ax
+  const dy = by - ay
+  const L = dx * dx + dy * dy
+  let t = L ? ((px - ax) * dx + (py - ay) * dy) / L : 0
+  t = t < 0 ? 0 : t > 1 ? 1 : t
+  const ex = px - ax - dx * t
+  const ey = py - ay - dy * t
+  return ex * ex + ey * ey
 }
 
 export function polylineDist(p: P, line: P[]) {
   let best = Infinity
-  for (let i = 0; i + 1 < line.length; i++) best = Math.min(best, segDist(p, line[i], line[i + 1]).d)
-  return best
+  const px = p[0], py = p[1]
+  for (let i = 0; i + 1 < line.length; i++) {
+    const a = line[i], b = line[i + 1]
+    const d = segDist2(px, py, a[0], a[1], b[0], b[1])
+    if (d < best) best = d
+  }
+  return Math.sqrt(best)
 }
 
 export function polylineLength(line: P[]) {
@@ -202,7 +263,24 @@ export function resample(line: P[], step: number): P[] {
   const L = polylineLength(line)
   const n = Math.max(1, Math.round(L / step))
   const out: P[] = []
-  for (let i = 0; i <= n; i++) out.push(pointAt(line, (L * i) / n).p)
+  if (line.length < 2) {
+    for (let i = 0; i <= n; i++) out.push(line[0])
+    return out
+  }
+  // 一遍走完（逐点调 pointAt 每次都从头量起，长折线上是平方级）
+  let k = 0
+  let acc = 0
+  let seg = dist(line[0], line[1])
+  for (let i = 0; i <= n; i++) {
+    const s = (L * i) / n
+    while (s - acc > seg && k + 2 < line.length) {
+      acc += seg
+      k++
+      seg = dist(line[k], line[k + 1])
+    }
+    const t = seg ? Math.max(0, Math.min(1, (s - acc) / seg)) : 0
+    out.push(lerpP(line[k], line[k + 1], t))
+  }
   return out
 }
 
@@ -257,6 +335,43 @@ export function obb(poly: Poly): { axis: P; len: number; wid: number; center: P 
   return best
 }
 
+/** 局部标架：原点 o，纵向 f，横向 l；局部坐标 (a, b) 对应地图点 o + f·a + l·b */
+export interface Frame {
+  o: P
+  f: P
+  l: P
+}
+export const at = (F: Frame, a: number, b: number): P => [F.o[0] + F.f[0] * a + F.l[0] * b, F.o[1] + F.f[1] * a + F.l[1] * b]
+/** 局部坐标里 a0 ~ a1、b0 ~ b1 的矩形 */
+export const box = (F: Frame, a0: number, a1: number, b0: number, b1: number): Poly => [at(F, a0, b0), at(F, a1, b0), at(F, a1, b1), at(F, a0, b1)]
+/** 多边形在标架里的范围 */
+export function extent(F: Frame, poly: Poly) {
+  let a0 = Infinity
+  let a1 = -Infinity
+  let b0 = Infinity
+  let b1 = -Infinity
+  for (const v of poly) {
+    const a = (v[0] - F.o[0]) * F.f[0] + (v[1] - F.o[1]) * F.f[1]
+    const b = (v[0] - F.o[0]) * F.l[0] + (v[1] - F.o[1]) * F.l[1]
+    a0 = Math.min(a0, a)
+    a1 = Math.max(a1, a)
+    b0 = Math.min(b0, b)
+    b1 = Math.max(b1, b)
+  }
+  return { a0, a1, b0, b1 }
+}
+/** 过地图原点、沿 e 与 n 的局部坐标 (u, v)：取点与取盒子的函数 */
+export function axes(e: P, n: P = [-e[1], e[0]]) {
+  const F: Frame = { o: [0, 0], f: e, l: n }
+  return { e, n, at: (u: number, v: number) => at(F, u, v), box: (ua: number, ub: number, va: number, vb: number) => box(F, ua, ub, va, vb) }
+}
+/** 多边形在 axes(e, n) 里的包围盒 u0 ~ u1、v0 ~ v1，连同取点与取盒子的函数 */
+export function localBox(poly: Poly, e: P, n: P = [-e[1], e[0]]) {
+  const A = axes(e, n)
+  const r = extent({ o: [0, 0], f: e, l: n }, poly)
+  return { ...A, u0: r.a0, u1: r.a1, v0: r.b0, v1: r.b1 }
+}
+
 /** 以中心、朝向与长宽构造矩形 */
 export function rect(c: P, axis: P, len: number, wid: number): Poly {
   const ux = axis[0] * (len / 2)
@@ -281,10 +396,11 @@ export function circlePoly(c: P, r: number, n = 16, phase = 0): Poly {
 }
 
 /**
- * 有界 Voronoi：每个站点的单元 = 包围盒被所有邻近站点的平分线裁剪。
- * 站点数在几百以内，按距离排序后提前终止，足够快。
+ * Voronoi 单元（逐个用平分线裁包围盒）与相邻关系。
+ * 候选邻居从空间网格里由近到远一圈圈取：单元的最远顶点比下一圈还近时，更远的站点不可能再裁到它。
+ * 相邻：裁完后单元上有边落在与某站点的平分线上。
  */
-export function voronoi(sites: P[], bounds: [number, number, number, number]): Poly[] {
+export function voronoiNb(sites: P[], bounds: [number, number, number, number]): { cells: Poly[]; nb: number[][] } {
   const [x0, y0, x1, y1] = bounds
   const box: Poly = [
     [x0, y0],
@@ -292,27 +408,66 @@ export function voronoi(sites: P[], bounds: [number, number, number, number]): P
     [x1, y1],
     [x0, y1],
   ]
+  const n = sites.length
+  // 网格：平均每格一两个站点
+  const G = Math.max(1, Math.sqrt(((x1 - x0) * (y1 - y0)) / Math.max(1, n)) * 1.2)
+  const GW = Math.max(1, Math.ceil((x1 - x0) / G))
+  const GH = Math.max(1, Math.ceil((y1 - y0) / G))
+  const grid: number[][] = Array.from({ length: GW * GH }, () => [])
+  const cellOf = (q: P) => [Math.min(GW - 1, Math.max(0, Math.floor((q[0] - x0) / G))), Math.min(GH - 1, Math.max(0, Math.floor((q[1] - y0) / G)))]
+  sites.forEach((q, i) => {
+    const [gx, gy] = cellOf(q)
+    grid[gy * GW + gx].push(i)
+  })
   const cells: Poly[] = []
-  const order = sites.map((_, i) => i)
-  for (let i = 0; i < sites.length; i++) {
+  const nb: number[][] = []
+  const maxRing = Math.max(GW, GH)
+  for (let i = 0; i < n; i++) {
     const s = sites[i]
-    order.sort((a, b) => (sites[a][0] - s[0]) ** 2 + (sites[a][1] - s[1]) ** 2 - ((sites[b][0] - s[0]) ** 2 + (sites[b][1] - s[1]) ** 2))
+    const [gx, gy] = cellOf(s)
     let cell = box
-    for (const j of order) {
-      if (j === i) continue
-      const t = sites[j]
-      const d = dist(s, t)
-      // 单元的最远顶点都比平分线近，后面的站点不可能再裁到它
-      let far = 0
-      for (const p of cell) far = Math.max(far, dist(p, s))
-      if (d / 2 > far) break
-      const m: P = [(s[0] + t[0]) / 2, (s[1] + t[1]) / 2]
-      cell = clipHalf(cell, m, [t[0] - s[0], t[1] - s[1]])
+    const used: number[] = []
+    for (let ring = 0; ring <= maxRing; ring++) {
+      // 这一圈里的站点至少离 s (ring - 1) × G 远：单元最远顶点不到它的一半，就不必再看了
+      if (ring > 1) {
+        let far = 0
+        for (const p of cell) far = Math.max(far, (p[0] - s[0]) ** 2 + (p[1] - s[1]) ** 2)
+        if (((ring - 1) * G) / 2 > Math.sqrt(far)) break
+      }
+      const cand: number[] = []
+      for (let yy = gy - ring; yy <= gy + ring; yy++) {
+        if (yy < 0 || yy >= GH) continue
+        for (let xx = gx - ring; xx <= gx + ring; xx++) {
+          if (xx < 0 || xx >= GW) continue
+          if (Math.max(Math.abs(xx - gx), Math.abs(yy - gy)) !== ring) continue
+          for (const j of grid[yy * GW + xx]) if (j !== i) cand.push(j)
+        }
+      }
+      cand.sort((a, b) => (sites[a][0] - s[0]) ** 2 + (sites[a][1] - s[1]) ** 2 - ((sites[b][0] - s[0]) ** 2 + (sites[b][1] - s[1]) ** 2))
+      for (const j of cand) {
+        const t = sites[j]
+        const m: P = [(s[0] + t[0]) / 2, (s[1] + t[1]) / 2]
+        const next = clipHalf(cell, m, [t[0] - s[0], t[1] - s[1]])
+        if (next.length !== cell.length || next.some((p, k) => p !== cell[k])) used.push(j)
+        cell = next
+        if (cell.length < 3) break
+      }
       if (cell.length < 3) break
     }
     cells.push(cell)
+    // 相邻：单元上有两个顶点与 s、t 等距（落在平分线上）
+    const list: number[] = []
+    for (const j of used) {
+      const t = sites[j]
+      let on = 0
+      for (const p of cell) if (Math.abs(dist(p, s) - dist(p, t)) < 0.05) on++
+      if (on >= 2) list.push(j)
+    }
+    nb.push(list)
   }
-  return cells
+  // 对称化（数值误差可能让一侧漏判）
+  for (let i = 0; i < n; i++) for (const j of nb[i]) if (!nb[j].includes(i)) nb[j].push(i)
+  return { cells, nb }
 }
 
 /** 线段求交：返回参数 t（在 a 上）与 u（在 b 上），平行返回 null */
@@ -383,22 +538,47 @@ export function convexOverlap(a: Poly, b: Poly, tol = 0.05): boolean {
 }
 
 /** 两线段间的最短距离 */
+/** 两线段距离的平方，相交为 0 */
+function segSegDist2(a0x: number, a0y: number, a1x: number, a1y: number, b0x: number, b0y: number, b1x: number, b1y: number) {
+  const rx = a1x - a0x
+  const ry = a1y - a0y
+  const sx = b1x - b0x
+  const sy = b1y - b0y
+  const den = rx * sy - ry * sx
+  if (Math.abs(den) >= 1e-12) {
+    const qx = b0x - a0x
+    const qy = b0y - a0y
+    const t = (qx * sy - qy * sx) / den
+    const u = (qx * ry - qy * rx) / den
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return 0
+  }
+  return Math.min(
+    segDist2(a0x, a0y, b0x, b0y, b1x, b1y),
+    segDist2(a1x, a1y, b0x, b0y, b1x, b1y),
+    segDist2(b0x, b0y, a0x, a0y, a1x, a1y),
+    segDist2(b1x, b1y, a0x, a0y, a1x, a1y),
+  )
+}
+
 export function segSegDist(a0: P, a1: P, b0: P, b1: P): number {
-  const r = segIntersect(a0, a1, b0, b1)
-  if (r && r.t >= 0 && r.t <= 1 && r.u >= 0 && r.u <= 1) return 0
-  return Math.min(segDist(a0, b0, b1).d, segDist(a1, b0, b1).d, segDist(b0, a0, a1).d, segDist(b1, a0, a1).d)
+  return Math.sqrt(segSegDist2(a0[0], a0[1], a1[0], a1[1], b0[0], b0[1], b1[0], b1[1]))
 }
 
 /** 线段到多边形（含内部）的距离 */
 export function segPolyDist(a: P, b: P, poly: Poly): number {
   if (pointInPoly(a, poly) || pointInPoly(b, poly)) return 0
   let best = Infinity
-  for (let i = 0; i < poly.length; i++) best = Math.min(best, segSegDist(a, b, poly[i], poly[(i + 1) % poly.length]))
-  return best
+  const n = poly.length
+  for (let i = 0; i < n; i++) {
+    const c = poly[i], d = poly[i + 1 === n ? 0 : i + 1]
+    const v = segSegDist2(a[0], a[1], b[0], b[1], c[0], c[1], d[0], d[1])
+    if (v < best) best = v
+  }
+  return Math.sqrt(best)
 }
 
 /** 凸多边形与直线 p·v = t 的交弦，在 u 方向上的区间 */
-function chord(poly: Poly, u: P, v: P, t: number): [number, number] | null {
+export function chord(poly: Poly, u: P, v: P, t: number): [number, number] | null {
   let lo = Infinity
   let hi = -Infinity
   for (let i = 0; i < poly.length; i++) {
@@ -471,4 +651,63 @@ export function inscribedRect(
     }
   }
   return best
+}
+
+/**
+ * 折线的线段网格：判断点、多边形离折线是否不到 d 米，只查附近几格里的线段。
+ * reach 是会用到的最大 d（线段按它扩边登记），结果与逐段全算一样。
+ */
+export class LineIndex {
+  private segs: [P, P][] = []
+  private grid = new Map<number, number[]>()
+  private stamp: number[] = []
+  private tick = 0
+  constructor(
+    line: P[],
+    reach: number,
+    private readonly cell = 16,
+  ) {
+    for (let i = 0; i + 1 < line.length; i++) {
+      const a = line[i]
+      const b = line[i + 1]
+      const id = this.segs.length
+      this.segs.push([a, b])
+      this.stamp.push(0)
+      this.cells(Math.min(a[0], b[0]) - reach, Math.min(a[1], b[1]) - reach, Math.max(a[0], b[0]) + reach, Math.max(a[1], b[1]) + reach, (k) => {
+        const l = this.grid.get(k)
+        if (l) l.push(id)
+        else this.grid.set(k, [id])
+      })
+    }
+  }
+  private cells(x0: number, y0: number, x1: number, y1: number, f: (k: number) => void) {
+    const c = this.cell
+    for (let y = Math.floor(y0 / c); y <= Math.floor(y1 / c); y++) for (let x = Math.floor(x0 / c); x <= Math.floor(x1 / c); x++) f(y * 65536 + x)
+  }
+  /** 附近格子里的线段（每条只给一次） */
+  private around(x0: number, y0: number, x1: number, y1: number, f: (a: P, b: P) => boolean): boolean {
+    const t = ++this.tick
+    let hit = false
+    this.cells(x0, y0, x1, y1, (k) => {
+      if (hit) return
+      for (const id of this.grid.get(k) ?? []) {
+        if (this.stamp[id] === t) continue
+        this.stamp[id] = t
+        if (f(this.segs[id][0], this.segs[id][1])) {
+          hit = true
+          return
+        }
+      }
+    })
+    return hit
+  }
+  /** 点离折线不到 d 米（d ≤ reach） */
+  nearPoint(q: P, d: number) {
+    return this.around(q[0], q[1], q[0], q[1], (a, b) => segDist(q, a, b).d < d)
+  }
+  /** 多边形离折线不到 d 米（d ≤ reach） */
+  nearPoly(poly: Poly, d: number) {
+    const [x0, y0, x1, y1] = bboxOf(poly)
+    return this.around(x0, y0, x1, y1, (a, b) => segPolyDist(a, b, poly) < d)
+  }
 }

@@ -5,7 +5,7 @@ import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
 import { drawOverlays, fieldsFor, marginOf } from '../index'
 import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type StyleId } from '../styles'
-import { contours, pathData } from './contour'
+import { contourGrid, contours, pathData, type ContourGrid } from './contour'
 import { DisplayList, type Fill, type Stroke } from './displayList'
 import { Recorder } from './recorder'
 
@@ -39,16 +39,26 @@ class Layers {
     readonly S: number,
   ) {}
 
+  // 同一张场第二次被追踪时建网格（一次外扩 + 分块极值），之后的等级都复用；构建期间场不会被改写
+  private grids = [new Map<ArrayLike<number>, ContourGrid | null>(), new Map<ArrayLike<number>, ContourGrid | null>()]
+  private grid(field: ArrayLike<number>, closed: boolean) {
+    const m = this.grids[closed ? 1 : 0]
+    let g = m.get(field)
+    if (g === undefined) m.set(field, null)
+    else if (g === null) m.set(field, (g = contourGrid(field, this.W, this.H, closed)))
+    return g ?? undefined
+  }
+
   /** 填充"场 ≥ level"的区域 */
   fill(field: ArrayLike<number>, level: number, color: string, opacity = 1, o: LayerOpt = {}) {
-    const d = pathData(contours(field, this.W, this.H, level, true), this.S, { closed: true, tol: o.tol ?? 0.35, minArea: o.minArea ?? 1.5 })
+    const d = pathData(contours(field, this.W, this.H, level, true, this.grid(field, true)), this.S, { closed: true, tol: o.tol ?? 0.35, minArea: o.minArea ?? 1.5 })
     this.list.path('map', d, { fill: toFill(color, opacity), stroke: o.stroke, filter: o.filter, clip: o.clip })
     return d
   }
 
   /** 等值线 */
   line(field: ArrayLike<number>, level: number, color: string, width: number, opacity = 1, dash?: number[], o: LayerOpt = {}) {
-    const d = pathData(contours(field, this.W, this.H, level, false), this.S, { closed: true, tol: o.tol ?? 0.35, minArea: 0.8 })
+    const d = pathData(contours(field, this.W, this.H, level, false, this.grid(field, false)), this.S, { closed: true, tol: o.tol ?? 0.35, minArea: 0.8 })
     this.list.path('map', d, { stroke: { color, alpha: opacity, width, dash, cap: 'round', join: 'round' }, filter: o.filter })
   }
 
@@ -431,7 +441,7 @@ export function buildAtlasVector(world: World, rivers: SmoothRiver[], id: StyleI
 
   const rec = new Recorder(list, measurer)
   rec.space = 'map'
-  drawOverlays(rec as unknown as CanvasRenderingContext2D, f, theme, rivers, opts)
+  drawOverlays(rec as unknown as CanvasRenderingContext2D, f, theme, rivers, opts, (on) => (list.furniture = on))
   rec.space = 'page'
   drawFrame(rec as unknown as CanvasRenderingContext2D, world, theme, S, M, MW, MH)
   return list

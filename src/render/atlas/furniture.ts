@@ -169,10 +169,16 @@ function northArrow(ctx: CanvasRenderingContext2D, theme: Theme, x: number, y: n
 // ———————————————————————— 比例尺 ————————————————————————
 
 export function drawScaleBar(ctx: CanvasRenderingContext2D, world: World, theme: Theme, S: number, x: number, y: number) {
+  drawScaleBarAt(ctx, theme, S, world.kmPerCell / S, x, y, [100, 200, 250, 500, 1000, 2000])
+}
+
+/** 浏览器图廓里用的比例尺长度候选（随缩放从几公里到几千公里） */
+export const SCALE_NICE_KM = [1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000]
+
+/** 比例尺：S 定线宽字号（k = S / 2），kmPx 为每像素多少公里，取 nice 里画出来最接近 240k 像素的长度；(x, y) 为尺的中点 */
+export function drawScaleBarAt(ctx: CanvasRenderingContext2D, theme: Theme, S: number, kmPx: number, x: number, y: number, nice: number[]) {
   const k = S / 2
-  const kmPx = world.kmPerCell / S
   const target = 240 * k * kmPx
-  const nice = [100, 200, 250, 500, 1000, 2000]
   const kmLen = nice.reduce((a, b) => (Math.abs(b - target) < Math.abs(a - target) ? b : a))
   const len = kmLen / kmPx
   ctx.save()
@@ -549,6 +555,27 @@ export function drawSoundings(ctx: CanvasRenderingContext2D, f: Fields) {
 // ———————————————————————— 图框 ————————————————————————
 
 export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Theme, S: number, M: number, MW: number, MH: number) {
+  drawFrameAt(ctx, world, theme, S, M, M, MW, MH, { ox: M, oy: M, s: S }, 10, 2)
+}
+
+/**
+ * 图框：内框左上角 (M, MY)、大小 MW × MH；S 定线宽字号（k = S / 2）。
+ * geo 是地图格坐标到画面的换算（画面 x = ox + 格 x · s），经纬刻度带与边注按它定位，只画落在内框里的；
+ * 每 step° 一个经纬度注记，刻度带每 band° 换一次黑白。整页排版时内框就是地图框、geo 与之重合。
+ */
+export function drawFrameAt(
+  ctx: CanvasRenderingContext2D,
+  world: World,
+  theme: Theme,
+  S: number,
+  M: number,
+  MY: number,
+  MW: number,
+  MH: number,
+  geo: { ox: number; oy: number; s: number },
+  step: number,
+  band: number,
+) {
   if (theme.frame === 'none') return
   const k = S / 2
   const ink = theme.ink
@@ -557,16 +584,16 @@ export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Th
   if (theme.frame === 'ornate') {
     ctx.strokeStyle = ink
     ctx.lineWidth = 2.6 * k
-    ctx.strokeRect(M - 10 * k, M - 10 * k, MW + 20 * k, MH + 20 * k)
+    ctx.strokeRect(M - 10 * k, MY - 10 * k, MW + 20 * k, MH + 20 * k)
     ctx.lineWidth = 1 * k
-    ctx.strokeRect(M - 4 * k, M - 4 * k, MW + 8 * k, MH + 8 * k)
-    ctx.strokeRect(M, M, MW, MH)
+    ctx.strokeRect(M - 4 * k, MY - 4 * k, MW + 8 * k, MH + 8 * k)
+    ctx.strokeRect(M, MY, MW, MH)
     // 四角的方形饰块
     for (const [cx, cy] of [
-      [M - 7 * k, M - 7 * k],
-      [M + MW + 7 * k, M - 7 * k],
-      [M - 7 * k, M + MH + 7 * k],
-      [M + MW + 7 * k, M + MH + 7 * k],
+      [M - 7 * k, MY - 7 * k],
+      [M + MW + 7 * k, MY - 7 * k],
+      [M - 7 * k, MY + MH + 7 * k],
+      [M + MW + 7 * k, MY + MH + 7 * k],
     ]) {
       ctx.fillStyle = paper
       ctx.fillRect(cx - 12 * k, cy - 12 * k, 24 * k, 24 * k)
@@ -584,9 +611,9 @@ export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Th
     ctx.fillStyle = ink
     const step = 40 * k
     for (let x = M + step; x < M + MW - step / 2; x += step) {
-      for (const y of [M - 7 * k, M + MH + 7 * k]) diamond(ctx, x, y, 2.4 * k)
+      for (const y of [MY - 7 * k, MY + MH + 7 * k]) diamond(ctx, x, y, 2.4 * k)
     }
-    for (let y = M + step; y < M + MH - step / 2; y += step) {
+    for (let y = MY + step; y < MY + MH - step / 2; y += step) {
       for (const x of [M - 7 * k, M + MW + 7 * k]) diamond(ctx, x, y, 2.4 * k)
     }
     ctx.restore()
@@ -595,9 +622,9 @@ export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Th
   if (theme.frame === 'ink') {
     ctx.strokeStyle = ink
     ctx.lineWidth = 2.2 * k
-    ctx.strokeRect(M - 9 * k, M - 9 * k, MW + 18 * k, MH + 18 * k)
+    ctx.strokeRect(M - 9 * k, MY - 9 * k, MW + 18 * k, MH + 18 * k)
     ctx.lineWidth = 0.8 * k
-    ctx.strokeRect(M - 3 * k, M - 3 * k, MW + 6 * k, MH + 6 * k)
+    ctx.strokeRect(M - 3 * k, MY - 3 * k, MW + 6 * k, MH + 6 * k)
     ctx.restore()
     return
   }
@@ -605,45 +632,52 @@ export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Th
   const { W, H } = world
   ctx.strokeStyle = ink
   ctx.lineWidth = 1.2 * k
-  ctx.strokeRect(M, M, MW, MH)
+  ctx.strokeRect(M, MY, MW, MH)
   const bw = 7 * k
-  ctx.strokeRect(M - bw, M - bw, MW + bw * 2, MH + bw * 2)
+  ctx.strokeRect(M - bw, MY - bw, MW + bw * 2, MH + bw * 2)
   ctx.lineWidth = 2.4 * k
-  ctx.strokeRect(M - bw - 6 * k, M - bw - 6 * k, MW + bw * 2 + 12 * k, MH + bw * 2 + 12 * k)
+  ctx.strokeRect(M - bw - 6 * k, MY - bw - 6 * k, MW + bw * 2 + 12 * k, MH + bw * 2 + 12 * k)
   const top = p.latNorth
   const bot = p.latSouth
-  const yOf = (lat: number) => M + ((lat - top) / (bot - top)) * (H - 1) * S
+  const yOf = (lat: number) => geo.oy + ((lat - top) / (bot - top)) * (H - 1) * geo.s
   const lo = Math.min(top, bot)
   const hi = Math.max(top, bot)
-  let flip = false
-  for (let lat = Math.floor(hi / 2) * 2; lat > lo; lat -= 2) {
+  // 黑白相间的刻度带：按序号定黑白（从固定的起点数），平移时不闪；只画落在内框里的一段
+  const lat0 = Math.floor(hi / band) * band
+  for (let i = 0; lat0 - i * band > lo; i++) {
+    const lat = lat0 - i * band
     const y0 = yOf(lat)
-    const y1 = yOf(Math.max(lo, lat - 2))
-    ctx.fillStyle = flip ? paper : ink
-    ctx.fillRect(M - bw, Math.min(y0, y1), bw, Math.abs(y1 - y0))
-    ctx.fillRect(M + MW, Math.min(y0, y1), bw, Math.abs(y1 - y0))
-    flip = !flip
+    const y1 = yOf(Math.max(lo, lat - band))
+    const ya = Math.max(MY, Math.min(y0, y1))
+    const yb = Math.min(MY + MH, Math.max(y0, y1))
+    if (yb <= ya) continue
+    ctx.fillStyle = i % 2 ? paper : ink
+    ctx.fillRect(M - bw, ya, bw, yb - ya)
+    ctx.fillRect(M + MW, ya, bw, yb - ya)
   }
   const ls = lonScale(world)
   const lonHalf = (W / 2) * ls
-  const xOf = (lon: number) => M + (lon / ls + W / 2) * S
-  flip = false
-  for (let lon = Math.floor(-lonHalf / 2) * 2; lon < lonHalf; lon += 2) {
+  const xOf = (lon: number) => geo.ox + (lon / ls + W / 2) * geo.s
+  const lon0 = Math.floor(-lonHalf / band) * band
+  for (let i = 0; lon0 + i * band < lonHalf; i++) {
+    const lon = lon0 + i * band
     const x0 = Math.max(M, xOf(lon))
-    const x1 = Math.min(M + MW, xOf(lon + 2))
+    const x1 = Math.min(M + MW, xOf(lon + band))
     if (x1 <= x0) continue
-    ctx.fillStyle = flip ? paper : ink
-    ctx.fillRect(x0, M - bw, x1 - x0, bw)
-    ctx.fillRect(x0, M + MH, x1 - x0, bw)
-    flip = !flip
+    ctx.fillStyle = i % 2 ? paper : ink
+    ctx.fillRect(x0, MY - bw, x1 - x0, bw)
+    ctx.fillRect(x0, MY + MH, x1 - x0, bw)
   }
   ctx.lineWidth = 0.8 * k
-  ctx.strokeRect(M - bw, M - bw, MW + bw * 2, MH + bw * 2)
+  ctx.strokeRect(M - bw, MY - bw, MW + bw * 2, MH + bw * 2)
   ctx.fillStyle = ink
   ctx.font = `500 ${11 * k}px ${theme.labels.text}`
   ctx.textBaseline = 'middle'
-  for (let lat = Math.ceil(lo / 10) * 10; lat <= hi; lat += 10) {
+  const inY = (y: number) => y >= MY - 0.5 && y <= MY + MH + 0.5
+  const inX = (x: number) => x >= M - 0.5 && x <= M + MW + 0.5
+  for (let lat = Math.ceil(lo / step) * step; lat <= hi; lat += step) {
     const y = yOf(lat)
+    if (!inY(y)) continue
     const t = `${Math.abs(lat)}°${lat > 0 ? 'N' : lat < 0 ? 'S' : ''}`
     ctx.textAlign = 'right'
     ctx.fillText(t, M - bw - 9 * k, y)
@@ -651,15 +685,15 @@ export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Th
     ctx.fillText(t, M + MW + bw + 9 * k, y)
   }
   ctx.textAlign = 'center'
-  for (let lon = Math.ceil(-lonHalf / 10) * 10; lon <= lonHalf; lon += 10) {
+  for (let lon = Math.ceil(-lonHalf / step) * step; lon <= lonHalf; lon += step) {
     const x = xOf(lon)
+    if (!inX(x)) continue
     const t = `${Math.abs(lon)}°${lon > 0 ? 'E' : lon < 0 ? 'W' : ''}`
-    ctx.fillText(t, x, M - bw - 12 * k)
-    ctx.fillText(t, x, M + MH + bw + 12 * k)
+    ctx.fillText(t, x, MY - bw - 12 * k)
+    ctx.fillText(t, x, MY + MH + bw + 12 * k)
   }
   ctx.restore()
 }
-
 function diamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
   ctx.beginPath()
   ctx.moveTo(x, y - r)

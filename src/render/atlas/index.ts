@@ -101,13 +101,23 @@ export function renderAtlas(world: World, rivers: SmoothRiver[], id: StyleId, op
   return canvas
 }
 
-/** 地图框内的全部叠加层（位图与矢量共用） */
-export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Theme, rivers: SmoothRiver[], opts: AtlasOpts) {
+/** 指北针的位置与半径：地图框（宽 MW、高 MH）右下角、比例尺上方 */
+export function compassSpot(theme: Theme, S: number, MW: number, MH: number) {
+  return {
+    r: (theme.compass === 'nautical' ? 46 : theme.compass === 'ornate' ? 44 : 34) * S,
+    cx: MW - (theme.compass === 'nautical' ? 110 : 76) * S,
+    cy: MH - (theme.compass === 'nautical' ? 118 : 84) * S,
+  }
+}
+
+/**
+ * 地图框内的全部叠加层（位图与矢量共用）。
+ * furniture(on)：标题、指北针、比例尺、图例这几件图廓件画之前 / 之后各调一次（矢量列表据此把它们单独分段）
+ */
+export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Theme, rivers: SmoothRiver[], opts: AtlasOpts, furniture?: (on: boolean) => void) {
   const { world, S, MW, MH, W } = f
   const k = S / 2
-  const compassR = (theme.compass === 'nautical' ? 46 : theme.compass === 'ornate' ? 44 : 34) * S
-  const cx = MW - (theme.compass === 'nautical' ? 110 : 76) * S
-  const cy = MH - (theme.compass === 'nautical' ? 118 : 84) * S
+  const { r: compassR, cx, cy } = compassSpot(theme, S, MW, MH)
   if (theme.rhumb) drawRhumbLines(ctx, [[cx, cy], [MW * 0.3, MH * 0.35]], MW, MH, S)
   if (theme.soundings) drawSoundings(ctx, f)
   const rv = theme.river
@@ -116,10 +126,12 @@ export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Th
   // 道路画在山形、树林符号之上：翻山的路段也看得见
   drawRoads(ctx, world.roads, S, theme.roads)
   if (opts.graticule && theme.graticule) drawGraticule(ctx, world, S, theme.graticule)
+  furniture?.(true)
   drawCompass(ctx, theme, cx, cy, compassR)
   drawScaleBar(ctx, world, theme, S, MW - 150 * S, MH - 24 * S)
   const title = drawCartouche(ctx, world, theme, S, MW)
   const legend = drawLegend(ctx, world, theme, S, MH)
+  furniture?.(false)
   if (opts.labels) {
     const layer = new LabelLayer(ctx, world, S, theme)
     layer.reserve(title)

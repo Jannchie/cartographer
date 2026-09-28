@@ -1,10 +1,13 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import type { World } from '../gen/types'
+import type { Label, World } from '../gen/types'
 import { buildDetailMask, buildMaterialMask } from './aerial/mask'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
 import { PostPipeline } from './aerial/post'
+import { GpuTimer } from './aerial/gpuTimer'
+import { CameraTour, type TourPoi } from './aerial/tour'
+import { QUALITIES, type Look, type QualityId } from './aerial/looks'
 import { Diorama } from './aerial/diorama'
 import { TerrainBake } from './aerial/bake'
 import { RoadMask } from './aerial/roads3d'
@@ -13,6 +16,7 @@ import { placeName, t, worldTitle } from '../i18n'
 import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
 import { createRiverWaterMaterial, createWaterMaterial } from './water'
+import { isTypingTarget } from '../ui/keys'
 
 export interface View3DOptions {
   exaggeration: number
@@ -28,6 +32,12 @@ export interface View3DOptions {
   stage: boolean
   /** 道路与航线 */
   roads: boolean
+  /** 画质档位：像素比、MSAA、阴影贴图、云的步进、泛光、累积帧数 */
+  quality: QualityId
+  /** 阴影柔和度（按 4096 阴影贴图的纹素计，换画质时软硬不变） */
+  shadowSoftness: number
+  /** 成片观感：调色与胶片模拟 */
+  look: Look
 }
 
 const SKY_TOP = new THREE.Color('#3b6ea8')
@@ -86,30 +96,46 @@ export class Scene3D {
   private lastInteract = 0
   private frame = 0
   /** 性能读数（按 P 开关）：帧率、GPU 耗时（EXT_disjoint_timer_query_webgl2） */
-  private perf: { el: HTMLDivElement; ext: any; pending: WebGLQuery[]; gpu: number; frames: number; t0: number } | null = null
+  private perf: { el: HTMLDivElement; frames: number; t0: number } | null = null
+  /** 动态分辨率：镜头移动时的渲染缩放（按 GPU 耗时调节）；lastScale 为上一帧移动时用的缩放，静止为 0 */
+  private motionScale = 1
+  private lastScale = 0
+  private lastFrameAt = 0
+  /** 显示器刷新间隔（毫秒），由 rAF 间隔估计 */
+  private refreshMs = 1000 / 60
+  private rafDeltas: number[] = []
+  private lastRaf = 0
+  private lastRaf2 = 0
+  /** 自动运镜（巡览） */
+  private tour: CameraTour
+  private tourFade: HTMLDivElement
+  /** 巡览开始 / 停止时通知界面 */
+  onTourChange: ((on: boolean) => void) | null = null
+  /** 逐 pass 的 GPU 耗时，性能读数打开时才计时 */
+  private timer: GpuTimer
   /** 天色（随太阳高度变化），水面反射、云、空气透视共用 */
   private skyTop = new THREE.Color()
   private skyHorizon = new THREE.Color()
   private clock = new THREE.Clock()
   private opts: View3DOptions
   private labelLayer: HTMLDivElement
-  private labelEls: { el: HTMLDivElement; pos: THREE.Vector3; kind: string; w: number; h: number }[] = []
+  private labelEls: { el: HTMLDivElement; pos: THREE.Vector3; kind: string; w: number; h: number; src: Label }[] = []
   private raf = 0
   private SZ = 62.5
   active = true
 
   constructor(private container: HTMLElement, opts: View3DOptions) {
     this.opts = { ...opts }
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
-    // 后期管线有 HDR 目标 + 多重采样，高 DPI 屏上限制像素比
-    this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio))
+    // 抗锯齿在后期管线的 MSAA 场景目标与时间累积里做，画布本身不需要
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: true })
     // 色调映射与调色在后期管线的终合成里做
     this.renderer.toneMapping = THREE.NoToneMapping
     this.renderer.shadowMap.enabled = true
     // 地形是静态的：阴影只在太阳或地形变化时重绘
     this.renderer.shadowMap.autoUpdate = false
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.shadowMap.type = THREE.PCFShadowMap
     this.renderer.setClearColor(0x000000, 0)
+    this.timer = new GpuTimer(this.renderer.getContext() as WebGL2RenderingContext)
     container.appendChild(this.renderer.domElement)
 
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 6000)
@@ -125,7 +151,6 @@ export class Scene3D {
 
     this.sun = new THREE.DirectionalLight(0xfff1dc, 3.1)
     this.sun.castShadow = true
-    this.sun.shadow.mapSize.set(4096, 4096)
     const sc = this.sun.shadow.camera
     sc.left = -70
     sc.right = 70
@@ -135,7 +160,6 @@ export class Scene3D {
     sc.far = 400
     this.sun.shadow.bias = -0.0004
     this.sun.shadow.normalBias = 0.04
-    this.sun.shadow.radius = 3
     this.scene.add(this.sun)
     this.scene.add(this.sun.target)
     this.hemi = new THREE.HemisphereLight(0xc4d7ea, 0x5b4a3a, 0.9)
@@ -147,87 +171,221 @@ export class Scene3D {
     this.labelLayer = document.createElement('div')
     this.labelLayer.className = 'labels3d'
     container.appendChild(this.labelLayer)
+    // 巡览：切镜时的淡出淡入遮罩
+    this.tourFade = document.createElement('div')
+    this.tourFade.className = 'tour-fade'
+    container.appendChild(this.tourFade)
+    const self = this
+    this.tour = new CameraTour({
+      SX,
+      get SZ() {
+        return self.SZ
+      },
+      heightAt: (x, z) => (this.world ? this.heightAt(x, z) : 0),
+      get pois() {
+        return self.tourPois()
+      },
+    })
 
     new ResizeObserver(() => this.resize()).observe(container)
-    this.resize()
+    this.applyQuality()
+    this.post.setLook(this.opts.look)
     this.updateSun()
     // 交互检测：镜头静止 1.5 秒后降到 30 fps（水波、云的缓慢变化看不出差别）
     const touch = () => (this.lastInteract = performance.now())
+    // 巡览中用户一动鼠标（拖、滚轮）就交还手动控制
+    const takeOver = () => this.tour.active && this.stopTour()
+    this.renderer.domElement.addEventListener('pointerdown', takeOver)
+    this.renderer.domElement.addEventListener('wheel', takeOver, { passive: true })
     // 镜头的变化由后期管线自己比对矩阵发现，这里只管降帧
     this.controls.addEventListener('change', touch)
     this.renderer.domElement.addEventListener('pointerdown', touch)
     this.renderer.domElement.addEventListener('wheel', touch, { passive: true })
     // 对焦跟随鼠标：悬停处的地面就是焦点；拖动时焦点不跟着跑，离开画布回到旋转中心
     this.renderer.domElement.addEventListener('pointermove', (e) => {
-      if (e.buttons) return
+      if (e.buttons || this.tour.active) return
       this.pointer = { x: e.clientX, y: e.clientY, dirty: true }
     })
     this.renderer.domElement.addEventListener('pointerleave', () => {
       this.pointer = null
       this.focusPoint = null
     })
-    const loop = () => {
+    // 动态分辨率：移动中的帧按实测 GPU 耗时调节缩放，目标是显示器刷新间隔
+    this.timer.onFrame = (ms, scale) => {
+      if (scale > 0) this.adaptScale(ms, scale)
+    }
+    const loop = (now: number) => {
       this.raf = requestAnimationFrame(loop)
+      this.trackRefresh(now)
       if (!this.active) return
-      this.controls.update()
+      const dt = this.lastRaf2 ? (now - this.lastRaf2) / 1000 : 0
+      this.lastRaf2 = now
+      if (this.tour.active) {
+        // 运镜接管镜头；焦点跟着镜头的主体
+        this.tour.update(dt, this.camera, this.controls.target)
+        this.focusPoint = this.tour.subject
+        this.tourFade.style.opacity = String(this.tour.fade)
+        this.lastInteract = performance.now()
+      } else this.controls.update()
       this.frame++
       if (performance.now() - this.lastInteract > 1500 && this.frame % 2) return
       const pf = this.perf
-      const gl = this.renderer.getContext() as WebGL2RenderingContext
-      let q: WebGLQuery | null = null
-      if (pf?.ext && pf.pending.length < 3) {
-        q = gl.createQuery()
-        gl.beginQuery(pf.ext.TIME_ELAPSED_EXT, q!)
-      }
+      // 没有 GPU 计时扩展时退回用帧间隔估计（包含了 CPU 与等待，偏保守）
+      if (!this.timer.supported && this.lastScale > 0 && this.lastFrameAt) this.adaptScale(now - this.lastFrameAt, this.lastScale)
+      this.lastFrameAt = now
+      this.timer.frameStart()
       const t = this.clock.getElapsedTime()
       if (this.waterMat) this.waterMat.uniforms.uTime.value = t
       if (this.clouds) this.clouds.time = t
       this.diorama.time = t
+      this.timer.begin('高清块烘焙')
       this.updatePatch()
       this.renderFrame()
+      this.timer.frameEnd()
       if (pf) {
-        if (q) {
-          gl.endQuery(pf.ext.TIME_ELAPSED_EXT)
-          pf.pending.push(q)
-        }
-        while (pf.pending.length && gl.getQueryParameter(pf.pending[0], gl.QUERY_RESULT_AVAILABLE)) {
-          const done = pf.pending.shift()!
-          const ns = gl.getQueryParameter(done, gl.QUERY_RESULT) as number
-          pf.gpu = pf.gpu * 0.9 + (ns / 1e6) * 0.1
-          gl.deleteQuery(done)
-        }
         pf.frames++
         const now = performance.now()
         if (now - pf.t0 > 500) {
           const fps = (pf.frames * 1000) / (now - pf.t0)
           const c = this.renderer.domElement
-          pf.el.textContent = `${fps.toFixed(0)} fps · GPU ${pf.ext ? pf.gpu.toFixed(1) + ' ms' : 'n/a'} · ${c.width}×${c.height}`
+          const tm = this.timer
+          const rows = [...tm.ms].filter(([, v]) => v >= 0.05).map(([k, v]) => `${k.padEnd(8, '　')} ${v.toFixed(2).padStart(6)} ms`)
+          pf.el.textContent = [`${fps.toFixed(0)} fps · ${c.width}×${c.height} · 刷新 ${(1000 / this.refreshMs).toFixed(0)} Hz · 移动缩放 ${this.motionScale.toFixed(2)}`, ...(tm.supported ? [`GPU ${tm.total.toFixed(1)} ms`, ...rows] : ['GPU n/a'])].join('\n')
           pf.frames = 0
           pf.t0 = now
         }
       }
       this.updateLabels()
     }
-    loop()
+    this.raf = requestAnimationFrame(loop)
     window.addEventListener('keydown', (e) => {
-      if (e.key !== 'p' && e.key !== 'P') return
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return
-      this.togglePerf()
+      if (!this.active || e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e)) return
+      if (e.key === 'p' || e.key === 'P') this.togglePerf()
+      else if (e.key === 't' || e.key === 'T') this.toggleTour()
+      else if (this.tour.active && (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N')) this.tour.next()
+      else if (this.tour.active && e.key === 'Escape') this.stopTour()
     })
+  }
+
+  // —— 巡览 ——
+  startTour() {
+    if (!this.world || this.tour.active) return
+    this.pointer = null
+    this.tour.start(this.camera, this.controls.target)
+    this.onTourChange?.(true)
+  }
+  stopTour() {
+    if (!this.tour.active) return
+    this.tour.stop()
+    this.tourFade.style.opacity = '0'
+    this.focusPoint = null
+    // 从当前画面无缝交还：OrbitControls 按当前镜头与目标重新计算
+    this.controls.update()
+    this.onTourChange?.(false)
+  }
+  toggleTour() {
+    if (this.tour.active) this.stopTour()
+    else this.startTour()
+  }
+
+  /** 世界格网坐标 → 场景的 x / z */
+  private toX(x: number) {
+    return (x / (this.world!.W - 1) - 0.5) * SX
+  }
+  private toZ(y: number) {
+    return (y / (this.world!.H - 1) - 0.5) * this.SZ
+  }
+
+  /**
+   * 巡览的题材：都城与大城、山脉、湖、大岛、大陆，加上地形兴趣点。
+   * 每个世界（及其注记）算一次：巡览每帧都会读，且"最近拍过"的判断靠对象同一性。
+   */
+  private poiCache: { labels: World['labels']; pois: TourPoi[] } | null = null
+  private tourPois(): TourPoi[] {
+    const w = this.world
+    if (!w) return []
+    if (this.poiCache?.labels === w.labels) return this.poiCache.pois
+    const toX = (x: number) => this.toX(x)
+    const toZ = (y: number) => this.toZ(y)
+    const out: TourPoi[] = []
+    const cities = w.labels.filter((l) => l.kind === 'capital' || l.kind === 'city').sort((a, b) => b.weight - a.weight)
+    for (const l of cities.slice(0, 10)) out.push({ x: toX(l.x), z: toZ(l.y), kind: l.kind, weight: l.kind === 'capital' ? 60 : 12 })
+    for (const l of w.labels) {
+      if (l.kind === 'range') out.push({ x: toX(l.x), z: toZ(l.y), kind: 'range', weight: 30, angle: l.angle })
+      else if (l.kind === 'lake' && l.weight > 60) out.push({ x: toX(l.x), z: toZ(l.y), kind: 'lake', weight: 10 })
+      else if (l.kind === 'island' && l.weight > 800) out.push({ x: toX(l.x), z: toZ(l.y), kind: 'island', weight: 8 })
+      else if (l.kind === 'continent') out.push({ x: toX(l.x), z: toZ(l.y), kind: 'continent', weight: 20 })
+    }
+    out.push(...this.terrainPois())
+    const pois: TourPoi[] = out.length ? out : [{ x: 0, z: 0, kind: 'continent', weight: 1 }]
+    this.poiCache = { labels: w.labels, pois }
+    return pois
+  }
+
+  /**
+   * 地形上的兴趣点：按窗口统计局部落差（险峻山地）与海陆交错程度（峡湾、群岛、曲折海岸），
+   * 取得分最高、彼此隔开的若干处。
+   */
+  private terrainPois(): TourPoi[] {
+    const w = this.world!
+    const { W, H, elevation: e, flow } = w
+    const step = Math.max(8, Math.round(W / 96))
+    const win = step * 2
+    const cands: { x: number; y: number; relief: number; coast: number; river: number }[] = []
+    // 离地图边缘太近的不要：镜头朝哪边拍都会带到沙盘外的虚空
+    const edge = Math.round(W * 0.09)
+    for (let y = Math.max(win, edge); y < H - Math.max(win, edge); y += step)
+      for (let x = Math.max(win, edge); x < W - Math.max(win, edge); x += step) {
+        let lo = Infinity
+        let hi = -Infinity
+        let land = 0
+        let n = 0
+        let fl = 0
+        for (let dy = -win; dy <= win; dy += 2)
+          for (let dx = -win; dx <= win; dx += 2) {
+            const i = (y + dy) * W + x + dx
+            const h = e[i]
+            if (h < lo) lo = h
+            if (h > hi) hi = h
+            if (h > 0) land++
+            if (flow[i] > fl) fl = flow[i]
+            n++
+          }
+        const lf = land / n
+        if (lf < 0.15) continue
+        cands.push({ x, y, relief: Math.max(0, hi) - Math.max(0, lo), coast: lf < 0.85 ? 1 - Math.abs(lf - 0.5) * 2 : 0, river: Math.log1p(fl) })
+      }
+    const score = (c: (typeof cands)[number]) => c.relief * 1.2 + c.coast * 1.1 + c.river * 0.05
+    cands.sort((a, b) => score(b) - score(a))
+    const picked: typeof cands = []
+    const gap = W / 9
+    for (const c of cands) {
+      if (picked.length >= 24) break
+      if (picked.some((q) => Math.hypot(q.x - c.x, q.y - c.y) < gap)) continue
+      picked.push(c)
+    }
+    return picked.map((c) => ({
+      x: this.toX(c.x),
+      z: this.toZ(c.y),
+      kind: c.relief * 1.2 >= c.coast * 1.1 ? 'peak' : 'coast',
+      weight: 18 + score(c) * 22,
+    }))
   }
 
   togglePerf() {
     if (this.perf) {
       this.perf.el.remove()
       this.perf = null
+      this.timer.detail = false
       return
     }
     const el = document.createElement('div')
     el.className = 'perf'
     el.textContent = '…'
     this.container.appendChild(el)
-    const ext = (this.renderer.getContext() as WebGL2RenderingContext).getExtension('EXT_disjoint_timer_query_webgl2')
-    this.perf = { el, ext, pending: [], gpu: 0, frames: 0, t0: performance.now() }
+    this.timer.detail = true
+    this.timer.ms.clear()
+    this.perf = { el, frames: 0, t0: performance.now() }
   }
 
   get vScale() {
@@ -256,12 +414,39 @@ export class Scene3D {
     const focus = this.focusDist
     // 焦点越近弥散圆越大（固定镜头拍更小的物体），拉近时微缩感更强
     const aperture = this.opts.dof * 22 * Math.min(1.8, Math.sqrt(60 / focus))
-    this.post.render(this.renderer, this.scene, cam, focus, aperture, this.opts.clouds ? this.clouds : null)
+    // 移动中缩小渲染，静止时全分辨率累积成片
+    const scale = moved ? this.motionScale : 1
+    this.lastScale = moved ? scale : 0
+    this.timer.tag = this.lastScale
+    this.post.render(this.renderer, this.scene, cam, focus, aperture, this.opts.clouds ? this.clouds : null, this.timer, scale)
+  }
+
+  /** 显示器刷新间隔：rAF 间隔的低分位数（渲染慢时间隔会变长，但总有空闲帧反映真实刷新率） */
+  private trackRefresh(now: number) {
+    if (this.lastRaf) this.rafDeltas.push(now - this.lastRaf)
+    this.lastRaf = now
+    if (this.rafDeltas.length < 90) return
+    const d = this.rafDeltas.sort((a, b) => a - b)[Math.floor(this.rafDeltas.length * 0.1)]
+    this.rafDeltas.length = 0
+    this.refreshMs = Math.min(1000 / 30, Math.max(1000 / 240, d))
+  }
+
+  /** 按一帧移动中的实测耗时调节缩放：像素数与缩放平方成正比，留 12% 余量 */
+  private adaptScale(ms: number, scale: number) {
+    // 巡览是持续运动：以 60 fps 为目标，画面优先
+    const target = (this.tour.active ? Math.max(this.refreshMs, 1000 / 60) : this.refreshMs) * 0.88
+    const want = scale * Math.sqrt(target / Math.max(ms, 0.1))
+    const min = this.quality.minScale
+    // 超时就快降，有余量时慢升，避免来回抖
+    const k = want < this.motionScale ? 0.5 : 0.15
+    this.motionScale = Math.min(1, Math.max(min, this.motionScale + (want - this.motionScale) * k))
   }
 
   private resize() {
     const w = this.container.clientWidth
     const h = this.container.clientHeight
+    // 模块隐藏（v-show）时报 0×0：保留现有渲染目标，切回来不必整套重建
+    if (w === 0 || h === 0) return
     this.renderer.setSize(w, h, false)
     const pr = this.renderer.getPixelRatio()
     this.clouds?.setSize(Math.round(w * pr), Math.round(h * pr))
@@ -277,11 +462,50 @@ export class Scene3D {
     this.opts = { ...this.opts, ...o }
     if (o.exaggeration !== undefined && o.exaggeration !== prev.exaggeration && this.world) this.rebuildGeometry()
     if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
-    // 地名是 DOM，其余选项都改变画面
-    if (Object.keys(o).some((k) => k !== 'labels')) {
+    if (o.quality !== undefined && o.quality !== prev.quality) this.applyQuality()
+    if (o.shadowSoftness !== undefined) this.applyShadow()
+    // 观感只在终合成里生效：不打断累积
+    if (o.look) {
+      this.post.setLook(this.opts.look)
+      this.lastInteract = performance.now()
+    }
+    // 地名是 DOM、观感是终合成，其余选项都改变场景本身
+    if (Object.keys(o).some((k) => k !== 'labels' && k !== 'look')) {
       this.lastInteract = performance.now()
       this.applyLook()
     }
+  }
+
+  private get quality() {
+    return QUALITIES.find((x) => x.id === this.opts.quality)!.q
+  }
+
+  /** 画质档位：像素比、MSAA、阴影贴图、云、泛光、累积 */
+  private applyQuality() {
+    const q = this.quality
+    const cap = this.renderer.capabilities
+    this.renderer.setPixelRatio(Math.min(q.pixelRatio, window.devicePixelRatio))
+    this.post.setQuality(q, cap.maxSamples)
+    const size = Math.min(q.shadowMap, cap.maxTextureSize)
+    const sh = this.sun.shadow
+    if (sh.mapSize.x !== size) {
+      sh.mapSize.set(size, size)
+      sh.map?.dispose()
+      sh.map = null
+    }
+    if (this.clouds) {
+      this.clouds.march.uniforms.uSteps.value = q.cloudSteps
+      this.clouds.scale = q.cloudScale
+    }
+    this.applyShadow()
+    this.resize()
+  }
+
+  /** 阴影软硬：PCF 半径以纹素计，按阴影贴图尺寸换算成同样的世界尺度 */
+  private applyShadow() {
+    this.sun.shadow.radius = Math.max(1, (this.opts.shadowSoftness * this.sun.shadow.mapSize.x) / 4096)
+    this.renderer.shadowMap.needsUpdate = true
+    this.post.reset()
   }
 
   /** 云层、空气感、展台开关与光照 */
@@ -347,6 +571,7 @@ export class Scene3D {
   }
 
   setWorld(world: World, color: HTMLCanvasElement, rough: HTMLCanvasElement, rivers: SmoothRiver[] = []) {
+    this.stopTour()
     this.riverList = rivers
     this.world = world
     this.SZ = (SX * world.H) / world.W
@@ -446,6 +671,8 @@ export class Scene3D {
     const base = this.vScale * 1.6 + 0.4
     const top = this.vScale * 4.5 + 0.9
     this.clouds = new VolumetricClouds(seed, SX, this.SZ, base, top, 0.28, this.post.sceneRT.depthTexture!)
+    this.clouds.march.uniforms.uSteps.value = this.quality.cloudSteps
+    this.clouds.scale = this.quality.cloudScale
     const pr = this.renderer.getPixelRatio()
     this.clouds.setSize(Math.round(this.container.clientWidth * pr), Math.round(this.container.clientHeight * pr))
     for (const u of [this.terrainU!, this.waterMat!.uniforms as unknown as TerrainUniforms]) {
@@ -625,9 +852,18 @@ export class Scene3D {
     return { GW: Math.round((w.W - 1) * d) + 1, GH: Math.round((w.H - 1) * d) + 1 }
   }
 
+  /**
+   * 地形网格：烘焙纹理分辨率的一半（三角形 1/4）。法线在片元里逐像素取自烘焙纹理，
+   * 网格疏密只影响轮廓与视差（亚像素级）；原先三角形比像素还小，光栅化和 2×2 像素块着色白白浪费。
+   */
+  private meshDims(w: World) {
+    const { GW, GH } = this.gridDims(w)
+    return { GW: Math.round((GW - 1) / 2) + 1, GH: Math.round((GH - 1) / 2) + 1 }
+  }
+
   private terrainGeometry(w: World, _vs: number) {
     const { W, H } = w
-    const { GW, GH } = this.gridDims(w)
+    const { GW, GH } = this.meshDims(w)
     const pos = new Float32Array(GW * GH * 3)
     const uv = new Float32Array(GW * GH * 2)
     for (let y = 0; y < GH; y++) {
@@ -759,8 +995,23 @@ export class Scene3D {
     })
   }
 
+  /** 地面数据不变、只有名字变了（改命名）：换地名层与铭牌，不重建地形、水面、云 */
+  setNames(world: World) {
+    this.world = world
+    this.refreshLanguage()
+  }
+
   refreshLabels() {
     if (this.world) this.buildLabels()
+  }
+
+  /** 只改了某个地点的名字：换那一个地名的文字，不重建整层 */
+  renameLabel(l: Label) {
+    const e = this.labelEls.find((x) => x.src === l)
+    if (!e) return
+    e.el.textContent = placeName(l)
+    e.w = e.el.offsetWidth
+    e.h = e.el.offsetHeight
   }
 
   private buildLabels() {
@@ -774,11 +1025,11 @@ export class Scene3D {
       const el = document.createElement('div')
       el.className = `l3 l3-${l.kind}`
       el.textContent = placeName(l)
-      const x = (l.x / (w.W - 1) - 0.5) * SX
-      const z = (l.y / (w.H - 1) - 0.5) * this.SZ
+      const x = this.toX(l.x)
+      const z = this.toZ(l.y)
       const pos = new THREE.Vector3(x, this.labelY(l.kind, x, z), z)
       this.labelLayer.appendChild(el)
-      this.labelEls.push({ el, pos, kind: l.kind, w: 0, h: 0 })
+      this.labelEls.push({ el, pos, kind: l.kind, w: 0, h: 0, src: l })
     }
     for (const l of this.labelEls) {
       l.w = l.el.offsetWidth

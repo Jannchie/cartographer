@@ -6,48 +6,157 @@
 
 export type Ring = Float32Array // 交替 x, y（格坐标，格中心为整数）
 
-export function contours(field: ArrayLike<number>, W: number, H: number, level: number, closed = true): Ring[] {
-  // 外扩
+// 网格边 → 交点编号的表，跨调用复用（同一张场要追几十个等级）；空闲时全为 -1
+let edgeBuf = new Int32Array(0)
+function edgeMap(n: number) {
+  if (edgeBuf.length < n) edgeBuf = new Int32Array(n).fill(-1)
+  return edgeBuf
+}
+
+/**
+ * 为同一张场追多个等级时预先准备的网格：外扩只做一次，并按 B×B 格分块记下角点的最小/最大值，
+ * 追踪时整块跳过不跨越等级的区域。场在网格的生命期内不能被改写。
+ */
+export interface ContourGrid {
+  field: ArrayLike<number>
+  W: number
+  H: number
+  closed: boolean
+  g: Float32Array
+  /** 每块角点的最小/最大值；块内有 NaN 时为 ±Infinity（不跳过） */
+  bmin: Float32Array
+  bmax: Float32Array
+  BW: number
+}
+const B = 16
+
+export function contourGrid(field: ArrayLike<number>, W: number, H: number, closed = true): ContourGrid {
+  const g = padded(field, W, H, closed)
+  const P = closed ? 2 : 0
+  const GW = W + P * 2
+  const GH = H + P * 2
+  // 块 (bx, by) 覆盖格 [bx*B, bx*B+B)，用到的角点是 [bx*B, bx*B+B]
+  const BW = Math.ceil((GW - 1) / B)
+  const BH = Math.ceil((GH - 1) / B)
+  const bmin = new Float32Array(BW * BH)
+  const bmax = new Float32Array(BW * BH)
+  for (let by = 0; by < BH; by++) {
+    const y1 = Math.min(GH - 1, by * B + B)
+    for (let bx = 0; bx < BW; bx++) {
+      const x1 = Math.min(GW - 1, bx * B + B)
+      let mn = Infinity
+      let mx = -Infinity
+      let nan = false
+      for (let y = by * B; y <= y1; y++) {
+        for (let i = y * GW + bx * B, e = y * GW + x1; i <= e; i++) {
+          const v = g[i]
+          if (v < mn) mn = v
+          if (v > mx) mx = v
+          if (v !== v) nan = true
+        }
+      }
+      bmin[by * BW + bx] = nan ? -Infinity : mn
+      bmax[by * BW + bx] = nan ? Infinity : mx
+    }
+  }
+  return { field, W, H, closed, g, bmin, bmax, BW }
+}
+
+function padded(field: ArrayLike<number>, W: number, H: number, closed: boolean): Float32Array {
   const P = closed ? 2 : 0
   const GW = W + P * 2
   const GH = H + P * 2
   const g = new Float32Array(GW * GH)
   const LOW = -1e9
-  for (let y = 0; y < GH; y++) {
-    for (let x = 0; x < GW; x++) {
-      let v: number
-      if (closed && (x === 0 || y === 0 || x === GW - 1 || y === GH - 1)) v = LOW
-      else {
-        const sx = Math.min(W - 1, Math.max(0, x - P))
-        const sy = Math.min(H - 1, Math.max(0, y - P))
-        v = field[sy * W + sx]
+  if (closed && ArrayBuffer.isView(field)) {
+    // 按行整段拷贝：外圈 LOW，内圈复制边缘值
+    const src = field as unknown as Float32Array
+    for (let y = 0; y < GH; y++) {
+      const row = y * GW
+      if (y === 0 || y === GH - 1) {
+        g.fill(LOW, row, row + GW)
+        continue
       }
-      g[y * GW + x] = v
+      const s = Math.min(H - 1, Math.max(0, y - P)) * W
+      g[row] = LOW
+      g[row + 1] = src[s]
+      g.set(src.subarray(s, s + W), row + P)
+      g[row + P + W] = src[s + W - 1]
+      g[row + GW - 1] = LOW
+    }
+  } else {
+    for (let y = 0; y < GH; y++) {
+      for (let x = 0; x < GW; x++) {
+        let v: number
+        if (closed && (x === 0 || y === 0 || x === GW - 1 || y === GH - 1)) v = LOW
+        else {
+          const sx = Math.min(W - 1, Math.max(0, x - P))
+          const sy = Math.min(H - 1, Math.max(0, y - P))
+          v = field[sy * W + sx]
+        }
+        g[y * GW + x] = v
+      }
     }
   }
-  // 每条网格边上的交点：水平边 id = (y*GW+x)*2，竖直边 +1
-  const ptX = new Map<number, number>()
-  const ptY = new Map<number, number>()
+  return g
+}
+
+export function contours(field: ArrayLike<number>, W: number, H: number, level: number, closed = true, grid?: ContourGrid): Ring[] {
+  if (grid && (grid.field !== field || grid.W !== W || grid.H !== H || grid.closed !== closed)) grid = undefined
+  const P = closed ? 2 : 0
+  const GW = W + P * 2
+  const GH = H + P * 2
+  const g = grid ? grid.g : padded(field, W, H, closed)
+  // 每条网格边上的交点：水平边 id = (y*GW+x)*2，竖直边 +1。
+  // 交点按首次出现的顺序编号，坐标与邻接（每个交点最多连两个）存在按编号增长的类型化数组里
+  const ptOf = edgeMap(GW * GH * 2)
+  let cap = 1024
+  let ptX = new Float64Array(cap)
+  let ptY = new Float64Array(cap)
+  let nb0 = new Int32Array(cap)
+  let nb1 = new Int32Array(cap)
+  let eid = new Int32Array(cap)
+  let np = 0
   const edgePoint = (id: number, x0: number, y0: number, x1: number, y1: number, a: number, b: number) => {
-    if (!ptX.has(id)) {
+    let p = ptOf[id]
+    if (p < 0) {
+      if (np === cap) {
+        cap *= 2
+        const grow = <T extends Float64Array | Int32Array>(src: T, dst: T) => (dst.set(src), dst)
+        ptX = grow(ptX, new Float64Array(cap))
+        ptY = grow(ptY, new Float64Array(cap))
+        nb0 = grow(nb0, new Int32Array(cap))
+        nb1 = grow(nb1, new Int32Array(cap))
+        eid = grow(eid, new Int32Array(cap))
+      }
+      p = ptOf[id] = np++
+      eid[p] = id
       const t = (level - a) / (b - a)
-      ptX.set(id, x0 + (x1 - x0) * t - P)
-      ptY.set(id, y0 + (y1 - y0) * t - P)
+      ptX[p] = x0 + (x1 - x0) * t - P
+      ptY[p] = y0 + (y1 - y0) * t - P
+      nb0[p] = nb1[p] = -1
     }
-    return id
+    return p
   }
-  // 线段邻接：每个交点最多连两个
-  const link = new Map<number, number[]>()
+  const link = (a: number, b: number) => {
+    if (nb0[a] < 0) nb0[a] = b
+    else nb1[a] = b
+  }
   const addSeg = (a: number, b: number) => {
-    let la = link.get(a)
-    if (!la) link.set(a, (la = []))
-    la.push(b)
-    let lb = link.get(b)
-    if (!lb) link.set(b, (lb = []))
-    lb.push(a)
+    link(a, b)
+    link(b, a)
   }
   for (let y = 0; y < GH - 1; y++) {
+    const brow = grid ? ((y / B) | 0) * grid.BW : 0
     for (let x = 0; x < GW - 1; x++) {
+      // 仍按行优先扫描（交点编号顺序不变），只是整段跳过全在等级之上或之下的块
+      if (grid && (x & (B - 1)) === 0) {
+        const b = brow + ((x / B) | 0)
+        if (grid.bmax[b] < level || grid.bmin[b] >= level) {
+          x += B - 1
+          continue
+        }
+      }
       const i = y * GW + x
       const tl = g[i]
       const tr = g[i + 1]
@@ -55,73 +164,74 @@ export function contours(field: ArrayLike<number>, W: number, H: number, level: 
       const br = g[i + GW + 1]
       const c = (tl >= level ? 8 : 0) | (tr >= level ? 4 : 0) | (br >= level ? 2 : 0) | (bl >= level ? 1 : 0)
       if (c === 0 || c === 15) continue
-      const top = () => edgePoint(i * 2, x, y, x + 1, y, tl, tr)
-      const bottom = () => edgePoint((i + GW) * 2, x, y + 1, x + 1, y + 1, bl, br)
-      const left = () => edgePoint(i * 2 + 1, x, y, x, y + 1, tl, bl)
-      const right = () => edgePoint((i + 1) * 2 + 1, x + 1, y, x + 1, y + 1, tr, br)
       switch (c) {
         case 1:
         case 14:
-          addSeg(left(), bottom())
+          addSeg(edgePoint(i * 2 + 1, x, y, x, y + 1, tl, bl), edgePoint((i + GW) * 2, x, y + 1, x + 1, y + 1, bl, br))
           break
         case 2:
         case 13:
-          addSeg(bottom(), right())
+          addSeg(edgePoint((i + GW) * 2, x, y + 1, x + 1, y + 1, bl, br), edgePoint((i + 1) * 2 + 1, x + 1, y, x + 1, y + 1, tr, br))
           break
         case 3:
         case 12:
-          addSeg(left(), right())
+          addSeg(edgePoint(i * 2 + 1, x, y, x, y + 1, tl, bl), edgePoint((i + 1) * 2 + 1, x + 1, y, x + 1, y + 1, tr, br))
           break
         case 4:
         case 11:
-          addSeg(top(), right())
+          addSeg(edgePoint(i * 2, x, y, x + 1, y, tl, tr), edgePoint((i + 1) * 2 + 1, x + 1, y, x + 1, y + 1, tr, br))
           break
         case 6:
         case 9:
-          addSeg(top(), bottom())
+          addSeg(edgePoint(i * 2, x, y, x + 1, y, tl, tr), edgePoint((i + GW) * 2, x, y + 1, x + 1, y + 1, bl, br))
           break
         case 7:
         case 8:
-          addSeg(left(), top())
+          addSeg(edgePoint(i * 2 + 1, x, y, x, y + 1, tl, bl), edgePoint(i * 2, x, y, x + 1, y, tl, tr))
           break
         case 5:
         case 10: {
-          // 鞍点：按中心均值消歧
+          // 鞍点：按中心均值消歧（交点按连线顺序创建，保持编号顺序）
           const center = (tl + tr + bl + br) / 4 >= level
+          const left = edgePoint(i * 2 + 1, x, y, x, y + 1, tl, bl)
           if ((c === 5) === center) {
-            addSeg(left(), top())
-            addSeg(bottom(), right())
+            addSeg(left, edgePoint(i * 2, x, y, x + 1, y, tl, tr))
+            addSeg(edgePoint((i + GW) * 2, x, y + 1, x + 1, y + 1, bl, br), edgePoint((i + 1) * 2 + 1, x + 1, y, x + 1, y + 1, tr, br))
           } else {
-            addSeg(left(), bottom())
-            addSeg(top(), right())
+            addSeg(left, edgePoint((i + GW) * 2, x, y + 1, x + 1, y + 1, bl, br))
+            addSeg(edgePoint(i * 2, x, y, x + 1, y, tl, tr), edgePoint((i + 1) * 2 + 1, x + 1, y, x + 1, y + 1, tr, br))
           }
           break
         }
       }
     }
   }
+  // 复用的边表只复位用过的项
+  for (let p = 0; p < np; p++) ptOf[eid[p]] = -1
   // 串成折线
   const rings: Ring[] = []
-  const used = new Set<number>()
+  const used = new Uint8Array(np)
   const walk = (start: number) => {
     const pts: number[] = []
     let prev = -1
     let cur = start
     for (;;) {
-      used.add(cur)
-      pts.push(ptX.get(cur)!, ptY.get(cur)!)
-      const nb = link.get(cur)!
+      used[cur] = 1
+      pts.push(ptX[cur], ptY[cur])
       let next = -1
-      for (const n of nb) if (n !== prev && !used.has(n)) next = n
+      const a = nb0[cur]
+      const b = nb1[cur]
+      if (a >= 0 && a !== prev && !used[a]) next = a
+      if (b >= 0 && b !== prev && !used[b]) next = b
       if (next < 0) break
       prev = cur
       cur = next
     }
-    return pts
+    return Float32Array.from(pts)
   }
   // 先从端点（只有一个邻居）出发走开放折线，再处理闭合环
-  for (const [id, nb] of link) if (nb.length === 1 && !used.has(id)) rings.push(Float32Array.from(walk(id)))
-  for (const id of link.keys()) if (!used.has(id)) rings.push(Float32Array.from(walk(id)))
+  for (let p = 0; p < np; p++) if (nb1[p] < 0 && !used[p]) rings.push(walk(p))
+  for (let p = 0; p < np; p++) if (!used[p]) rings.push(walk(p))
   return rings
 }
 
