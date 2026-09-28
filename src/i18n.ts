@@ -10,18 +10,27 @@ export const LANGS: { id: Lang; label: string }[] = [
   { id: 'ja', label: '日本語' },
 ]
 
+const isLang = (s: string | null | undefined): s is Lang => s === 'zh' || s === 'en' || s === 'ja'
+
+/** 初始语言：链接里的 lang= 参数 > 上次手动选择 > 浏览器语言偏好列表 > 英文 */
 function detect(): Lang {
+  const q = /[?&]lang=([a-z]+)/.exec(location.hash + location.search)?.[1]
+  if (isLang(q)) return q
   try {
     const saved = localStorage.getItem('lang')
-    if (saved === 'zh' || saved === 'en' || saved === 'ja') return saved
+    if (isLang(saved)) return saved
   } catch {
     // 无痕模式等
   }
-  const nav = (typeof navigator !== 'undefined' ? navigator.language : 'zh').toLowerCase()
-  return nav.startsWith('ja') ? 'ja' : nav.startsWith('zh') ? 'zh' : 'en'
+  for (const l of navigator.languages?.length ? navigator.languages : [navigator.language]) {
+    const k = l.toLowerCase().slice(0, 2)
+    if (isLang(k)) return k
+  }
+  return 'en'
 }
 
 export let lang: Lang = typeof window !== 'undefined' ? detect() : 'zh'
+if (typeof document !== 'undefined') document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang
 
 /** 翻译：key 为中文原文；{name} 形式的占位符用 vars 替换 */
 export function t(key: string, vars?: Record<string, string | number>): string {

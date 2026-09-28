@@ -10,14 +10,14 @@ const plates = [
     no: 'I',
     title: '世界地图',
     desc: '板块造山、侵蚀水系、气候与群系。3D 沙盘、六种纸图风格，并可在编辑视图里改地形、气候、大洲与地点。',
-    img: '/plates/world.webp',
+    img: `${import.meta.env.BASE_URL}plates/world.webp`,
   },
   {
     go: 'settlement' as const,
     no: 'II',
     title: '聚落地图',
     desc: '从小村到大城的街区级平面图：城墙城门、街巷街坊、房屋院落、河桥港口与农田；西式或东方，写实或奇幻。可继承世界地图上某座城镇的环境。',
-    img: '/plates/town.webp',
+    img: `${import.meta.env.BASE_URL}plates/town.webp`,
   },
 ]
 </script>
