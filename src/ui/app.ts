@@ -1,4 +1,6 @@
 import { reactive, watch } from 'vue'
+// 先定下界面语言：它要读地址里的 lang= 参数，而下面启动时会把地址规整掉
+import '../i18n'
 
 export type Module = 'home' | 'world' | 'settlement'
 
