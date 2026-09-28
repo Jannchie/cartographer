@@ -107,6 +107,19 @@ if (want('cultures')) {
   }
 }
 
+// —— 西方的两种规划城：罗马营寨城、中世纪方格新城 ——
+if (want('plans')) {
+  const cases: [string, Record<string, unknown>][] = [
+    ['castrum', { seed: 'aquila', culture: 'western', plan: 'castrum', planStrength: 0.7, river: true, walls: 'stone', population: 9000 }],
+    ['bastide', { seed: 'monpazier', culture: 'western', plan: 'bastide', planStrength: 0.8, hills: true, walls: 'stone', population: 5000 }],
+  ]
+  for (const [id, p] of cases) {
+    const st = settle(p)
+    const crop = cityCrop(st)
+    for (const lg of LANGS) save(draw(st, 'color', 1000, crop, { lang: lg }), lg, `settlement-${id}`)
+  }
+}
+
 // —— 同一座城的八种皮肤（城心特写） ——
 if (want('skins')) {
   const st = settle({ seed: 'thornwick', size: 'town', culture: 'western', coast: true, walls: 'stone', population: 5000 })
