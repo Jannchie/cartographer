@@ -1,6 +1,6 @@
-// 30 秒演示视频（1920×1080，30 fps）：npx tsx scripts/demo.ts <out.mp4> [frames3d 目录] [字体目录]
+// 30 秒演示视频（1920×1080，30 fps）：npx tsx scripts/demo.ts <out.mp4> [frames3d 目录] [字体目录] [--lang=en|zh] [--audio=配乐.wav]
 // 地图镜头逐帧离线渲染；3D 航拍用浏览器里逐帧截下的 JPEG（目录里 0000.jpg…，旁边 meta.json 记着每帧的淡出量）。
-// 原始像素直接喂给 ffmpeg，需要系统里有 ffmpeg。
+// --lang 决定地图注记与字幕的语言；--audio 给了就把配乐混进成片（配乐由 scripts/demo-bgm.py 合成）。原始像素直接喂给 ffmpeg，需要系统里有 ffmpeg。
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,14 +10,19 @@ import { createCanvas, DOMMatrix, GlobalFonts, ImageData, loadImage, Path2D, typ
 ;(globalThis as any).DOMMatrix = DOMMatrix
 ;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
 
-const OUT = process.argv[2] ?? 'demo.mp4'
-const FRAMES3D = process.argv[3]
-const FONTS = process.argv[4]
+const args = process.argv.slice(2)
+const flag = (k: string) => args.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3)
+const [OUT = 'demo.mp4', FRAMES3D, FONTS] = args.filter((a) => !a.startsWith('--'))
+const LANG = (flag('lang') ?? 'en') as 'en' | 'zh'
+const AUDIO = flag('audio')
+const REPO = 'github.com/Jannchie/cartographer'
 // 地图与字幕用的字体：给了目录就注册（文件名随意，按字体里的族名注册）
 if (FONTS && existsSync(FONTS)) for (const f of readdirSync(FONTS)) if (/\.(ttf|otf)$/i.test(f)) GlobalFonts.registerFromPath(join(FONTS, f))
 for (const [file, alias] of [
   ['C:/Windows/Fonts/GeorgiaPro-Light.ttf', 'Georgia Pro Light'],
   [`${process.env.LOCALAPPDATA}/Microsoft/Windows/Fonts/BerkeleyMono-Regular.otf`, 'Demo Mono'],
+  // 中文统一用鸿蒙字体（Cormorant 与 Berkeley Mono 都不含中文，中文字形落到这里）
+  [`${process.env.LOCALAPPDATA}/Microsoft/Windows/Fonts/HarmonyOS_Sans_SC_Regular.ttf`, 'Demo CJK'],
 ] as const)
   if (existsSync(file)) GlobalFonts.registerFromPath(file, alias)
 
@@ -36,9 +41,48 @@ const W = 1920
 const H = 1080
 const FPS = 30
 const PAPER = '#f2ecdf'
-const ACCENT = '#6f9c8f'
 const measurer = createCanvas(10, 10).getContext('2d') as any
-setLang('en')
+setLang(LANG)
+
+// —— 文案 ——
+const TX = {
+  en: {
+    intro: ['Cartographer', 'A whole world from one seed'],
+    styles: 'Six paper-map styles',
+    styleNames: ['Physical', 'Fantasy', 'Nautical', 'Teyvat', 'Ink wash', 'Topographic'],
+    people: (n: number) => `${n.toLocaleString('en')} people`,
+    grow: 'Towns grow',
+    cultures: [
+      ['Western', 'Organic harbour town'],
+      ['Roman castrum', 'Planned military town'],
+      ['Medieval bastide', 'Planned new town'],
+      ['Chinese', 'Walled-ward capital'],
+      ['Japanese', 'Castle town'],
+      ['Islamic', 'Medina'],
+    ],
+    skins: 'Eight skins',
+    skinNames: ['Parchment', 'Colour', 'Engraving', 'Blueprint', 'Kiriezu', 'Nolli plan', 'Gazetteer', 'Survey'],
+    tagline: 'Procedural worlds and town plans from one seed',
+  },
+  zh: {
+    intro: ['Cartographer', '由单个种子生成整个世界'],
+    styles: '六种纸质地图风格',
+    styleNames: ['自然地理', '奇幻羊皮', '航海图', '提瓦特', '水墨', '等高线'],
+    people: (n: number) => `人口 ${n.toLocaleString('zh')}`,
+    grow: '城镇连续扩张',
+    cultures: [
+      ['西式', '有机生长的港城'],
+      ['罗马营寨城', '规划的军事城镇'],
+      ['中世纪方格新城', '规划的设防新镇'],
+      ['东方', '里坊制都城'],
+      ['和风', '城下町'],
+      ['伊斯兰', '麦地那'],
+    ],
+    skins: '八种地图皮肤',
+    skinNames: ['羊皮纸', '彩绘', '版画', '蓝图', '切绘图', '图底铜版', '方志舆图', '测绘图'],
+    tagline: '由单个种子生成世界地图与城镇平面图',
+  },
+}[LANG]
 
 // —— 素材 ——
 
@@ -48,7 +92,7 @@ const cityBox = (st: any) => bboxOf(st.wards.filter((w: any) => w.inner).flatMap
 
 /** 聚落图的一块（世界坐标中心 c、宽 w 米，16:9），按 outW 像素宽渲染 */
 function settleShot(st: any, style: string, c: P, w: number, outW: number, opts: Record<string, unknown> = {}): Canvas {
-  const list = buildSettlementVector(st, style as any, { labels: true, contours: true, lang: 'en', ...opts } as any, measurer)
+  const list = buildSettlementVector(st, style as any, { labels: true, contours: true, lang: LANG, ...opts } as any, measurer)
   const S = list.MW / st.width
   const k = outW / (w * S)
   const cv = createCanvas(outW, Math.round((outW * H) / W))
@@ -72,8 +116,8 @@ console.log('world…')
 const world = generateWorld({ ...DEFAULT_PARAMS, seed: 'aurelia' })
 const rivers = smoothRivers(world)
 /** 纸图只留图框里的地图本身：各风格边距不同，裁掉后同一取景才逐像素对齐 */
-function atlas(s: string, S: number): Canvas {
-  const full = renderAtlas(world, rivers, s as any, { labels: true, contours: true, graticule: true }, S) as unknown as Canvas
+function atlas(s: string, S: number, labels = true): Canvas {
+  const full = renderAtlas(world, rivers, s as any, { labels, contours: true, graticule: true }, S) as unknown as Canvas
   const MW = world.W * S
   const MH = world.H * S
   const M = (full.width - MW) / 2
@@ -81,26 +125,22 @@ function atlas(s: string, S: number): Canvas {
   c.getContext('2d').drawImage(full as any, M, M, MW, MH, 0, 0, MW, MH)
   return c
 }
-const physical = atlas('physical', 3)
-const STYLES: [string, string][] = [
-  ['fantasy', 'Fantasy'],
-  ['nautical', 'Nautical'],
-  ['teyvat', 'Teyvat'],
-  ['ink', 'Ink wash'],
-  ['topo', 'Topographic'],
-]
-const styleShots = STYLES.map(([id, name]) => ({ name, img: atlas(id, 2) }))
-const mapShots = [{ name: 'Physical', img: physical }, ...styleShots]
+const mapShots = ['physical', 'fantasy', 'nautical', 'teyvat', 'ink', 'topo'].map((id, i) => ({ name: TX.styleNames[i], img: atlas(id, i ? 2 : 3) }))
+// 片尾定格的底图：不标注记，免得和标题抢
+const endMap = atlas('physical', 2, false)
 
 console.log('cultures…')
-const CULTURES: [string, string, Record<string, unknown>][] = [
-  ['Western', 'Organic harbour town', { seed: 'vale', culture: 'western', coast: true, walls: 'stone', population: 9000 }],
-  ['Chinese', 'Walled-ward capital', { seed: 'chang', culture: 'eastern', plan: 'lifang', capital: true, planStrength: 0.8, population: 13000 }],
-  ['Japanese', 'Castle town', { seed: 'kaga', culture: 'wa', plan: 'jokamachi', river: true, hills: true, population: 14000 }],
-  ['Islamic', 'Medina', { seed: 'qasr', culture: 'islamic', plan: 'medina', hills: true, population: 12000 }],
+const CULTURES: Record<string, unknown>[] = [
+  { seed: 'vale', culture: 'western', coast: true, walls: 'stone', population: 9000 },
+  { seed: 'aquila', culture: 'western', plan: 'castrum', planStrength: 0.7, river: true, walls: 'stone', population: 9000 },
+  { seed: 'monpazier', culture: 'western', plan: 'bastide', planStrength: 0.8, hills: true, walls: 'stone', population: 5000 },
+  { seed: 'chang', culture: 'eastern', plan: 'lifang', capital: true, planStrength: 0.8, population: 13000 },
+  { seed: 'kaga', culture: 'wa', plan: 'jokamachi', river: true, hills: true, population: 14000 },
+  { seed: 'qasr', culture: 'islamic', plan: 'medina', hills: true, population: 12000 },
 ]
-const CULTURE_D = 7.5 / 4
-const cultureShots = CULTURES.map(([name, sub, p]) => {
+const CULTURE_D = 1.6
+const cultureShots = CULTURES.map((p, i) => {
+  const [name, sub] = TX.cultures[i]
   const st = settle(p)
   const f = frameCity(st, 1.2)
   // 都城：取景中心往宫城挪一半，再以宫城为锚点轻推，宫城在画面里原地不动、始终完整
@@ -115,17 +155,8 @@ const cultureShots = CULTURES.map(([name, sub, p]) => {
 console.log('skins…')
 const skinTown = settle({ seed: 'thornwick', culture: 'western', coast: true, walls: 'stone', population: 5000 })
 const skinFrame = frameCity(skinTown, 0.75)
-const SKINS: [string, string][] = [
-  ['parchment', 'Parchment'],
-  ['color', 'Colour'],
-  ['ink', 'Engraving'],
-  ['blueprint', 'Blueprint'],
-  ['kiriezu', 'Kiriezu'],
-  ['nolli', 'Nolli plan'],
-  ['fangzhi', 'Gazetteer'],
-  ['survey', 'Survey'],
-]
-const skinShots = SKINS.map(([id, name]) => ({ name, img: settleShot(skinTown, id, skinFrame.c, skinFrame.w, W) }))
+const SKINS = ['parchment', 'color', 'ink', 'blueprint', 'kiriezu', 'nolli', 'fangzhi', 'survey']
+const skinShots = SKINS.map((id, i) => ({ name: TX.skinNames[i], img: settleShot(skinTown, id, skinFrame.c, skinFrame.w, W) }))
 
 console.log('growth…')
 // 同一个种子逐步加人口；镜头以最终城区为准，图幅还小的时候按图幅收（看起来是镜头随城拉远）
@@ -177,7 +208,10 @@ function spaced(g: SKRSContext2D, s: string, x: number, y: number, track: number
   }
 }
 
-/** 字幕：底部渐暗遮罩，左下角一行等宽小标签（前面一小段铜绿短线）加大标题；t 是字幕出现后的秒数（淡入并上移） */
+const SERIF = '"Cormorant Garamond", "Demo CJK", "Georgia Pro Light", Georgia, serif'
+const MONO = '"Demo Mono", "Demo CJK", Consolas, monospace'
+
+/** 字幕：底部渐暗遮罩，左下角一行等宽小标签加大标题；t 是字幕出现后的秒数（淡入并上移） */
 function caption(g: SKRSContext2D, kicker: string, title: string, t: number) {
   const scrim = g.createLinearGradient(0, H * 0.5, 0, H)
   scrim.addColorStop(0, 'rgba(18, 15, 12, 0)')
@@ -189,12 +223,10 @@ function caption(g: SKRSContext2D, kicker: string, title: string, t: number) {
   const dy = (1 - a) * 14
   const x = 112
   g.globalAlpha = a
-  g.fillStyle = ACCENT
-  g.fillRect(x, H - 195 + dy, 44, 4)
-  g.font = '22px "Demo Mono", Consolas, monospace'
+  g.font = `22px ${MONO}`
   g.fillStyle = 'rgba(242, 236, 223, 0.92)'
-  spaced(g, kicker.toUpperCase(), x + 64, H - 186 + dy, 5)
-  g.font = '500 92px "Cormorant Garamond", "Georgia Pro Light", Georgia, serif'
+  spaced(g, kicker.toUpperCase(), x, H - 186 + dy, 5)
+  g.font = `500 ${LANG === 'zh' ? 76 : 92}px ${SERIF}`
   g.fillStyle = PAPER
   g.shadowColor = 'rgba(0, 0, 0, 0.35)'
   g.shadowBlur = 18
@@ -219,11 +251,51 @@ function sequence(g: SKRSContext2D, t: number, items: Shot[], dur: number, fade:
   return { i, lt }
 }
 
+const iconSvg = readFileSync('public/favicon.svg', 'utf8')
+const ICON = 132
+const icon = await loadImage(Buffer.from(iconSvg.replace('<svg ', `<svg width="${ICON}" height="${ICON}" `)))
+
+function endCard(g: SKRSContext2D, t: number) {
+  cover(g, endMap, 1.24 + 0.03 * ease(t / 3), 0.45, 0.5)
+  const scrim = g.createLinearGradient(0, 0, W * 0.7, 0)
+  scrim.addColorStop(0, 'rgba(18, 15, 12, 0.9)')
+  scrim.addColorStop(0.5, 'rgba(18, 15, 12, 0.68)')
+  scrim.addColorStop(1, 'rgba(18, 15, 12, 0)')
+  g.fillStyle = scrim
+  g.fillRect(0, 0, W, H)
+  const x = 150
+  // 各元素错开淡入并上移
+  const step = (k: number) => {
+    const a = ease((t - 0.25 - k * 0.18) / 0.45)
+    g.globalAlpha = a
+    return (1 - a) * 16
+  }
+  let dy = step(0)
+  g.drawImage(icon, x, 250 + dy, ICON, ICON)
+  dy = step(1)
+  g.fillStyle = PAPER
+  g.shadowColor = 'rgba(0, 0, 0, 0.35)'
+  g.shadowBlur = 20
+  g.font = `500 160px ${SERIF}`
+  g.fillText('Cartographer', x - 8, 560 + dy)
+  g.shadowBlur = 0
+  dy = step(2)
+  g.fillStyle = 'rgba(242, 236, 223, 0.92)'
+  g.font = LANG === 'zh' ? `400 38px ${SERIF}` : `italic 400 44px ${SERIF}`
+  g.fillText(TX.tagline, x, 640 + dy)
+  dy = step(3)
+  g.font = `26px ${MONO}`
+  g.fillStyle = 'rgba(242, 236, 223, 0.8)'
+  spaced(g, REPO, x, 760 + dy, 3)
+  g.globalAlpha = 1
+}
+
 type Scene = { d: number; draw: (g: SKRSContext2D, t: number) => void | Promise<void> }
 const img3d = new Map<number, Image>()
 const scenes: Scene[] = []
 if (frames3d.length) {
-  const n = Math.min(frames3d.length, 270)
+  // 慢平移只取前 6 秒
+  const n = Math.min(frames3d.length, 180)
   scenes.push({
     d: n / FPS,
     draw: async (g, t) => {
@@ -238,7 +310,7 @@ if (frames3d.length) {
       // 运镜切镜时的黑场
       const k = fades[f] ?? 0
       if (k > 0) (g.fillStyle = `rgba(0, 0, 0, ${k})`), g.fillRect(0, 0, W, H)
-      caption(g, 'Cartographer', 'A whole world from one seed', t - 0.6)
+      caption(g, TX.intro[0], TX.intro[1], t - 0.6)
     },
   })
 }
@@ -248,7 +320,7 @@ scenes.push(
     d: 4.8,
     draw: (g, t) => {
       const { i, lt } = sequence(g, t, mapShots, 0.8, 0.2, (j, l) => 1.05 * Math.pow(1.4, (j * 0.8 + l) / 4.8), 0.46, 0.5)
-      caption(g, 'Six paper-map styles', mapShots[i].name, i === 0 ? lt - 0.2 : 1)
+      caption(g, TX.styles, mapShots[i].name, i === 0 ? lt - 0.2 : 1)
     },
   },
   {
@@ -256,7 +328,7 @@ scenes.push(
     draw: (g, t) => {
       const k = Math.min(growShots.length - 1, Math.floor(ease(t / 2.3) * growShots.length))
       cover(g, growShots[k].img)
-      caption(g, `${growShots[k].pop.toLocaleString('en')} people`, 'Towns grow', t)
+      caption(g, TX.people(growShots[k].pop), TX.grow, t)
     },
   },
   {
@@ -270,8 +342,13 @@ scenes.push(
     d: 5,
     draw: (g, t) => {
       const { i } = sequence(g, t, skinShots, 5 / skinShots.length, 0.12, (j, lt) => 1 + (0.08 * (j * (5 / skinShots.length) + lt)) / 5)
-      caption(g, 'Eight skins', skinShots[i].name, t)
+      caption(g, TX.skins, skinShots[i].name, t)
     },
+  },
+  {
+    // 片尾定格：与仓库横幅同一构图，图标、标题、说明与项目地址依次淡入
+    d: 3,
+    draw: (g, t) => endCard(g, t),
   },
 )
 
@@ -281,7 +358,8 @@ const X = 0.3
 const total = scenes.reduce((s, x) => s + x.d, 0)
 const frames = Math.round(total * FPS)
 console.log(`encoding ${frames} frames (${total.toFixed(1)}s) → ${OUT}`)
-const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${W}x${H}`, '-r', String(FPS), '-i', '-', '-c:v', 'libx264', '-preset', 'slow', '-crf', '19', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', OUT], { stdio: ['pipe', 'inherit', 'inherit'] })
+const audio = AUDIO ? ['-i', AUDIO, '-map', '0:v', '-map', '1:a', '-c:a', 'aac', '-b:a', '192k', '-shortest'] : []
+const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${W}x${H}`, '-r', String(FPS), '-i', '-', ...audio, '-c:v', 'libx264', '-preset', 'slow', '-crf', '19', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', OUT], { stdio: ['pipe', 'inherit', 'inherit'] })
 const write = (buf: Buffer) => new Promise<void>((res) => (ff.stdin.write(buf) ? res() : ff.stdin.once('drain', res)))
 const g = out.getContext('2d')
 const lg = layer.getContext('2d')
