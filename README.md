@@ -1,14 +1,8 @@
-<p align="center"><img src="docs/images/logo.png" alt="Cartographer" width="96"></p>
-
-<h1 align="center">Cartographer</h1>
+<p align="center"><img src="docs/images/banner.jpg" alt="Cartographer" width="100%"></p>
 
 <p align="center">Procedural generation of a complete fictional world from a single seed: continents formed by plate tectonics, erosion, climate and drainage,<br>and a street-level plan for each settlement on them.</p>
 
 <p align="center"><b>English</b> · <a href="README.zh-CN.md">中文</a> · <a href="README.ja.md">日本語</a></p>
-
-<p align="center">
-  <img src="docs/images/en/world-physical.webp" alt="World generated from seed aurelia, physical style" width="100%">
-</p>
 
 Cartographer simulates plate collision, fluvial erosion, monsoon precipitation and river-network formation in sequence, producing terrain whose features follow from the processes that formed them, and renders the result as a paper map or a 3D diorama. Selecting a town on the world map generates its street plan: streets are laid out along the terrain, and walls, palaces, shrines, markets, harbours and fields are arranged according to the conventions of the town's culture.
 

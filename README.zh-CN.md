@@ -1,14 +1,8 @@
-<p align="center"><img src="docs/images/logo.png" alt="Cartographer" width="96"></p>
-
-<h1 align="center">Cartographer</h1>
+<p align="center"><img src="docs/images/banner.jpg" alt="Cartographer" width="100%"></p>
 
 <p align="center">由单个种子生成完整的虚构世界：经板块造山、侵蚀、气候与水系推演形成的大陆，<br>以及大陆上各城镇的街区级平面图。</p>
 
 <p align="center"><a href="README.md">English</a> · <b>中文</b> · <a href="README.ja.md">日本語</a></p>
-
-<p align="center">
-  <img src="docs/images/zh/world-physical.webp" alt="种子 aurelia 生成的世界，自然地理风格" width="100%">
-</p>
 
 Cartographer 依次模拟板块碰撞、流水侵蚀、季风降水与河网汇流，生成成因可解释的大陆地形，并以纸质地图或 3D 沙盘呈现。选择世界地图上的任一城镇即可生成其街区平面图：街巷依地形布设，城墙、宫殿、寺社、市集、港口与农田按所属文明的形制配置。
 

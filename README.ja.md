@@ -1,14 +1,8 @@
-<p align="center"><img src="docs/images/logo.png" alt="Cartographer" width="96"></p>
-
-<h1 align="center">Cartographer</h1>
+<p align="center"><img src="docs/images/banner.jpg" alt="Cartographer" width="100%"></p>
 
 <p align="center">単一のシードから架空の世界全体を生成する。プレート造山・侵食・気候・水系の推演により形成される大陸と、<br>大陸上の各集落の街区レベルの平面図。</p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a> · <b>日本語</b></p>
-
-<p align="center">
-  <img src="docs/images/ja/world-physical.webp" alt="シード aurelia から生成した世界、自然地理スタイル" width="100%">
-</p>
 
 Cartographer はプレートの衝突、河川侵食、モンスーン降水、河川網の形成を順に模擬し、成因と整合する大陸地形を生成して、紙の地図または 3D ジオラマとして描画する。世界地図上の町を選択すると、その街区図が生成される。街路は地形に沿って配置され、城壁・宮殿・寺社・市場・港湾・田畑は当該文明の形式に従って配置される。
 
