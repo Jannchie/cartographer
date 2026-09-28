@@ -1,9 +1,9 @@
 import { bboxOf, chaikin, dist, LineIndex, pointInPoly, polylineLength, resample, segDist, segIntersect, signedArea, type P } from './geom'
 import { simplify } from '../render/atlas/svg/contour'
 import { MinHeap } from '../gen/util'
-import { rngAt, type Ctx } from './ctx'
-import type { Wall } from './types'
-import { addRoad } from './roads'
+import { memo, rngAt, type Ctx } from './ctx'
+import type { Road, Wall } from './types'
+import { addRoad, nearestRoad, through } from './roads'
 import { touchesSea, type TerrainResult } from './terrain'
 import { demolish, drop, removable } from './undo'
 
@@ -141,6 +141,97 @@ export function insetLoop(loop: P[], d: number): P[] {
   })
 }
 
+// —————————————————————— 登记城墙 ——————————————————————
+
+/**
+ * 墙的用途 → 墙脚两侧让出的空地（墙厚一半以外再留几米，登记成 'wall' 走廊，房子、树让开）。
+ * null 不登记：城堡、宫城、卡斯巴里的殿宇、房间紧贴着墙盖（要登记的话由盖完的地方自己登记，见 wallCorridor）
+ */
+export const WALL_CLEAR = {
+  /** 城墙：城内的环城路、城外的缓冲带 */
+  city: { stone: 6, palisade: 4 },
+  /** 瓮城 */
+  barbican: 3,
+  /** 老城墙的残段 */
+  remnant: 3,
+  /** 形制城市的墙（条坊的罗城、城下町的内郭） */
+  plan: 1.5,
+  /** 庄园、里巴特这类小院子的围墙（房间先盖、墙后登记） */
+  compound: 1,
+  /** 城堡、宫城、卡斯巴 */
+  keep: null,
+} as const
+export type WallRole = keyof typeof WALL_CLEAR
+/** 护城河的水带两侧再让出的空地 */
+const MOAT_CLEAR = 1.5
+
+/** 登记墙的走廊：实心的墙段两侧各让出 墙厚 / 2 + clear 米；skip 的墙段（起点在门口附近等）不登记 */
+export function wallCorridor(ctx: Ctx, w: Wall, clear: number, skip?: (a: P) => boolean) {
+  const n = w.loop.length
+  for (let i = 0; i < n; i++) if (w.solid[i] && !skip?.(w.loop[i])) ctx.corridors.add([w.loop[i], w.loop[(i + 1) % n]], w.thickness / 2 + clear, 'wall')
+}
+
+/** 登记护城河的走廊 */
+export function moatCorridor(ctx: Ctx, moat: NonNullable<Wall['moat']>) {
+  for (const r of moat.runs) ctx.corridors.add(r, moat.width / 2 + MOAT_CLEAR, 'wall')
+}
+
+/**
+ * 筑一道墙：塔楼先落到干地上（dryTowers），加进输出，按用途登记墙（与已经挖好的护城河）的走廊。
+ * gateGap：门口这么远以内的墙段不登记走廊（穿门的大街两旁照常盖房子）。返回这道墙
+ */
+export function addWall(ctx: Ctx, w: Wall, role: WallRole, o: { gateGap?: number } = {}): Wall {
+  dryTowers(ctx, w)
+  ctx.out.walls.push(w)
+  const c = WALL_CLEAR[role]
+  const clear = c === null ? null : typeof c === 'number' ? c : c[w.kind]
+  const gap = o.gateGap
+  if (clear !== null) wallCorridor(ctx, w, clear, gap ? (a) => w.gates.some((g) => dist(a, g.p) <= gap) : undefined)
+  if (w.moat) moatCorridor(ctx, w.moat)
+  return w
+}
+
+/**
+ * 塔楼只立在干地上（离水超过塔的半径再留一点）：落水的塔（多是临水断口两端的桥头塔、河口处的拐角塔）
+ * 沿实心墙段挪回岸上最近的地方（不挤到门洞、别的塔上），附近没有干地就不设。
+ */
+function dryTowers(ctx: Ctx, w: Wall) {
+  const { T } = ctx
+  if (!w.towers.length) return
+  const r = w.thickness * (w.kind === 'stone' ? 1.25 : 1.3)
+  const need = r + 0.5
+  const gateGap = w.kind === 'stone' ? 16 : 10
+  const n = w.loop.length
+  const out: P[] = []
+  // 挪过来的塔不压到别的塔上
+  const free = (q: P) => !out.some((o) => dist(o, q) < r * 2 + 1) && !w.towers.some((o) => T.waterAt(o) > need && dist(o, q) < r * 2 + 1)
+  for (const t of w.towers) {
+    if (T.waterAt(t) > need) {
+      out.push(t)
+      continue
+    }
+    let best: P | null = null
+    let bd = 16
+    for (let i = 0; i < n; i++) {
+      if (!w.solid[i]) continue
+      const a = w.loop[i]
+      const b = w.loop[(i + 1) % n]
+      if (segDist(t, a, b).d > bd) continue
+      const m = Math.max(1, Math.ceil(dist(a, b)))
+      for (let k = 0; k <= m; k++) {
+        const q: P = [a[0] + ((b[0] - a[0]) * k) / m, a[1] + ((b[1] - a[1]) * k) / m]
+        const d = dist(q, t)
+        if (d < bd && T.waterAt(q) > need && free(q) && !w.gates.some((g) => dist(g.p, q) < gateGap)) {
+          bd = d
+          best = q
+        }
+      }
+    }
+    if (best) out.push(best)
+  }
+  w.towers = out
+}
+
 /**
  * 沿闭合环筑墙：临水处断开，干道穿墙处开城门，拐角与长墙段上设塔楼，墙两侧留出空地（走廊）。bastions：棱堡墙；barbicans：最多加几座瓮城；moat：挖护城河；
  * keep：只筑满足的部分（保留的内城墙只留新墙里面的那段），别处断开，那里也不设塔、不开门。
@@ -253,10 +344,7 @@ export function wallFromLoop(
     }
   }
   const thickness = kind === 'stone' ? (ctx.p.size === 'city' ? 5 : 4) : 2
-  const wall: Wall = { loop, solid, towers, gates: gates.map(({ p, angle }) => ({ p, angle })), kind, thickness }
-  ctx.out.walls.push(wall)
-  // 城墙两侧留出空地（城内的环城路、城外的缓冲带）
-  for (let i = 0; i < loop.length; i++) if (solid[i]) ctx.corridors.add([loop[i], loop[(i + 1) % loop.length]], thickness / 2 + (kind === 'stone' ? 6 : 4), 'wall')
+  const wall = addWall(ctx, { loop, solid, towers, gates: gates.map(({ p, angle }) => ({ p, angle })), kind, thickness }, 'city')
   // 城门名按它在城的哪一面（相对墙圈中心的方位），不按穿墙那段路的走向（路可能斜着进城）
   const wc = loop.reduce((a, q) => [a[0] + q[0] / loop.length, a[1] + q[1] / loop.length], [0, 0] as P)
   for (const g of gates) ctx.out.landmarks.push({ p: g.p, name: ctx.namer.gate(Math.atan2(g.p[1] - wc[1], g.p[0] - wc[0])), kind: 'gate' })
@@ -368,8 +456,9 @@ function moatOf(ctx: Ctx, wall: Wall, barbicans: P[]): Wall['moat'] {
       }
     if (best) bridges.push({ p: best, angle: g.angle })
   }
-  for (const r of runs) ctx.corridors.add(r, width / 2 + 1.5, 'wall')
-  return { runs, width, bridges }
+  const moat = { runs, width, bridges }
+  moatCorridor(ctx, moat)
+  return moat
 }
 
 /**
@@ -434,9 +523,7 @@ function barbican(ctx: Ctx, gp: P, loop: P[], road: P[], thickness: number): boo
   // 最后一条边（B → A）贴着城墙，不画
   const solid = wl.map((_, k) => k < wl.length - 1)
   const towers = round ? [wl[0], wl[wl.length - 1]] : [wl[1], wl[wl.length - 2]].filter((q) => q !== gate!.p)
-  const th = thickness * 0.85
-  ctx.out.walls.push({ loop: wl, solid, towers, gates: [{ p: gate.p, angle: gate.angle }], kind: 'stone', thickness: th })
-  ctx.corridors.add(wl, th / 2 + 3, 'wall')
+  addWall(ctx, { loop: wl, solid, towers, gates: [{ p: gate.p, angle: gate.angle }], kind: 'stone', thickness: thickness * 0.85 }, 'barbican')
   ctx.occ.add(outline)
   return true
 }
@@ -446,19 +533,10 @@ function barbican(ctx: Ctx, gp: P, loop: P[], road: P[], thickness: number): boo
 /** 门口离路网多近算接上了（米，减去路面半宽） */
 export const GATE_REACH = 6
 
-/** q 到路网（小径、台阶除外）的净距：减去路面半宽；within 只看这么远以内的路段 */
-export function roadGap(ctx: Ctx, q: P, within = Infinity): number {
-  let best = Infinity
-  for (const r of ctx.out.roads) {
-    if (r.kind === 'path' || r.kind === 'stair') continue
-    for (let i = 0; i + 1 < r.line.length; i++) {
-      const a = r.line[i]
-      const b = r.line[i + 1]
-      if (Math.min(a[0], b[0]) > q[0] + within || Math.max(a[0], b[0]) < q[0] - within || Math.min(a[1], b[1]) > q[1] + within || Math.max(a[1], b[1]) < q[1] - within) continue
-      best = Math.min(best, segDist(q, a, b).d - r.width / 2)
-    }
-  }
-  return best
+/** 门口接上了哪些路：能走车马的路，或者专给门修的门前街、上山的小路 */
+export const gateAccess = (ctx: Ctx) => {
+  const own = gateStreets(ctx)
+  return (r: Road) => through(r) || own.has(r)
 }
 
 /** 墙圈第 k 条边上 p 处朝外的单位法向 */
@@ -570,7 +648,7 @@ function routeGate(ctx: Ctx, w: Wall, gate: P, movable: boolean, R = 200): GateR
     if (pointInPoly(q, w.loop)) extra[k] = Infinity
   })
   for (const r of ctx.out.roads) {
-    if (r.kind === 'path' || r.kind === 'stair') continue
+    if (!through(r)) continue
     for (let s = 0; s + 1 < r.line.length; s++) line(r.line[s], r.line[s + 1], r.width / 2 + 0.5, (k) => (road[k] = 1))
   }
   // 起点：门口外一步；可挪门时墙上每隔几米都是候选门位（离拐角留出余地）
@@ -648,23 +726,13 @@ function routeGate(ctx: Ctx, w: Wall, gate: P, movable: boolean, R = 200): GateR
   cells.reverse()
   const s0 = starts[from[goal]]
   // 终点落到那条路的中线上
-  let end = cells[cells.length - 1]
-  let bd = Infinity
-  const e0 = end
-  for (const r of ctx.out.roads) {
-    if (r.kind === 'path' || r.kind === 'stair') continue
-    for (let s = 0; s + 1 < r.line.length; s++) {
-      const a = r.line[s]
-      const b = r.line[s + 1]
-      const { d, t } = segDist(e0, a, b)
-      if (d < bd) {
-        bd = d
-        end = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
-      }
-    }
-  }
+  const e0 = cells[cells.length - 1]
+  const end = nearestRoad(ctx, e0)?.p ?? e0
   const out: P[] = [s0.p, [s0.p[0] + s0.n[0] * step0, s0.p[1] + s0.n[1] * step0], ...cells.slice(1, -1), end]
-  return { p: s0.p, n: s0.n, line: fromF32(simplify(toF32(out), 1.2)), cost: dval[goal] }
+  // 简化会切角：切进水里（护城河、河岸）就用没简化的折线
+  const simp = fromF32(simplify(toF32(out), 1.2))
+  const wet = (l: P[]) => resample(l, 1).some((q) => T.waterAt(q) < 0.5)
+  return { p: s0.p, n: s0.n, line: wet(simp) ? out : simp, cost: dval[goal] }
 }
 
 /**
@@ -672,12 +740,13 @@ function routeGate(ctx: Ctx, w: Wall, gate: P, movable: boolean, R = 200): GateR
  * 门口离路网超过 GATE_REACH 的，从门口寻一条最省事的路接到最近的道路上（修成小街，挡路的民居拆掉）；
  * 只有一座门的可以挪到墙上更好接路的地方；几座门里接不上（朝着护城河、城墙）或要绕很远的，那座门不开。
  * 接上路的门都插进墙圈作顶点（画墙时在那里断开门洞）。
+ * 院子盖好时就接（walls 给这座院子的墙）：门前街的走廊在之后盖的房子之前登记，之后划宫城地盘时也留着它（gateStreets）。
  */
-export function connectGates(ctx: Ctx) {
+export function connectGates(ctx: Ctx, walls: Wall[]) {
   const city = new Set(ctx.cityWalls)
-  for (const w of ctx.out.walls.slice()) {
+  for (const w of walls.slice()) {
     if (city.has(w) || !w.gates.length) continue
-    const far = w.gates.filter((g) => roadGap(ctx, g.p, GATE_REACH + 12) > GATE_REACH)
+    const far = w.gates.filter((g) => !nearestRoad(ctx, g.p, GATE_REACH, gateAccess(ctx)))
     if (!far.length) continue
     const connected = w.gates.length - far.length
     const routes = far.map((g) => ({ g, r: routeGate(ctx, w, g.p, w.gates.length === 1) }))
@@ -705,9 +774,22 @@ function buildAccess(ctx: Ctx, w: Wall, g: Wall['gates'][number], r: GateRoute) 
     w.loop.splice(k + 1, 0, g.p)
     w.solid.splice(k + 1, 0, w.solid[k])
   }
+  buildStreet(ctx, r.line, 'street')
+}
+
+/**
+ * 没有城门楼的院子（庄园）：墙圈断口当中的门口 door 离路远的，同样寻一条路（见 routeGate，门不挪）接到最近的路上，修成小巷
+ */
+export function connectDoor(ctx: Ctx, w: Wall, door: P) {
+  if (nearestRoad(ctx, door, GATE_REACH, gateAccess(ctx))) return
+  const r = routeGate(ctx, w, door, false)
+  if (r && r.cost < 140) buildStreet(ctx, r.line, 'lane')
+}
+
+/** 修门前的路：拆掉挡路的民居与树，路记进门前街 */
+function buildStreet(ctx: Ctx, L: P[], kind: 'street' | 'lane') {
   const width = Math.max(3, ctx.cfg.lane)
   const clear = width / 2 + 0.4
-  const L = r.line
   const hits = (poly: P[]) => {
     for (let i = 0; i + 1 < L.length; i++) if (poly.some((v) => segDist(v, L[i], L[i + 1]).d < clear) || segPolyHit(L[i], L[i + 1], poly)) return true
     return false
@@ -715,8 +797,13 @@ function buildAccess(ctx: Ctx, w: Wall, g: Wall['gates'][number], r: GateRoute) 
   demolish(ctx, (b) => removable(b, true) && hits(b.poly))
   const idx = new LineIndex(L, clear + ctx.out.trees.reduce((m, t) => Math.max(m, t.r), 0) * 0.6)
   drop(ctx, 'trees', (t) => idx.nearPoint(t.p, clear + t.r * 0.6))
-  addRoad(ctx, { line: L, width, kind: 'street' })
+  const r0 = ctx.out.roads.length
+  addRoad(ctx, { line: L, width, kind })
+  for (const r of ctx.out.roads.slice(r0)) gateStreets(ctx).add(r)
 }
+
+/** 门前街（接城堡、宫城的门的小街）：之后划宫城地盘拆街巷时留着它们，门不会又断了路 */
+export const gateStreets = (ctx: Ctx) => memo(ctx, 'walls.gateStreets', () => new Set<Road>())
 
 /** 线段是否碰到多边形（端点在里面或与某条边相交） */
 function segPolyHit(a: P, b: P, poly: P[]) {
@@ -726,47 +813,4 @@ function segPolyHit(a: P, b: P, poly: P[]) {
     if (h && h.t >= 0 && h.t <= 1 && h.u >= 0 && h.u <= 1) return true
   }
   return false
-}
-
-/**
- * 塔楼只立在干地上（离水超过塔的半径再留一点）：落水的塔（多是临水断口两端的桥头塔、河口处的拐角塔）
- * 沿实心墙段挪回岸上最近的地方（不挤到门洞、别的塔上），附近没有干地就不设。
- */
-export function keepTowersDry(ctx: Ctx) {
-  const { T } = ctx
-  for (const w of ctx.out.walls) {
-    if (!w.towers.length) continue
-    const r = w.thickness * (w.kind === 'stone' ? 1.25 : 1.3)
-    const need = r + 0.5
-    const gateGap = w.kind === 'stone' ? 16 : 10
-    const n = w.loop.length
-    const out: P[] = []
-    // 挪过来的塔不压到别的塔上
-    const free = (q: P) => !out.some((o) => dist(o, q) < r * 2 + 1) && !w.towers.some((o) => T.waterAt(o) > need && dist(o, q) < r * 2 + 1)
-    for (const t of w.towers) {
-      if (T.waterAt(t) > need) {
-        out.push(t)
-        continue
-      }
-      let best: P | null = null
-      let bd = 16
-      for (let i = 0; i < n; i++) {
-        if (!w.solid[i]) continue
-        const a = w.loop[i]
-        const b = w.loop[(i + 1) % n]
-        if (segDist(t, a, b).d > bd) continue
-        const m = Math.max(1, Math.ceil(dist(a, b)))
-        for (let k = 0; k <= m; k++) {
-          const q: P = [a[0] + ((b[0] - a[0]) * k) / m, a[1] + ((b[1] - a[1]) * k) / m]
-          const d = dist(q, t)
-          if (d < bd && T.waterAt(q) > need && free(q) && !w.gates.some((g) => dist(g.p, q) < gateGap)) {
-            bd = d
-            best = q
-          }
-        }
-      }
-      if (best) out.push(best)
-    }
-    w.towers = out
-  }
 }

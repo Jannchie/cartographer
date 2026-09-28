@@ -12,31 +12,24 @@ import { centroid, obb, type Frame, type P, type Poly } from '../geom'
  * 与抽签的先后无关，人口变了、别的片区变了都不会连带重抽。
  */
 
-/** 元素能摆的位置（槽位） */
-export type Slot =
-  | 'axis-front' // 中轴最前（门、门前的阙、塔）
-  | 'axis-centre' // 中轴当中（正殿、礼拜殿、主楼）
-  | 'axis-rear' // 中轴后部（后殿、藏经阁、后宫）
-  | 'flank' // 中轴两侧（配殿、厢房、翼楼）
-  | 'corner' // 四角（角楼、宣礼塔）
-  | 'court-centre' // 院子当中（塔、水池、碑亭）
-  | 'attached-side' // 贴在主体一侧（礼拜堂、回廊院、陵墓）
-  | 'end-pavilion' // 长楼两端的角阁
-  | 'side-axis' // 东西路（旁边的一路院落）
-  | 'rear' // 最后面（园林、后门）
-
-/** 元素池里的一项：出现的基本权重、能放的槽位、至少要多大的地盘（米）与多高的等级（0 地方、1 大城、2 都城） */
-export interface Elem<K extends string = string> {
+/**
+ * 元素池里的一项：出现的基本权重（缺省 1）、能放的槽位（槽位名由各自的骨架定：地标的 'axis-front'、园林的 'shore'……）、
+ * 至少要多大的地盘（米）与多高的等级（0 地方、1 大城、2 都城）
+ */
+export interface Elem<K extends string = string, S extends string = string> {
   id: K
-  w: number
-  slots?: readonly Slot[]
+  w?: number
+  slots?: readonly S[]
   min?: number
   rank?: number
   /** 只在这几档规模里出现（缺省不限）：同心城、回廊院只在 grand，贝壳主楼、门廊只在 small…… */
   tiers?: readonly Tier[]
 }
 
-/** 预设：给槽位的选项乘权重（bias.槽位名.选项 = 倍数，0 就是不选），或收窄数值的范围 */
+/**
+ * 预设：给槽位的选项乘权重（bias.槽位名.选项 = 倍数，0 就是不选），或收窄数值的范围。
+ * 槽位名是抽签时给的 key（缺省就是抽签的名字）：地标按抽签名（'plan'、'gate'……），园林按槽位种类（'shore'、'centre'……）
+ */
 export interface Preset {
   id: string
   w: number
@@ -49,17 +42,32 @@ export interface Preset {
 /** 调试：打开后记下每座按语法拼成的建筑的构成签名（测多样性、测稳定性用） */
 export const composeTrace = { on: false, list: [] as { kind: string; sig: string; p: P }[] }
 
+/** 从池里抽元素的条件：槽位、地盘大小、额外的筛选与偏好；key 是查预设偏好用的槽位名（缺省同抽签名），k 是重抽的序号 */
+export interface DrawOpts<K extends string, S extends string> {
+  slot?: S
+  size?: number
+  only?: (id: K, e: Elem<K, S>) => boolean
+  bias?: Partial<Record<K, number>>
+  key?: string
+  k?: number
+}
+
 /**
- * 一座建筑的"作曲者"：先抽一个预设（或自由组合），之后每个槽位按名字抽签。
- * size 是地盘的尺寸（米，元素的 min 与它比），rank 是等级（元素的 rank 与它比）。
+ * 一座建筑（或一座园子）的"作曲者"：先抽一个预设（或自由组合），之后每个槽位按名字抽签。
+ * size 是地盘的尺寸（米，元素的 min 与它比），rank 是等级（元素的 rank 与它比）；
+ * free 是"自由组合"（不加权）的权重，0 就只在预设里抽；attempt 是整座重来的第几次（上一个预设放不下时换一个）。
  * 所有离散的选择都记进签名（sig），用来统计有多少种不同的构成。
+ *
+ * 抽签都按名字：同一个名字总是同一个结果（与先后无关）。同一个名字要抽好几次（沿池一圈的几处景点）时用 nth：
+ * 按这个名字第几次抽编号，别处多抽、少抽、重试都不影响它。
  */
-export function composer(V: Dice, kind: string, presets: readonly Preset[], o: { free?: number; size?: number; rank?: number; tier?: Tier } = {}) {
+export function composer(V: Dice, kind: string, presets: readonly Preset[], o: { free?: number; size?: number; rank?: number; tier?: Tier; attempt?: number } = {}) {
   const tier: Tier = o.tier ?? 'standard'
   const fits = (t?: readonly Tier[]) => !t || t.includes(tier)
   // 规模档收窄预设：大档专属的预设（同心城、朝圣大教堂）在别的档里抽不到，别的档的抽签也就不受影响
-  const all: Preset[] = [...presets.filter((p) => fits(p.tiers)), { id: 'free', w: o.free ?? 1 }]
-  const preset = V.pick('preset', all, all.map((p) => p.w))
+  const all: Preset[] = presets.filter((p) => fits(p.tiers))
+  if (o.free !== 0 || !all.length) all.push({ id: 'free', w: o.free ?? 1 })
+  const preset = V.pick('preset', all, all.map((p) => p.w), o.attempt ?? 0)
   const sig: string[] = [preset.id]
   const size = o.size ?? Infinity
   const rank = o.rank ?? 0
@@ -70,23 +78,45 @@ export function composer(V: Dice, kind: string, presets: readonly Preset[], o: {
     seen.add(name)
     sig.push(`${name}=${v}`)
   }
+  const count = new Map<string, number>()
+  /** 这个名字的下一个序号 */
+  const seq = (name: string) => {
+    const k = count.get(name) ?? 0
+    count.set(name, k + 1)
+    return k
+  }
+  const prefs = (key: string) => preset.bias?.[key]
+  /** 池里合乎条件的元素与它们的权重（基础权重 × 预设偏好 × 调用处的偏好） */
+  const cands = <K extends string, S extends string>(pool: readonly Elem<K, S>[], f: DrawOpts<K, S>, key: string) => {
+    const ok = pool.filter((e) => (!f.slot || !e.slots || e.slots.includes(f.slot)) && (e.rank ?? 0) <= rank && fits(e.tiers) && (!f.only || f.only(e.id, e)))
+    const b = prefs(f.key ?? key) ?? {}
+    const wOf = (e: Elem<K, S>) => (e.w ?? 1) * (b[e.id] ?? 1) * (f.bias?.[e.id] ?? 1)
+    return { ok, wOf }
+  }
+  /** 按权重抽一个；没有权重大于 0 的返回 null。不进签名 */
+  const draw = <E extends Elem<K, S>, K extends string, S extends string>(name: string, pool: readonly E[], f: DrawOpts<K, S> = {}): E | null => {
+    const { ok, wOf } = cands(pool, f, name)
+    const ws = ok.map(wOf)
+    return ws.some((w) => w > 0) ? (V.pick(name, ok, ws, f.k ?? 0) as E) : null
+  }
   const C = {
     preset: preset.id,
     size,
     rank,
     tier,
+    /** 预设对槽位 key 上选项 id 的偏好（没提就是 undefined） */
+    bias: (key: string, id: string) => prefs(key)?.[id],
+    draw,
+    seq,
     /**
      * 从元素池里按槽位抽一个：先按槽位、等级、only 过滤，乘上预设的偏好抽签；抽到的要比地盘大（min）时
      * 退到放得下的里权重最大的一个。先抽后退（而不是先按大小过滤再抽），地盘伸缩时只有放不下的那一格会变。
      * 全被滤掉时取池里第一个。
      */
-    pick<K extends string>(name: string, pool: readonly Elem<K>[], f: { slot?: Slot; size?: number; only?: (id: K) => boolean; bias?: Partial<Record<K, number>> } = {}): K {
+    pick<K extends string, S extends string = string>(name: string, pool: readonly Elem<K, S>[], f: DrawOpts<K, S> = {}): K {
       const sz = f.size ?? size
-      const ok = pool.filter((e) => (!f.slot || !e.slots || e.slots.includes(f.slot)) && (e.rank ?? 0) <= rank && fits(e.tiers) && (!f.only || f.only(e.id)))
-      const b = preset.bias?.[name] ?? {}
-      const wOf = (e: Elem<K>) => e.w * (b[e.id] ?? 1) * (f.bias?.[e.id] ?? 1)
-      const ws = ok.map(wOf)
-      let got = ws.some((w) => w > 0) ? V.pick(name, ok, ws) : (ok[0] ?? pool[0])
+      const { ok, wOf } = cands(pool, f, name)
+      let got = draw(name, pool, f) ?? ok[0] ?? pool[0]
       if ((got.min ?? 0) > sz) {
         const fits = ok.filter((e) => (e.min ?? 0) <= sz)
         if (fits.length) got = fits.reduce((x, y) => (wOf(y) > wOf(x) ? y : x))
@@ -94,11 +124,13 @@ export function composer(V: Dice, kind: string, presets: readonly Preset[], o: {
       rec(name, got.id)
       return got.id
     },
+    /** 0 ~ 1 的一个数；不进签名 */
+    h: (name: string, k = 0) => V.h(name, k),
     /** lo ~ hi 之间的一个数（预设可以收窄范围）；不进签名 */
-    num(name: string, lo: number, hi: number) {
+    num(name: string, lo: number, hi: number, k = 0) {
       const r = preset.num?.[name]
       const [a, b] = r ? [Math.max(lo, r[0]), Math.min(hi, r[1])] : [lo, hi]
-      return V.num(name, a, b >= a ? b : a)
+      return V.num(name, a, b >= a ? b : a, k)
     },
     /** lo ~ hi 之间的整数（预设可以收窄范围） */
     int(name: string, lo: number, hi: number) {
@@ -110,7 +142,7 @@ export function composer(V: Dice, kind: string, presets: readonly Preset[], o: {
     },
     /** 概率 p 为真；预设可用 bias.名字 = { yes, no } 调整 */
     chance(name: string, p: number) {
-      const b = preset.bias?.[name]
+      const b = prefs(name)
       const y = p * (b?.yes ?? 1)
       const n = (1 - p) * (b?.no ?? 1)
       const v = V.h(name) < (y + n > 0 ? y / (y + n) : 0)
@@ -123,11 +155,23 @@ export function composer(V: Dice, kind: string, presets: readonly Preset[], o: {
       rec(name, v)
       return v
     },
-    /** 记下落地后的实际情况（放不下退了一档之类），也进签名 */
-    note(name: string, v: string | number | boolean) {
-      rec(name, v)
+    /** 同名多次的抽签：按这个名字第几次抽编号（不进签名） */
+    nth: {
+      h: (name: string) => V.h(name, seq(name)),
+      num: (name: string, lo: number, hi: number) => V.num(name, lo, hi, seq(name)),
+      int: (name: string, lo: number, hi: number) => V.int(name, lo, hi, seq(name)),
+      pick: <T>(name: string, xs: readonly T[], w?: readonly number[]) => V.pick(name, xs, w, seq(name)),
+      chance: (name: string, p: number) => V.chance(name, p, seq(name)),
+      side: (name: string) => V.side(name, seq(name)),
+    },
+    /** 记下落地后的实际情况（放不下退了一档之类），也进签名；repeat 时同名的每次都记（沿池一圈的几处景点） */
+    note(name: string, v: string | number | boolean, repeat = false) {
+      if (repeat) sig.push(`${name}=${v}`)
+      else rec(name, v)
     },
     sig: () => sig.join(' '),
+    /** 签名里预设之后的各项 */
+    parts: () => sig.slice(1),
     /** 盖完了：打开调试时记下签名 */
     done(p: P) {
       if (composeTrace.on) composeTrace.list.push({ kind, sig: sig.join(' '), p })
@@ -177,7 +221,7 @@ export function rectFrame(R: Poly, front: P): { F: Frame; W: number; D: number }
 }
 
 /** 按对称规则取两侧的选项：mirror 为真时两侧相同，否则各抽各的 */
-export function flanks<K extends string>(C: Composer, name: string, pool: readonly Elem<K>[], mirror: boolean, f: Parameters<Composer['pick']>[2] = {}): [K, K] {
+export function flanks<K extends string>(C: Composer, name: string, pool: readonly Elem<K>[], mirror: boolean, f: DrawOpts<K, string> = {}): [K, K] {
   const a = C.pick(`${name}.w`, pool, f)
   return [a, mirror ? a : C.pick(`${name}.e`, pool, f)]
 }

@@ -1,5 +1,5 @@
 import { clamp } from '../../gen/util'
-import { hashAt, isFree, placeable, wardRng, memo, type Ctx } from '../ctx'
+import { emitArea, hashAt, isFree, placeable, wardRng, memo, type Ctx } from '../ctx'
 import { FEATURE, type FeatureId } from '../features'
 import { area, centroid, circlePoly, dist, insetConvex, orient, segDist, type P, type Poly } from '../geom'
 import type { Tri, Ward, WardType } from '../types'
@@ -296,7 +296,7 @@ function forum(ctx: Ctx, c: Cell, stalls: boolean): boolean {
   const { a0, a1, w0, w1 } = c
   if (a1 - a0 < 30 || w1 - w0 < 30) return false
   const pave = ctx.corridors.clip(c.box(a0, a1, w0, w1), ['wall']) ?? c.box(a0, a1, w0, w1)
-  ctx.out.plazas.push(pave)
+  emitArea(ctx, 'plazas', pave)
   const big = ctx.p.size === 'city'
   const depth = big ? 16 : 12
   const basilica = c.box(a1 - depth - 1, a1 - 1, w0 + 5, w1 - 5)
@@ -344,9 +344,9 @@ function capitolium(ctx: Ctx, c: Cell, block: Poly): boolean {
   const porch = c.box(am - W * 0.44, am + W * 0.44, front, front + L * 0.4)
   if (!addGroup(ctx, [[cella, 'temple'], [porch, 'temple']], 1)) return false
   const wall = placeable(ctx, insetConvex(block, 1.5), 2, 0.4)
-  if (wall && area(wall) > 400) ctx.out.enclosures.push(wall)
+  if (wall && area(wall) > 400) emitArea(ctx, 'enclosures', wall)
   const court = c.box(a0 + 2.5, a1 - 2.5, w0 + 2.5, front - 0.5)
-  if (isFree(ctx, court, { tags: ['wall', 'river'] })) ctx.out.plazas.push(court)
+  if (isFree(ctx, court, { tags: ['wall', 'river'] })) emitArea(ctx, 'plazas', court)
   // 祭坛
   const aw = (w0 + front) / 2
   addBuilding(ctx, c.box(am - 1.8, am + 1.8, aw - 1.8, aw + 1.8), 'shed', 0.5)
@@ -383,7 +383,7 @@ function baths(ctx: Ctx, c: Cell, block: Poly): boolean {
   ]
   if (!addGroup(ctx, parts, 0.8)) return false
   const court = c.box(am - W / 2 + 3.5, am + W / 2 - 3.5, s0, hall0 - 1)
-  ctx.out.plazas.push(court)
+  emitArea(ctx, 'plazas', court)
   const foot = c.box(am - W / 2 - 1, am + W / 2 + 1, s0 - 1, s0 + L + 1)
   ctx.occ.add(foot)
   ctx.out.landmarks.push({ p: centroid(parts[0][0]), name: pick(ctx, centroid(foot), 'castrum.name.baths', BATHS), kind: 'guild' })

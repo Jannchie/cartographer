@@ -1,6 +1,6 @@
 import { clear } from './civic'
-import { cityDice, hashAt, inCity, isFree, memo, type Ctx } from './ctx'
-import { add, area, bboxOf, centroid, circlePoly, dist, insetConvex, pointAt, pointInPoly, polylineDist, polylineLength, rect, resample, segDist, segPolyDist, LineIndex, type P, type Poly } from './geom'
+import { emitArea, cityDice, hashAt, inCity, isFree, memo, type Ctx } from './ctx'
+import { add, bboxOf, centroid, circlePoly, dist, insetConvex, pointAt, pointInPoly, polylineDist, polylineLength, growConvex, rect, resample, segDist, segPolyDist, sub, unit, LineIndex, type P, type Poly } from './geom'
 import { eastCompound } from './compose/chinese'
 import { westCastle } from './compose/castle'
 import { westChurch } from './compose/church'
@@ -10,10 +10,11 @@ import { shrines } from './styles/wa'
 import { levelTerrain, routeOnTerrain } from './terrain'
 import { tierLog } from './tiers'
 import type { Building, BuildingKind, Tri, Wall } from './types'
-import { smoothRoute } from './walls'
+import { addWall, gateStreets, smoothRoute, WALL_CLEAR, wallCorridor } from './walls'
 import { checkpoint, drop, rollback } from './undo'
 import { place, plantTree, scatterTrees } from './wards'
 import { isVillage } from './scale'
+import { nearestRoad, roadsNear } from './roads'
 
 /**
  * 名所：按地形才有的"招牌"布置，城边、城外挑合适的地方盖，放在片区、地标、城外设施都盖好以后。
@@ -118,32 +119,12 @@ function route(ctx: Ctx, from: P, to: P, slope: number): P[] {
   return raw.length > 1 ? smoothRoute(raw, 3, ctx.T) : []
 }
 
-/** 离 q 最近的几条路（不含小径、石阶）上各自最近的点，由近到远 */
-function roadsNear(ctx: Ctx, q: P, within = 400): P[] {
-  const out: { p: P; d: number }[] = []
-  for (const r of ctx.out.roads) {
-    if (r.kind === 'path' || r.kind === 'stair') continue
-    let best: P | null = null
-    let bd = within
-    for (let i = 0; i + 1 < r.line.length; i++) {
-      const s = segDist(q, r.line[i], r.line[i + 1])
-      if (s.d < bd) {
-        bd = s.d
-        best = [r.line[i][0] + (r.line[i + 1][0] - r.line[i][0]) * s.t, r.line[i][1] + (r.line[i + 1][1] - r.line[i][1]) * s.t]
-      }
-    }
-    if (best) out.push({ p: best, d: bd })
-  }
-  return out.sort((a, b) => a.d - b.d).map((x) => x.p)
-}
-const nearestRoad = (ctx: Ctx, q: P, within = 400): P | null => roadsNear(ctx, q, within)[0] ?? null
-
 /**
  * 从附近的路修一条上山的路（石阶或小径）到 to：沿途不压房子与水，修好登记走廊、清走两旁的树。
  * 最近的几条路依次试；都接不上（太远、压房子）返回 null。
  */
 function approach(ctx: Ctx, to: P, kind: 'stair' | 'path', w: number, within = 450): P[] | null {
-  for (const from of roadsNear(ctx, to, within).slice(0, 4)) {
+  for (const { p: from } of roadsNear(ctx, to, within).slice(0, 4)) {
     const line = route(ctx, from, to, kind === 'stair' ? 0.35 : 0.8)
     if (line.length < 2) continue
     // 起点从路边退出路面，免得新路压在路上；终点的最后两米是地标门前，不查
@@ -242,8 +223,8 @@ function miniShrine(ctx: Ctx, c: P, f: P, s: number, o: { torii?: number; role?:
   }
   const walk = [at(-1.5, 0), at(D * 0.42, 0)]
   ctx.out.roads.push({ line: walk, width: 2.2, kind: 'path' })
-  ctx.out.plazas.push(box(D * 0.3, D * 0.95, -W * 0.3, W * 0.3))
-  ctx.out.enclosures.push(precinct)
+  emitArea(ctx, 'plazas', box(D * 0.3, D * 0.95, -W * 0.3, W * 0.3))
+  emitArea(ctx, 'enclosures', precinct)
   ctx.occ.add(box(D * 0.3, D * 0.95, -W * 0.3, W * 0.3))
   const t0 = ctx.out.trees.length
   scatterTrees(ctx, insetConvex(precinct, 1), o.grove ?? 0.012, 2.2, 4.2)
@@ -378,7 +359,7 @@ function umiTorii(ctx: Ctx): boolean {
     place(ctx, honden, 'temple', { pad: 0.2 }, { role: '本殿' })
     place(ctx, box(20, 28, 7, 15), 'hall', { pad: 0.2 }, { role: '社务所' })
     placeWet(ctx, torii, 'torii', { role: '海上鸟居' })
-    ctx.out.enclosures.push(land)
+    emitArea(ctx, 'enclosures', land)
     // 社后的林
     scatterTrees(ctx, box(22, 40, -26, 26), 0.02, 2.4, 4.4)
     if (!approach(ctx, at(37, 0), 'path', 2.6, 320)) {
@@ -550,7 +531,7 @@ function hillPagoda(ctx: Ctx): boolean {
     if (!free(ctx, pad, 1)) continue
     const cp = checkpoint(ctx)
     clear(ctx, circlePoly(top, 16, 16))
-    ctx.out.plazas.push(pad)
+    emitArea(ctx, 'plazas', pad)
     const wa = ctx.p.culture === 'wa'
     // 塔：东方八角，和风方的五重塔
     const tower = place(ctx, wa ? rect(top, [1, 0], 8, 8) : circlePoly(top, 4.6, 8, Math.PI / 8), 'pagoda', { pad: 0.1 }, { role: wa ? '五重塔' : '塔' })
@@ -644,19 +625,21 @@ function cragCastle(ctx: Ctx): boolean {
   const tops = hilltops(ctx, { d0: 80, d1: 1400, rise: 16, size: 60, tag: 'sacred.crag' })
   for (const top of tops) {
     const curtain = circlePoly(top, 32, 9, hashAt(ctx, top, 'sacred.crag.curtain') * 3)
-    if (!free(ctx, growOut(curtain, 2), 1)) continue
+    if (!free(ctx, growConvex(curtain, 2), 1)) continue
     const cp = checkpoint(ctx)
-    clear(ctx, growOut(curtain, 6))
+    clear(ctx, growConvex(curtain, 6))
     const w0 = ctx.out.walls.length
-    westCastle(ctx, curtain)
-    if (ctx.out.walls.length === w0 || !approach(ctx, add(top, [0, 1], 36), 'path', 3, 800)) {
+    westCastle(ctx, curtain, { connect: false })
+    // 上山的小路一直修到城门前
+    const g = ctx.out.walls[w0]?.gates[0]
+    const front = g && add(g.p, unit(sub(g.p, top)), 6)
+    if (!front || !approach(ctx, front, 'path', 3, 800)) {
       rollback(ctx, cp)
       continue
     }
-    for (let i = w0; i < ctx.out.walls.length; i++) {
-      const w = ctx.out.walls[i]
-      for (let k = 0; k < w.loop.length; k++) if (w.solid[k]) ctx.corridors.add([w.loop[k], w.loop[(k + 1) % w.loop.length]], w.thickness / 2 + 1, 'wall')
-    }
+    gateStreets(ctx).add(ctx.out.roads[ctx.out.roads.length - 1])
+    // 山上的城堡盖完了再给墙登记走廊（上山的路、树让开墙脚）
+    for (const w of ctx.out.walls.slice(w0)) wallCorridor(ctx, w, WALL_CLEAR.compound)
     landmark(ctx, top, name(ctx, 'crag', top), 'castle')
     return true
   }
@@ -671,9 +654,9 @@ function ribat(ctx: Ctx): boolean {
   for (const top of tops) {
     const S = 48
     const box = rect(top, [1, 0], S, S)
-    if (!free(ctx, growOut(box, 3), 1)) continue
+    if (!free(ctx, growConvex(box, 3), 1)) continue
     const cp = checkpoint(ctx)
-    clear(ctx, growOut(box, 6))
+    clear(ctx, growConvex(box, 6))
     const h = S / 2
     const c = top
     const P2 = (x: number, y: number): P => [c[0] + x, c[1] + y]
@@ -684,10 +667,9 @@ function ribat(ctx: Ctx): boolean {
     const y0 = -h + 3
     place(ctx, rect(P2(0, y0 + t / 2), [1, 0], S - 6, t), 'hall', { pad: 0.2 }, { role: '里巴特的房间' })
     for (const sx of [-1, 1]) place(ctx, rect(P2(sx * (h - 3 - t / 2), (y0 + t + 0.6 + h - 6) / 2), [0, 1], h - 6 - (y0 + t + 0.6), t), 'hall', { pad: 0.2 }, { role: '里巴特的房间' })
-    ctx.out.plazas.push(rect(P2(0, 2), [1, 0], S - 20, S - 22))
+    emitArea(ctx, 'plazas', rect(P2(0, 2), [1, 0], S - 20, S - 22))
     placeMosque(ctx, rect(P2(0, 1), [1, 0], 22, 20), rect(P2(0, 1), [1, 0], 26, 24), 18, 15, false)
-    ctx.out.walls.push(wall)
-    for (let k = 0; k < loop.length - 1; k++) ctx.corridors.add([loop[k], loop[k + 1]], 2.4, 'wall')
+    addWall(ctx, wall, 'compound')
     if (!approach(ctx, P2(0, h + 4), 'path', 2.6, 800)) {
       rollback(ctx, cp)
       continue
@@ -714,12 +696,3 @@ const unitOf = (a: P, b: P): P => {
   const L = dist(a, b) || 1
   return [(a[0] - b[0]) / L, (a[1] - b[1]) / L]
 }
-
-/** 凸多边形往外扩 d 米（按形心放大，名所的清场用） */
-function growOut(poly: Poly, d: number): Poly {
-  const c = centroid(poly)
-  const r = Math.sqrt(area(poly) / Math.PI)
-  const k = (r + d) / Math.max(1, r)
-  return poly.map((v) => [c[0] + (v[0] - c[0]) * k, c[1] + (v[1] - c[1]) * k] as P)
-}
-

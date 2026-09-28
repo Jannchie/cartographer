@@ -1,6 +1,6 @@
 import { CULTURE_INFO, eastAsian } from './culture'
 import { clear } from './civic'
-import { centerDist, hashAt, isFree, mark, type Ctx } from './ctx'
+import { emitArea, centerDist, hashAt, isFree, mark, type Ctx } from './ctx'
 import { isVillage } from './scale'
 import { centroid, circlePoly, dist, pointAt, polylineLength, rect, type P, type Poly } from './geom'
 import type { BuildingKind, Landmark } from './types'
@@ -72,7 +72,7 @@ function hillTombs(ctx: Ctx, n: number) {
     }
     parts.push([rect([p[0] + front[0] * r * 0.4, p[1] + front[1] * r * 0.4], side, 1.8, 0.7), 'civic'])
     if (!build(ctx, parts, ground)) continue
-    ctx.out.greens.push({ poly: ground, kind: 'cemetery' })
+    emitArea(ctx, 'greens', ground, 'cemetery')
     ctx.occ.add(ground)
     // 背后半圈松柏
     for (let a = -1.2; a <= 1.2; a += 0.3) {
@@ -229,7 +229,7 @@ function gallows(ctx: Ctx, n: number) {
     if (crowded(ctx, c) || !isFree(ctx, ground, { pad: 1 })) continue
     if (!eastAsian(ctx.p.culture) && !build(ctx, [[rect(c, u, 4, 4), 'shed']], ground)) continue
     if (eastAsian(ctx.p.culture)) clear(ctx, ground)
-    ctx.out.plazas.push(ground)
+    emitArea(ctx, 'plazas', ground)
     ctx.occ.add(ground)
     mark(ctx, c, 'gallows')
     made++
@@ -260,7 +260,7 @@ function kilns(ctx: Ctx, n: number) {
       [rect(at(-8, 9), u, 20, 4.5), 'shed'],
     ]
     if (ctx.corridors.hitsPoly(yard, 0.5) || !build(ctx, parts, yard)) continue
-    ctx.out.enclosures.push(yard)
+    emitArea(ctx, 'enclosures', yard)
     mark(ctx, at(-7, -5), 'kiln')
     made.push(p)
   }

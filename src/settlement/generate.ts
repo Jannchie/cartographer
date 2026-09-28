@@ -1,6 +1,6 @@
 import { RNG, hashString } from '../gen/rng'
 import { contours, simplify } from '../render/atlas/svg/contour'
-import { Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, mainCore, squareness, seedRng, wardRng, type Core, mark, type Ctx } from './ctx'
+import { dryArea, emitArea, Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, mainCore, squareness, seedRng, wardRng, type Core, mark, type Ctx } from './ctx'
 import { FEATURE, FEATURES, featureEnv, resolveCounts, type FeatureId } from './features'
 import { placeLandmarks, zoneLots, type Lot } from './zoning'
 import { PATCH, POP_OF_SIZE, densityOf, isVillage, fullPerHa, housesPerHa, perHousehold, scaleOf } from './scale'
@@ -11,7 +11,6 @@ import {
   circlePoly,
   dist,
   bboxOf,
-  clipHalf,
   growConvex,
   insetConvex,
   pointAt,
@@ -30,8 +29,8 @@ import {
   type P,
   type Poly,
 } from './geom'
-import { bastioned, cleanLoop, connectGates, fromF32, keepTowersDry, insetLoop, simplifyLoop, smoothRoute, toF32, wallFromLoop } from './walls'
-import { roadCorridor, tidyRoads, trimDangling } from './roads'
+import { addWall, bastioned, cleanLoop, fromF32, gateStreets, insetLoop, simplifyLoop, smoothRoute, toF32, wallFromLoop } from './walls'
+import { fixWet, nearestRoad, roadCorridor, through, tidyRoads, trimDangling, wetRuns } from './roads'
 import { STYLES } from './styles'
 import { CULTURE_INFO, eastAsian, planFits } from './culture'
 import { ruralExtras } from './rural'
@@ -43,7 +42,7 @@ import type { PlanLot, PlanZone } from './plans/types'
 import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain } from './terrain'
-import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Density, type Landmark, type Road, type MapLabel, type Tri, same, type Settlement, type SettlementParams, type Wall, type Ward, type WardType } from './types'
+import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 
 export function generateSettlement(input: SettlementParams): Settlement {
@@ -164,7 +163,6 @@ export function generateSettlement(input: SettlementParams): Settlement {
   magicExtras(ctx)
   // 名所：千本鸟居、海上鸟居、奥宫、神桥、山寺、山上的修道院、岩上的城……（按地形挑地方，见 sacred.ts）
   sacredSites(ctx)
-  keepDry(ctx)
   // 聚落名等桥、渡口定下再取：有桥才叫"某某桥"
   const cross = ctx.out.crossings
   const crossing = cross.some((c) => c.kind === 'bridge') ? 'bridge' : cross.some((c) => c.kind === 'ferry') ? 'ferry' : cross.length ? 'ford' : null
@@ -846,10 +844,7 @@ function wallRemnant(ctx: Ctx, loop: P[], keep: number, stage: number, within: (
     const b = solid[i]
     if ((a !== b && (a || b)) || (b && i % 5 === 0)) towers.push(pts[i])
   }
-  const thickness = 4
-  const wall: Wall = { loop: pts, solid, towers, gates: [], kind: 'stone', thickness }
-  ctx.out.walls.push(wall)
-  for (let i = 0; i < n; i++) if (solid[i]) ctx.corridors.add([pts[i], pts[(i + 1) % n]], thickness / 2 + 3, 'wall')
+  addWall(ctx, { loop: pts, solid, towers, gates: [], kind: 'stone', thickness: 4 }, 'remnant')
 }
 
 /** 把一组片区栅格化、减去海面，追踪外轮廓，简化后向规整形状变形；只要里面有核心的轮廓（每片城区一道） */
@@ -1293,14 +1288,26 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   const innerPolys = patches.filter((pa) => pa.inner).map((pa) => pa.poly)
   const inside = (q: P) => innerPolys.some((poly) => pointInPoly(q, poly)) || (ctx.cityWalls.length > 0 && inCity(ctx, q))
   arterials.forEach((road) => {
-    // 城内段为主街、城外段为大路
-    let k = road.findIndex((q) => !inside(q))
-    if (k < 0) k = road.length
-    const inner = road.slice(0, Math.min(road.length, k + 1))
-    const outer = road.slice(Math.max(0, k))
+    // 过水段先整条理顺（直线过桥、顺河的截掉，见 fixWet），再分城内段（主街）、城外段（大路）：
+    // 分界落在过水段上时挪到上岸处，桥整座归城内段，不会两头各自止于水中
+    const inners: P[][] = []
+    const outers: P[][] = []
+    for (const r of fixWet({ line: road, width: cfg.highway, kind: 'highway' }, T)) {
+      const line = r.line
+      let k = line.findIndex((q) => !inside(q))
+      if (k < 0) k = line.length
+      // 整理过的线是 2 米一点（没过水的原样返回，不必挪）
+      if (r.line !== road) for (const [s, e] of wetRuns(line, T)) if (k >= s && k < e) k = e
+      inners.push(line.slice(0, Math.min(line.length, k + 1)))
+      outers.push(line.slice(Math.max(0, k)))
+    }
     const small = isVillage(p.size)
-    if (inner.length > 1) ctx.out.roads.push({ line: inner, width: ctx.plan?.def.mainWidth ?? cfg.main, kind: 'main', name: p.size === 'hamlet' ? undefined : ctx.namer.street(small ? 'street' : 'main') })
-    if (outer.length > 1) ctx.out.roads.push({ line: outer, width: cfg.highway, kind: 'highway' })
+    const main = inners.filter((l) => l.length > 1)
+    // 路名给城内最长的一段（每条干道只取一次名）
+    const name = main.length && p.size !== 'hamlet' ? ctx.namer.street(small ? 'street' : 'main') : undefined
+    const longest = main.reduce<P[] | null>((a, l) => (!a || polylineLength(l) > polylineLength(a) ? l : a), null)
+    for (const line of main) ctx.out.roads.push({ line, width: ctx.plan?.def.mainWidth ?? cfg.main, kind: 'main', name: line === longest ? name : undefined })
+    for (const line of outers) if (line.length > 1) ctx.out.roads.push({ line, width: cfg.highway, kind: 'highway' })
   })
   // 规划的街道（大街、坊间街……）
   if (plan)
@@ -1454,49 +1461,9 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   ctx.rng = baseRng
   ctx.wardFill = 1
   ctx.wardDensity = 'mid'
-  // 城堡、宫城、卫城的门：接不上路的修一条门前街（或挪门、不开那座门）
-  connectGates(ctx)
-  // 塔楼不落水
-  keepTowersDry(ctx)
+  // 城堡、宫城、卫城的门在各自盖好时就接上了路（见 walls.ts 的 connectGates）
   if (ctx.plan?.def.avenueTrees !== false) avenueTrees(ctx)
   nameDistricts(ctx)
-}
-
-/**
- * 院墙、庭院、菜园、墓地、广场这些成片的地面都要落在岸上：各处生成时只让开了道路，
- * 地块、街坊贴着河岸时会探进水里。统一收到离水 1 米以内，整个在水里的去掉。
- */
-function keepDry(ctx: Ctx) {
-  const { T } = ctx
-  const wetEdge = (poly: Poly, m: number) => {
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i]
-      const b = poly[(i + 1) % poly.length]
-      for (let t = 0; t <= 1; t += 3 / Math.max(3, dist(a, b))) if (T.waterAt([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]) < m) return true
-    }
-    return false
-  }
-  const dry = (poly: Poly) => {
-    if (!wetEdge(poly, 1)) return poly
-    // 边加密到 3 米，压水的点沿水距场的梯度推回岸上：院墙顺着河岸收边
-    const q = resample([...poly, poly[0]], 3)
-      .slice(0, -1)
-      .map((v): P => {
-        const w = T.waterAt(v)
-        if (w >= 1) return v
-        const g = T.waterGrad(v)
-        return [v[0] + g[0] * (1 - w), v[1] + g[1] * (1 - w)]
-      })
-    // 跨过整条河、推不回来的整个去掉
-    return area(q) > 20 && T.waterAt(centroid(q)) > 1 && !wetEdge(q, -1) ? q : null
-  }
-  const o = ctx.out
-  o.enclosures = o.enclosures.map(dry).filter((q): q is Poly => !!q)
-  o.plazas = o.plazas.map(dry).filter((q): q is Poly => !!q)
-  o.greens = o.greens.flatMap((g) => {
-    const q = dry(g.poly)
-    return q ? [{ ...g, poly: q }] : []
-  })
 }
 
 /**
@@ -1695,9 +1662,10 @@ function palaceSite(ctx: Ctx, patches: Patch[], seed: number, royal = true): Pol
   const gone = (r: { kind: string; width: number }, q: P) => (!!pr && pointInPoly(q, reach(r.width))) || (r.kind !== 'main' && r.kind !== 'highway' && deep(q))
   // 拆过的路：走廊整段删掉（一段长街的走廊只有一条线段），再按剩下的几截重新登记
   const cut: Road[] = []
+  const access = gateStreets(ctx)
   ctx.out.roads = ctx.out.roads.flatMap((r) => {
     const pts = resample(r.line, 3)
-    if (!pts.some((q) => gone(r, q))) return [r]
+    if (access.has(r) || !pts.some((q) => gone(r, q))) return [r]
     const pieces = splitBy(pts, (q) => !gone(r, q)).map((line) => ({ ...r, line }))
     cut.push(...pieces)
     return pieces
@@ -1720,8 +1688,11 @@ function palaceSite(ctx: Ctx, patches: Patch[], seed: number, royal = true): Pol
     ctx.corridors.removeWhere((a, b, tag) => tag === 'wall' && inPr(a, b), prOut)
   }
   // 截断了过桥的街：桥头只剩一小截的连路带桥去掉（同 tidyRoads），再留下还有路走的桥
+  // （合并片区里留下来的干道照样过它的桥）
   ctx.out.roads = trimDangling(ctx.out.roads, ctx.T)
-  ctx.out.crossings = ctx.out.crossings.filter((c) => !deep(c.a) && !deep(c.b) && ctx.out.roads.some((r) => r.kind !== 'path' && polylineDist(c.a, r.line) < 2.5 && polylineDist(c.b, r.line) < 2.5))
+  const carries = (c: Crossing, r: Road) =>
+    r.kind !== 'path' && (r.kind === 'main' || r.kind === 'highway' || (!deep(c.a) && !deep(c.b))) && polylineDist(c.a, r.line) < 2.5 && polylineDist(c.b, r.line) < 2.5
+  ctx.out.crossings = ctx.out.crossings.filter((c) => ctx.out.roads.some((r) => carries(c, r)))
   // 走廊跟着拆：留下来的干道（合并片区里的）不动
   const kept = ctx.out.roads.filter((r) => (r.kind === 'main' || r.kind === 'highway') && resample(r.line, 3).some(deep))
   // 碰到宫城矩形（或拆了路的合并片区）的走廊段整段删掉，再给附近留下的路重新登记走廊
@@ -1771,7 +1742,7 @@ function palaceSite(ctx: Ctx, patches: Patch[], seed: number, royal = true): Pol
   for (const m of members) {
     const g = placeable(ctx, insetConvex(m.poly, 3))
     if (!g) continue
-    ctx.out.greens.push({ poly: g, kind: 'park' })
+    emitArea(ctx, 'greens', g, 'park')
     const t0 = ctx.out.trees.length
     // 合成的大社四周是镇守之森（密林），大寺、大教堂是寺林、草地上的树，都城的御苑疏朗
     const t = patches[seed].type
@@ -2008,39 +1979,21 @@ function jetties(ctx: Ctx) {
   }
 }
 
-/** 村公地：草地、水井与几棵大树 */
-/** 沿边每 3 米查一遍，压水（离水不到 m 米）的地方朝形心方向切掉：河从一角斜穿过去也能收到岸上 */
-function dryPoly(ctx: Ctx, poly: Poly, m: number): Poly | null {
-  let out = poly
-  for (let pass = 0; pass < 12; pass++) {
-    let worst: P | null = null
-    let wv = m
-    for (const q of resample([...out, out[0]], 3)) {
-      const w = ctx.T.waterAt(q)
-      if (w < wv) {
-        wv = w
-        worst = q
-      }
-    }
-    if (!worst) return out
-    // 河心附近梯度不可靠：朝形心的方向退回岸上
-    const c = centroid(out)
-    const L = dist(c, worst) || 1
-    const g: P = [(c[0] - worst[0]) / L, (c[1] - worst[1]) / L]
-    out = clipHalf(out, [worst[0] + g[0] * (m + 1 - wv), worst[1] + g[1] * (m + 1 - wv)], [-g[0], -g[1]])
-    if (out.length < 3 || area(out) < 100) return null
-  }
-  return null
+/** 村里的公地草场：整块裁到离水 2 米以外（河从一角斜穿过去也收到岸上），裁完不到 100 m² 就不要 */
+function commonOf(ctx: Ctx, block: Poly): Poly | null {
+  const q = clipWater(ctx, block, 2, 12)
+  return q && area(q) >= 100 ? dryArea(ctx, q) : null
 }
 
+/** 村公地：草地、水井与几棵大树 */
 function villageGreen(ctx: Ctx, block: Poly) {
   const w = clipWater(ctx, insetConvex(block, 4), 4)
   const g = w && ctx.corridors.clip(w)
   if (!g) {
     // 路从中间穿过（放不下一圈草地与井）：整块就是村里的公地草场，路从草场上过
-    const common = dryPoly(ctx, block, 2)
+    const common = commonOf(ctx, block)
     if (common) {
-      ctx.out.greens.push({ poly: common, kind: 'park' })
+      emitArea(ctx, 'greens', common, 'park')
       scatterTrees(ctx, insetConvex(common, 3), 0.0015, 3.5, 5.5)
     }
     return
@@ -2049,7 +2002,7 @@ function villageGreen(ctx: Ctx, block: Poly) {
   const r = Math.min(22, Math.sqrt(area(g)) * 0.3)
   const green = insetConvex(circlePoly(c, r, 18), 0)
   const gi = ctx.out.greens.length
-  ctx.out.greens.push({ poly: green, kind: 'park' })
+  emitArea(ctx, 'greens', green, 'park')
   ctx.out.landmarks.push({ p: c, kind: 'well' })
   for (let k = 0; k < 3; k++) {
     const a = ctx.rng.next() * Math.PI * 2
@@ -2059,7 +2012,8 @@ function villageGreen(ctx: Ctx, block: Poly) {
   const nb = ctx.out.buildings.length
   urban(ctx, block, 'village', [circlePoly(c, r + 4, 18)])
   // 四周一户也没盖（小村的人家都在别处）：整块是公地草场，井在当中
-  const common = ctx.out.buildings.length === nb ? dryPoly(ctx, block, 2) : null
+  // 草场垫在井边那圈草地下面（先画）
+  const common = ctx.out.buildings.length === nb ? commonOf(ctx, block) : null
   if (common) ctx.out.greens.splice(gi, 0, { poly: common, kind: 'park' })
 }
 
@@ -2070,7 +2024,8 @@ function extraBridges(ctx: Ctx, inside: (q: P) => boolean) {
   const line = T.river.line
   const L = polylineLength(line)
   const existing: P[] = []
-  for (const r of ctx.out.roads) for (const q of r.line) if (T.waterAt(q) < 0) existing.push(q)
+  // 已有的过河处：沿路每 4 米查（理过的桥线是一条直线，水上没有顶点）
+  for (const r of ctx.out.roads) for (const q of resample(r.line, 4)) if (T.waterAt(q) < 0) existing.push(q)
   const gap = p.size === 'city' ? 190 : 260
   for (let s = 0; s < L; s += 12) {
     const { p: q, angle } = pointAt(line, s)
@@ -2093,24 +2048,13 @@ function extraBridges(ctx: Ctx, inside: (q: P) => boolean) {
 /** 桥头 e 接到岸上最近的路（不含小径；接线全程在岸上、不回头过河）：返回接点，接不上返回 null */
 function joinRoad(ctx: Ctx, e: P, bridge: P): P | null {
   const { T } = ctx
-  let best: P | null = null
-  let bd = 120
-  for (const r of ctx.out.roads) {
-    if (r.kind === 'path') continue
-    for (let k = 0; k + 1 < r.line.length; k++) {
-      const s = segDist(e, r.line[k], r.line[k + 1])
-      if (s.d >= bd) continue
-      const at = lerpP(r.line[k], r.line[k + 1], s.t)
-      // 接点在桥的这一侧（离桥中点比桥头远），接线沿途都是干地
-      if (dist(at, bridge) < dist(e, bridge)) continue
-      let dry = true
-      for (let t = 0.1; t <= 1 && dry; t += 0.1) if (T.waterAt(lerpP(e, at, t)) < 2) dry = false
-      if (!dry) continue
-      bd = s.d
-      best = at
-    }
+  // 接点在桥的这一侧（离桥中点比桥头远），接线沿途都是干地
+  const ok = (r: Road, at: P) => {
+    if (!through(r) || dist(at, bridge) < dist(e, bridge)) return false
+    for (let t = 0.1; t <= 1; t += 0.1) if (T.waterAt(lerpP(e, at, t)) < 2) return false
+    return true
   }
-  return best
+  return nearestRoad(ctx, e, 120, ok)?.p ?? null
 }
 
 function nameDistricts(ctx: Ctx) {

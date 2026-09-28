@@ -15,6 +15,10 @@ export const unit = (v: P): P => {
   const L = Math.hypot(v[0], v[1]) || 1
   return [v[0] / L, v[1] / L]
 }
+export const sub = (a: P, b: P): P => [a[0] - b[0], a[1] - b[1]]
+/** 转 90°（屏幕坐标里顺时针） */
+export const perp = (u: P): P => [-u[1], u[0]]
+export const neg = (u: P): P => [-u[0], -u[1]]
 
 /** 有向面积（y 向下的屏幕坐标里，正值为顺时针） */
 export function signedArea(poly: Poly) {
@@ -335,15 +339,28 @@ export function obb(poly: Poly): { axis: P; len: number; wid: number; center: P 
   return best
 }
 
-/** 局部标架：原点 o，纵向 f，横向 l；局部坐标 (a, b) 对应地图点 o + f·a + l·b */
+/** 局部标架：原点 o，纵向 f，横向 l；局部坐标 (a, b) 对应地图点 o + f·a + l·b。矩形标架另有半长 hx（沿 f）、半宽 hy（沿 l） */
 export interface Frame {
   o: P
   f: P
   l: P
+  hx?: number
+  hy?: number
+}
+/** 以 o 为中心、a ∈ ±hx、b ∈ ±hy 的矩形标架 */
+export type RectFrame = Frame & { hx: number; hy: number }
+/** 以 p 为原点、f 朝 d 的标架（l 是 d 转 90°） */
+export const frameAt = (p: P, d: P, hx = 0, hy = 0): RectFrame => ({ o: p, f: d, l: perp(d), hx, hy })
+/** 地图点 p 在标架里的局部坐标 (a, b) */
+export const local = (F: Frame, p: P): P => {
+  const d = sub(p, F.o)
+  return [d[0] * F.f[0] + d[1] * F.f[1], d[0] * F.l[0] + d[1] * F.l[1]]
 }
 export const at = (F: Frame, a: number, b: number): P => [F.o[0] + F.f[0] * a + F.l[0] * b, F.o[1] + F.f[1] * a + F.l[1] * b]
 /** 局部坐标里 a0 ~ a1、b0 ~ b1 的矩形 */
 export const box = (F: Frame, a0: number, a1: number, b0: number, b1: number): Poly => [at(F, a0, b0), at(F, a1, b0), at(F, a1, b1), at(F, a0, b1)]
+/** 以局部 (a, b) 为中心、沿 f 长 w、沿 l 宽 h 的矩形 */
+export const cbox = (F: Frame, a: number, b: number, w: number, h: number) => box(F, a - w / 2, a + w / 2, b - h / 2, b + h / 2)
 /** 多边形在标架里的范围 */
 export function extent(F: Frame, poly: Poly) {
   let a0 = Infinity

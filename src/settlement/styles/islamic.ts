@@ -1,5 +1,5 @@
 import type { CultureStyle } from '../culture'
-import { centerDist, clearOf, cityDice, clipWater, hashAt, isFree, placeable, type Ctx } from '../ctx'
+import { emitArea, centerDist, clearOf, cityDice, clipWater, hashAt, isFree, placeable, type Ctx } from '../ctx'
 import { allot, composer, type Elem, type Preset } from '../compose/core'
 import { add, area, axes, centroid, circlePoly, clipConvex, clipHalf, dist, inscribedRect, insetConvex, localBox, obb, pointInPoly, rect, type P, type Poly } from '../geom'
 import {
@@ -20,6 +20,7 @@ import {
 import { isVillage, townShare } from '../scale'
 import type { BuildingKind, Ward } from '../types'
 import { addBuilding, addGroup, fit, inside, place, plantTree, scatterTrees, subdivide } from '../wards'
+import { addWall, connectGates } from '../walls'
 
 /**
  * 伊斯兰：有机生长的城里（以及麦地那城墙外的关厢）也按伊斯兰城市的样子盖：
@@ -146,7 +147,7 @@ function farmsteads(ctx: Ctx, block: Poly) {
     const wingP = box(u0, u0 + t, v0 + t, v1)
     place(ctx, wingP, 'house', {}, { ridge: Math.atan2(b.axis[1], b.axis[0]) + Math.PI / 2, floors: 1, units: 0 })
     const yard = insetConvex(q, 0.5)
-    if (yard.length >= 3) ctx.out.enclosures.push(yard)
+    if (yard.length >= 3) emitArea(ctx, 'enclosures', yard)
     scatterTrees(ctx, insetConvex(q, 2), 0.004, 2, 3.4)
   }
 }
@@ -191,7 +192,7 @@ function madrasa(ctx: Ctx, block: Poly): Poly | null {
     [1, 0.85, 0.72],
   )
   if (!got || !addGroup(ctx, got.parts, 0.5)) return null
-  ctx.out.plazas.push(got.court)
+  emitArea(ctx, 'plazas', got.court)
   ctx.occ.add(got.court)
   ctx.out.landmarks.push({ p: centroid(got.court), name: ctx.namer.islamic('madrasa'), kind: 'school' })
   st(ctx).madrasas++
@@ -302,14 +303,7 @@ function qasr(ctx: Ctx, block: Poly): boolean {
     const k = Math.floor(dist(a, b) / 22)
     for (let j = 1; j <= k; j++) if (i !== gi) towers.push([a[0] + ((b[0] - a[0]) * j) / (k + 1), a[1] + ((b[1] - a[1]) * j) / (k + 1)])
   })
-  ctx.out.walls.push({
-    loop: curtain,
-    solid: curtain.map(() => true),
-    towers,
-    gates: [{ p: gm, angle: Math.atan2(ge[1], ge[0]) + Math.PI / 2 }],
-    kind: 'stone',
-    thickness: 3,
-  })
+  const wall = addWall(ctx, { loop: curtain, solid: curtain.map(() => true), towers, gates: [{ p: gm, angle: Math.atan2(ge[1], ge[0]) + Math.PI / 2 }], kind: 'stone', thickness: 3 }, 'keep')
   ctx.out.landmarks.push({ p: c, name: ctx.namer.palace(), kind: 'castle' })
 
   const f = axes(e)
@@ -337,7 +331,7 @@ function qasr(ctx: Ctx, block: Poly): boolean {
     const av = clipConvex(f.box(gu0, u0, gv - 4, gv + 4), curtain)
     if (av.length >= 3) {
       for (const sv of [-6, 6]) for (let u = gu0 + 6; u < u0 - 3; u += 7) if (pointInPoly(f.at(u, gv + sv), inner)) tree(K, f.at(u, gv + sv), 2 + ctx.rng.next() * 0.5)
-      ctx.out.plazas.push(av)
+      emitArea(ctx, 'plazas', av)
       ctx.occ.add(av)
     }
   }
@@ -426,8 +420,8 @@ function qasr(ctx: Ctx, block: Poly): boolean {
           const t = f.at(u, v)
           if (pointInPoly(t, g2)) tree(K, t, 1.6 + ctx.rng.next() * 0.7)
         }
-      ctx.out.greens.push({ poly: g, kind: 'garden' })
-      ctx.out.enclosures.push(g)
+      emitArea(ctx, 'greens', g, 'garden')
+      emitArea(ctx, 'enclosures', g)
       ctx.occ.add(g)
       continue
     }
@@ -440,8 +434,10 @@ function qasr(ctx: Ctx, block: Poly): boolean {
       }
       scatterTrees(ctx, q, 0.004, 2, 3.4)
     }
-    ctx.out.plazas.push(q)
+    emitArea(ctx, 'plazas', q)
   }
+  // 宫门接上路
+  connectGates(ctx, [wall])
   return true
 }
 
@@ -507,7 +503,7 @@ function range(K: Kit, [a, b, c, d]: Box, kind: BuildingKind, seg = 18) {
 function pave(K: Kit, [a, b, c, d]: Box) {
   if (b - a < 0.4 || d - c < 0.4) return
   const p = K.f.box(a, b, c, d)
-  K.ctx.out.plazas.push(p)
+  emitArea(K.ctx, 'plazas', p)
   K.ctx.occ.add(p)
 }
 
@@ -515,7 +511,7 @@ function pave(K: Kit, [a, b, c, d]: Box) {
 function bed(K: Kit, [a, b, c, d]: Box) {
   if (b - a < 0.8 || d - c < 0.8) return
   const p = K.f.box(a, b, c, d)
-  K.ctx.out.greens.push({ poly: p, kind: 'garden' })
+  emitArea(K.ctx, 'greens', p, 'garden')
   K.ctx.occ.add(p)
 }
 
@@ -631,7 +627,7 @@ function kioskCourt(K: Kit, [a, b, c, d]: Box, T: number) {
   const vm = (c + d) / 2
   const th = Math.max(6, Math.min(T * 1.2, (b - a) * 0.22))
   range(K, [b - th, b, c, d], 'large', 20)
-  K.ctx.out.enclosures.push(K.f.box(a, b - th, c, d))
+  emitArea(K.ctx, 'enclosures', K.f.box(a, b - th, c, d))
   const g: Box = [a + 1.5, b - th - 1.5, c + 1.5, d - 1.5]
   const um = (g[0] + g[1]) / 2
   const ps = Math.min(9, (g[1] - g[0]) * 0.18, (g[3] - g[2]) * 0.18)
@@ -712,8 +708,8 @@ function poolCourt(K: Kit, [ca, cb, cc, cd]: Box) {
     bed(K, [e0, e1, vm + pw / 2, vm + pw / 2 + h])
     pave(K, [e0, e1, vm - pw / 2, vm + pw / 2])
     // 池沿：两道线
-    K.ctx.out.enclosures.push(pool)
-    if (pw > 4) K.ctx.out.enclosures.push(K.f.box(e0 + 0.7, e1 - 0.7, vm - pw / 2 + 0.7, vm + pw / 2 - 0.7))
+    emitArea(K.ctx, 'enclosures', pool)
+    if (pw > 4) emitArea(K.ctx, 'enclosures', K.f.box(e0 + 0.7, e1 - 0.7, vm - pw / 2 + 0.7, vm + pw / 2 - 0.7))
     if (pw > 5 && e1 - e0 > 30) for (const u of [e0 + 2.5, e1 - 2.5]) K.ctx.out.landmarks.push({ p: K.f.at(u, vm), kind: 'fountain' })
     pave(K, [ca, e0, cc, cd])
     pave(K, [e1, cb, cc, cd])
@@ -891,7 +887,7 @@ function mosque(K: Kit, bx: Box) {
     return
   }
   const sahn = g.box(a + ar, b - hd, c + ar, d - ar)
-  ctx.out.plazas.push(sahn)
+  emitArea(ctx, 'plazas', sahn)
   ctx.occ.add(sahn)
   if (area(sahn) > 100) ctx.out.landmarks.push({ p: centroid(sahn), kind: 'fountain' })
 }
@@ -935,7 +931,7 @@ function kitchens(K: Kit, [a, b, c, d]: Box) {
   const yard: Box = [a + t * 0.7, b - t * 0.7, c + t, d - t * 0.8]
   if (yard[1] - yard[0] > 14 && yard[3] - yard[2] > 10) for (const du of [0.3, 0.7]) put(K, f.box(yard[0] + (yard[1] - yard[0]) * du - 2, yard[0] + (yard[1] - yard[0]) * du + 2, yard[3] - 5, yard[3] - 1), 'shed')
   pave(K, yard)
-  ctx.out.enclosures.push(f.box(...yard))
+  emitArea(ctx, 'enclosures', f.box(...yard))
 }
 
 /** 马厩：两排长长的马房夹着一片围起来的场院，尽头是马夫住的屋，场院里一道水槽 */
@@ -953,7 +949,7 @@ function stables(K: Kit, [a, b, c, d]: Box) {
   if (Math.min(yu, yv) > 24) range(K, yu >= yv ? [yard[0] + 6, yard[1] - 6, vm - t / 2, vm + t / 2] : [um - t / 2, um + t / 2, yard[2] + 6, yard[3] - 6], 'shed', 16)
   else if (yard[1] - yard[0] > 16 && yard[3] - yard[2] > 8) put(K, f.box(yard[0] + 4, yard[1] - 4, vm - 0.8, vm + 0.8), 'shed')
   pave(K, yard)
-  ctx.out.enclosures.push(f.box(...yard))
+  emitArea(ctx, 'enclosures', f.box(...yard))
 }
 
 /** 库房（makhzen）：一排排长仓房，中间是窄巷 */
@@ -1010,7 +1006,7 @@ function chaharBagh(K: Kit, [a, b, c, d]: Box) {
   const m = Math.min(D, Wd)
   const w = Math.max(1.4, Math.min(3.5, m * 0.035))
   const walk = Math.max(1.2, Math.min(3, m * 0.03))
-  ctx.out.enclosures.push(f.box(a, b, c, d))
+  emitArea(ctx, 'enclosures', f.box(a, b, c, d))
   const pv = Math.min(18, m * 0.16)
   const pav = m > 30 && put(K, f.box(um - pv / 2, um + pv / 2, vm - pv / 2, vm + pv / 2), 'hall')
   const quads: Box[] = []
@@ -1047,7 +1043,7 @@ function orchardPool(K: Kit, [a, b, c, d]: Box) {
   const pw = Math.min((d - c) * 0.4, 50)
   const pool: Box = [um - pu / 2, um + pu / 2, vm - pw / 2, vm + pw / 2]
   const walk = 3
-  ctx.out.enclosures.push(f.box(a, b, c, d))
+  emitArea(ctx, 'enclosures', f.box(a, b, c, d))
   const pv = Math.min(14, pw * 0.4)
   put(K, f.box(pool[1] + 0.5, pool[1] + walk - 0.5 + pv * 0.6, vm - pv / 2, vm + pv / 2), 'hall')
   const cells: Box[] = [
@@ -1063,6 +1059,6 @@ function orchardPool(K: Kit, [a, b, c, d]: Box) {
   pave(K, [a, b, d - 1.5, d])
   pave(K, [a, a + 1.5, c + 1.5, d - 1.5])
   pave(K, [b - 1.5, b, c + 1.5, d - 1.5])
-  ctx.out.enclosures.push(f.box(...pool))
+  emitArea(ctx, 'enclosures', f.box(...pool))
   for (const u of [pool[0] + 4, pool[1] - 4]) ctx.out.landmarks.push({ p: f.at(u, vm), kind: 'fountain' })
 }

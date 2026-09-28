@@ -1,4 +1,4 @@
-import { placeable, mark, memo, type Ctx } from '../ctx'
+import { emitArea, placeable, mark, memo, type Ctx } from '../ctx'
 import { area, centroid, circlePoly, pointInPoly, rect, signedArea, type P, type Poly } from '../geom'
 import type { Ward, WardType } from '../types'
 import { addBuilding, addGroup, scatterTrees } from '../wards'
@@ -428,7 +428,7 @@ function place(ctx: Ctx, poly: Poly, kind: Parameters<typeof addBuilding>[2], fl
 function square(ctx: Ctx, z: PlanZone, trade: boolean) {
   const h = PU / 2
   const k = PV / 2
-  ctx.out.plazas.push(box(z, -h, h, -k, k))
+  emitArea(ctx, 'plazas', box(z, -h, h, -k, k))
   // 拱廊：沿四边一道连续的廊（上面是临广场的楼房出挑），朝广场一面是一排石柱、柱间是拱口。
   // 画成一条带柱齿的廊带：柱子伸到廊沿，柱间凹进去一截（拱口），城镇尺度看是一圈围着广场的深色廊带，放大能数出开间
   // 角上让出的街口随大街宽（城市的大街更宽）
@@ -545,7 +545,7 @@ function church(ctx: Ctx, g: Grid, z: PlanZone, i: number, j: number) {
     [apse, 'temple'],
   ], 0.5)) {
     mark(ctx, z.fromUV(U(parvis + T * 0.7 + L / 2), vc), 'temple')
-    ctx.out.plazas.push(box(z, U(0), U(parvis), V(0), V(2 + W + 2)))
+    emitArea(ctx, 'plazas', box(z, U(0), U(parvis), V(0), V(2 + W + 2)))
     end = parvis + T * 0.7 + L + W * 0.42 + 3
     // 墓园：教堂背后
     const gy = box(z, U(parvis + T * 0.7), U(end), V(2 + W + 3), back)
@@ -556,8 +556,8 @@ function church(ctx: Ctx, g: Grid, z: PlanZone, i: number, j: number) {
 }
 
 function graves(ctx: Ctx, z: PlanZone, zone: Poly, a0: number, a1: number, b0: number, b1: number) {
-  ctx.out.greens.push({ poly: zone, kind: 'cemetery' })
-  ctx.out.enclosures.push(zone)
+  emitArea(ctx, 'greens', zone, 'cemetery')
+  emitArea(ctx, 'enclosures', zone)
   const [ua, ub] = [Math.min(a0, a1) + 2.5, Math.max(a0, a1) - 2.5]
   const [va, vb] = [Math.min(b0, b1) + 2.5, Math.max(b0, b1) - 2.5]
   for (let u = ua; u < ub; u += 3.4)

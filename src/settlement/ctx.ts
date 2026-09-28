@@ -1,5 +1,5 @@
 import { RNG } from '../gen/rng'
-import { bboxOf, centroid, circlePoly, clipHalf, convexOverlap, dist, insetConvex, pointInPoly, segDist, segPolyDist, type BBox, type P, type Poly } from './geom'
+import { area, bboxOf, centroid, circlePoly, clipHalf, convexOverlap, dist, insetConvex, pointInPoly, resample, segDist, segPolyDist, type BBox, type P, type Poly } from './geom'
 import type { DistrictWhere, LandmarkNameKind, SettleNamer } from './names'
 import type { TerrainResult } from './terrain'
 import type { FeatureEnv, FeatureId } from './features'
@@ -473,22 +473,59 @@ export const SUB_WEIGHT = 1.15
 /** 方格程度：规整度里方格（而非放射）的那部分 */
 export const squareness = (p: SettlementParams) => p.regularity * (1 - p.radial)
 
-/** 把多边形裁到离水 margin 米以外（沿水距场的等值线收边） */
-export function clipWater(ctx: Ctx, poly: Poly, margin: number): Poly | null {
+/** 多边形的顶点与边上（每 3 米一点）离水最近的一点与它的水距；都在 margin 以外返回 null */
+function wettest(ctx: Ctx, poly: Poly, margin: number): { q: P; w: number } | null {
+  let best: { q: P; w: number } | null = null
+  if (!poly.length) return null
+  for (const q of [...poly, ...resample([...poly, poly[0]], 3)]) {
+    const w = ctx.T.waterAt(q)
+    if (w < (best?.w ?? margin)) best = { q, w }
+  }
+  return best
+}
+
+/**
+ * 把多边形裁到离水 margin 米以外：沿边每 3 米查一遍，最压水的一点朝形心的方向切掉一刀（河从一角斜穿过去、
+ * 贴着弯曲的岸都能一刀刀收到岸上），最多 rounds 刀。形心落水、切没了返回 null；切满 rounds 刀还压水的返回切到的样子
+ */
+export function clipWater(ctx: Ctx, poly: Poly, margin: number, rounds = 3): Poly | null {
   let out = poly
-  for (let pass = 0; pass < 3; pass++) {
-    let worst = Infinity
-    for (const v of out) worst = Math.min(worst, ctx.T.waterAt(v))
-    if (worst >= margin) return out
+  for (let pass = 0; pass < rounds; pass++) {
+    const worst = wettest(ctx, out, margin)
+    if (!worst) return out
     const c = centroid(out)
-    const w = ctx.T.waterAt(c)
-    if (w < margin) return null
-    const g = ctx.T.waterGrad(c)
-    const o: P = [c[0] - g[0] * (w - margin), c[1] - g[1] * (w - margin)]
-    out = clipHalf(out, o, [-g[0], -g[1]])
+    if (ctx.T.waterAt(c) < margin) return null
+    // 河心附近水距的梯度不可靠：朝形心的方向退回岸上（水距大致一米一米地涨，退够差的米数再多一米）
+    const L = dist(c, worst.q) || 1
+    const g: P = [(c[0] - worst.q[0]) / L, (c[1] - worst.q[1]) / L]
+    const k = margin + 1 - worst.w
+    out = clipHalf(out, [worst.q[0] + g[0] * k, worst.q[1] + g[1] * k], [-g[0], -g[1]])
     if (out.length < 3) return null
   }
   return out
+}
+
+/**
+ * 成片的地面（院墙、广场、园地、菜园、墓地）落到岸上：离水不到 1 米的地方切掉（见 clipWater），
+ * 切完还压水（离水不到 0.5 米）、或只剩一小块（20 m² 以下）的不要。不压水的原样返回
+ */
+export function dryArea(ctx: Ctx, poly: Poly): Poly | null {
+  if (poly.length < 3) return null
+  if (!wettest(ctx, poly, 1)) return poly
+  const q = clipWater(ctx, poly, 1, 12)
+  return q && q.length >= 3 && area(q) > 20 && !wettest(ctx, q, 0.5) ? q : null
+}
+
+type GreenKind = Settlement['greens'][number]['kind']
+/** 登记一片成片的地面：先落到岸上（dryArea），落不下就不登记。返回登记的多边形 */
+export function emitArea(ctx: Ctx, list: 'enclosures' | 'plazas', poly: Poly): Poly | null
+export function emitArea(ctx: Ctx, list: 'greens', poly: Poly, kind: GreenKind): Poly | null
+export function emitArea(ctx: Ctx, list: 'enclosures' | 'plazas' | 'greens', poly: Poly, kind?: GreenKind): Poly | null {
+  const q = dryArea(ctx, poly)
+  if (!q) return null
+  if (list === 'greens') ctx.out.greens.push({ poly: q, kind: kind! })
+  else ctx.out[list].push(q)
+  return q
 }
 
 /**

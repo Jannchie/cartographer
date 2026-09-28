@@ -1,12 +1,13 @@
-import { addRoad } from '../roads'
+import { addRoad, nearestRoad, through } from '../roads'
 import { clamp } from '../../gen/util'
 import type { CultureStyle } from '../culture'
-import { centerDist, cityDice, clipWater, hashAt, isFree, memo, placeable, siteDice, whereOf, mark, type Ctx } from '../ctx'
+import { emitArea, centerDist, cityDice, clipWater, hashAt, isFree, memo, placeable, siteDice, whereOf, mark, type Ctx } from '../ctx'
 import { composer, type Composer, type Elem, type Preset } from '../compose/core'
-import { area, at, box, centroid, circlePoly, dist, extent, insetConvex, obb, pointInPoly, rect, segDist, splitConvex, unit, type Frame, type P, type Poly } from '../geom'
+import { area, at, box, centroid, dist, extent, insetConvex, obb, pointInPoly, rect, segDist, splitConvex, unit, type Frame, type P, type Poly } from '../geom'
 import { buke, jiin, machiya, put, rampart, tenshu } from '../plans/jokamachi-build'
+import { connectGates } from '../walls'
 import { isVillage, townShare } from '../scale'
-import type { BuildingKind, Ward } from '../types'
+import type { BuildingKind, Road, Ward } from '../types'
 import { addBuilding, addGroup, eastCompound, inside, place, plantTree, scatterTrees, urban } from '../wards'
 import { drop } from '../undo'
 
@@ -55,7 +56,6 @@ const small = (ctx: Ctx) => isVillage(ctx.p.size)
 // —————————————————————— 小工具 ——————————————————————
 
 /** 点落在路上（只看道路，不算河与堀） */
-const onRoad = (ctx: Ctx, q: P) => ctx.corridors.hitsPoly(circlePoly(q, 0.6, 4), 0, ['road'])
 
 /**
  * 街区的正面：临街（边外几米就是路）的最长一条边；没有临街边就取最长边。
@@ -74,7 +74,7 @@ function frontOf(ctx: Ctx, poly: Poly): { a: P; u: P; n: P; L: number; street: b
     let n: P = [-u[1], u[0]]
     const m: P = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
     if ((c[0] - m[0]) * n[0] + (c[1] - m[1]) * n[1] < 0) n = [-n[0], -n[1]]
-    const street = onRoad(ctx, [m[0] - n[0] * 4, m[1] - n[1] * 4])
+    const street = ctx.corridors.hits([m[0] - n[0] * 4, m[1] - n[1] * 4], 0.6, ['road'])
     const s = (street ? 1000 : 0) + L
     if (s > bs) {
       bs = s
@@ -389,7 +389,7 @@ function jinja(ctx: Ctx, block: Poly, facing: P, isSmall: boolean, key?: string)
       made++
     }
   }
-  ctx.out.enclosures.push(precinct)
+  emitArea(ctx, 'enclosures', precinct)
   const name = grand ? ctx.namer.sacred('taisha', `${Math.round(Fr.o[0])},${Math.round(Fr.o[1])}`) : key ? ctx.namer.sacred('villageShrine', key) : (ctx.namer.wa('shrine') ?? ctx.namer.wa('temple'))
   ctx.out.landmarks.push({ p: at(Fr, ha + hd / 2, bm), name, kind: 'shrine', major: grand })
   shrines(ctx).push({ p: at(Fr, ha + hd / 2, bm), back: at(Fr, ha + hd + 13 * s, bm), f: Fr.f, tier: grand ? 'grand' : isSmall ? 'small' : 'standard', precinct })
@@ -409,23 +409,15 @@ function jinja(ctx: Ctx, block: Poly, facing: P, isSmall: boolean, key?: string)
     }
     // 正后方没有路：接到最近的路上（沿途不压房子、不下水）
     if (!end) {
-      let bd = 150
-      for (const r of ctx.out.roads) {
-        if (r.kind === 'path' || r.kind === 'stair') continue
-        for (let k = 0; k + 1 < r.line.length; k++) {
-          const sd = segDist(e0, r.line[k], r.line[k + 1])
-          if (sd.d >= bd) continue
-          const q: P = [r.line[k][0] + (r.line[k + 1][0] - r.line[k][0]) * sd.t, r.line[k][1] + (r.line[k + 1][1] - r.line[k][1]) * sd.t]
-          let clear = true
-          for (let t = 0.05; t < 0.97 && clear; t += 0.03) {
-            const m: P = [e0[0] + (q[0] - e0[0]) * t, e0[1] + (q[1] - e0[1]) * t]
-            if (ctx.T.waterAt(m) < 2 || ctx.occ.hitsPoint(m, sw / 2 + 0.6) || pointInPoly(m, precinct)) clear = false
-          }
-          if (!clear) continue
-          bd = sd.d
-          end = q
+      const clear = (r: Road, q: P) => {
+        if (!through(r)) return false
+        for (let t = 0.05; t < 0.97; t += 0.03) {
+          const m: P = [e0[0] + (q[0] - e0[0]) * t, e0[1] + (q[1] - e0[1]) * t]
+          if (ctx.T.waterAt(m) < 2 || ctx.occ.hitsPoint(m, sw / 2 + 0.6) || pointInPoly(m, precinct)) return false
         }
+        return true
       }
+      end = nearestRoad(ctx, e0, 150, clear)?.p ?? null
     }
     if (end && dist(end, e0) > 6) {
       ctx.out.roads.push({ line: [end, e0], width: sw, kind: 'path' })
@@ -467,6 +459,7 @@ const GOTEN: Elem<'two' | 'one' | 'three'>[] = [
  * 地方太小盖不下城的，是土墙围着的阵屋。
  */
 function shiro(ctx: Ctx, block: Poly): boolean {
+  const w0 = ctx.out.walls.length
   const zone = placeable(ctx, insetConvex(block, 1.5), 3, 0.6)
   if (!zone || zone.length < 3 || area(zone) < 700) return false
   const front = frontOf(ctx, zone)
@@ -494,7 +487,7 @@ function shiro(ctx: Ctx, block: Poly): boolean {
   rampart(ctx, corners, [{ edge: 0, p: at(F, A0, gl), angle: fA }], ring, mw, th)
   // 本丸的地面与登城路（街 → 桥 → 大手门 → 门内的枡形空地）
   const court = box(F, A0 + th / 2, A1 - th / 2, B0 + th / 2, B1 - th / 2)
-  ctx.out.plazas.push(court)
+  emitArea(ctx, 'plazas', court)
   path(ctx, [at(F, R.a0 - 4, gl), at(F, A0 + th / 2 + 7, gl)], 4)
   // 天守：本丸正中略偏后；小天守在背着登城路的一侧
   const D = A1 - A0 - th
@@ -545,6 +538,8 @@ function shiro(ctx: Ctx, block: Poly): boolean {
   // 城外剩下的边角是土手上的树林
   const outer = insetConvex(zone, 1)
   if (outer.length >= 3) scatterTrees(ctx, outer, 0.003, 2.5, 4.5)
+  // 城门接上路
+  connectGates(ctx, ctx.out.walls.slice(w0))
   return true
 }
 
@@ -562,7 +557,7 @@ function jinya(ctx: Ctx, R: { F: Frame; a0: number; a1: number; b0: number; b1: 
   put(ctx, gate, 'hall')
   const sub = box(F, a0 + D * 0.72, a1 - 2.5, b0 + 3, b0 + 3 + Math.min(12, W * 0.3))
   if (inside(sub, encl)) put(ctx, sub, 'hall')
-  ctx.out.enclosures.push(encl)
+  emitArea(ctx, 'enclosures', encl)
   ctx.out.landmarks.push({ p: at(F, a0 + D * 0.5, bm), name: ctx.namer.wa('castle'), kind: 'castle' })
   scatterTrees(ctx, insetConvex(encl, 2), 0.004, 2.5, 4)
   return true
@@ -636,15 +631,15 @@ function palaceKit(ctx: Ctx, F: Frame) {
     bld: (kind: BuildingKind, r: Rc) => ok(r) && put(ctx, rect(r), kind),
     /** 白砂的庭（南庭、前庭、院子里的地面） */
     gravel: (r: Rc) => {
-      if (ok(r, 3)) ctx.out.plazas.push(rect(r))
+      if (ok(r, 3)) emitArea(ctx, 'plazas', rect(r))
     },
     green: (r: Rc | Poly, kind: 'garden' | 'park' | 'courtyard') => {
       const poly = Array.isArray(r) ? r : rect(r)
-      if (poly.length >= 3 && area(poly) > 20) ctx.out.greens.push({ poly, kind })
+      if (poly.length >= 3 && area(poly) > 20) emitArea(ctx, 'greens', poly, kind)
     },
     /** 院墙（築地塀、回廊外沿的线） */
     fence: (r: Rc) => {
-      if (ok(r, 6)) ctx.out.enclosures.push(rect(r))
+      if (ok(r, 6)) emitArea(ctx, 'enclosures', rect(r))
     },
     /** 单独种的一棵树（左近の桜、右近の橘、壺庭的藤与梅） */
     tree: (a: number, b: number, r: number) => void plantTree(ctx, at(F, a, b), r),
@@ -800,7 +795,7 @@ function ikeniwa(ctx: Ctx, K: Kit, r: Rc) {
     pond.push(at(K.F, ca + Math.cos(t) * ra * k, cb + Math.sin(t) * rb * k))
   }
   if (Math.min(ra, rb) > 3) {
-    ctx.out.plazas.push(pond)
+    emitArea(ctx, 'plazas', pond)
     // 池面不种树、不盖房
     ctx.occ.add(pond)
     // 园路绕池一周
@@ -842,6 +837,7 @@ function kokuga(ctx: Ctx, block: Poly): boolean {
 }
 
 function gosho(ctx: Ctx, block: Poly): boolean {
+  const w0 = ctx.out.walls.length
   const zone = placeable(ctx, insetConvex(block, 1.5), 3, 0.35)
   if (!zone || zone.length < 3 || area(zone) < 1000) return false
   const R = palaceRect(zone)
@@ -907,6 +903,8 @@ function gosho(ctx: Ctx, block: Poly): boolean {
   else mark = dairiSmall(ctx, Km, core, C)
   C.done(mark)
   ctx.out.landmarks.push({ p: mark, name: ctx.namer.palace(), kind: 'castle' })
+  // 築地塀的四门接上路
+  connectGates(ctx, ctx.out.walls.slice(w0))
   return true
 }
 
@@ -1147,7 +1145,7 @@ function daidairi(ctx: Ctx, K: Kit, r: Rc, Z: Composer): P {
  */
 function hirokoji(ctx: Ctx, block: Poly) {
   const pave = ctx.corridors.clip(clipWater(ctx, block, 1) ?? block, ['wall']) ?? block
-  ctx.out.plazas.push(pave)
+  emitArea(ctx, 'plazas', pave)
   const c = centroid(pave)
   if (small(ctx)) {
     ctx.out.landmarks.push({ p: c, kind: 'well' })

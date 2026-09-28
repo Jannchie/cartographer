@@ -1,6 +1,6 @@
 import { addRoad } from '../roads'
-import { hashAt, placeable, type Ctx } from '../ctx'
-import { area, centroid, dist, insetConvex, pointInPoly, splitConvex, type P, type Poly } from '../geom'
+import { emitArea, hashAt, placeable, type Ctx } from '../ctx'
+import { area, centroid, insetConvex, pointInPoly, splitConvex, type P, type Poly } from '../geom'
 import type { Tri } from '../../gen/naming'
 import type { Culture, WardType } from '../types'
 import { farm, vegetation } from '../outer'
@@ -8,6 +8,7 @@ import { urban } from '../wards'
 import { drop } from '../undo'
 import { axisExit, gridSites, rectOutline, RESIDENTIAL, uvLine } from './common'
 import type { CityPlan, PlanRoad, PlanZone } from './types'
+import { addWall } from '../walls'
 
 /**
  * 里坊制（隋唐长安、洛阳的形制，缩到地图的尺度）：
@@ -228,7 +229,7 @@ function fang(ctx: Ctx, type: WardType, block: Poly, cross: boolean): number {
   if (inner.length < 3) return 0
   const form = formOf(ctx)
   // 坊墙先登记，房子盖好了再画（一户也没有的空坊只留墙，像长安城南的空坊一样也是常态）
-  if (form.fangWall) ctx.out.enclosures.push(wall)
+  if (form.fangWall) emitArea(ctx, 'enclosures', wall)
   const e: P = [1, 0]
   const n: P = [0, 1]
   const w = 5
@@ -308,7 +309,7 @@ function rajomon(ctx: Ctx, z: PlanZone) {
   solid.push(false)
   if (ctx.T.waterAt(gate) < 3) return
   const thickness = 3
-  ctx.out.walls.push({ loop, solid, towers: [], gates: [{ p: gate, angle: Math.PI / 2 }], kind: 'stone', thickness })
-  for (let k = 0; k + 1 < loop.length; k++) if (solid[k] && dist(loop[k], gate) > AXIS_W / 2 + 2) ctx.corridors.add([loop[k], loop[k + 1]], thickness / 2 + 1.5, 'wall')
+  // 朱雀大路穿门而过：门两旁的墙段不登记走廊
+  addWall(ctx, { loop, solid, towers: [], gates: [{ p: gate, angle: Math.PI / 2 }], kind: 'stone', thickness }, 'plan', { gateGap: AXIS_W / 2 + 2 })
   ctx.out.landmarks.push({ p: gate, name: { zh: '罗城门', en: 'Rajōmon', ja: '羅城門' }, kind: 'gate' })
 }

@@ -1,4 +1,4 @@
-import { isFree, placeable, siteDice, type Ctx } from '../ctx'
+import { emitArea, isFree, placeable, siteDice, type Ctx } from '../ctx'
 import { area, at, box, centroid, circlePoly, clipConvex, insetConvex, unit, type Frame, type P, type Poly } from '../geom'
 import { clamp } from '../../gen/util'
 import type { BuildingKind } from '../types'
@@ -101,11 +101,11 @@ export function garan(ctx: Ctx, block: Poly, facing: P) {
   const courts: Poly[] = []
   const gravel = (x0: number, x1: number, y0: number, y1: number) => {
     if (x1 - x0 > 3 && y1 - y0 > 3) {
-      ctx.out.plazas.push(B(x0, x1, y0, y1))
+      emitArea(ctx, 'plazas', B(x0, x1, y0, y1))
       courts.push(B(x0, x1, y0, y1))
     }
   }
-  const fence = (x0: number, x1: number, y0: number, y1: number) => ctx.out.enclosures.push(B(x0, x1, y0, y1))
+  const fence = (x0: number, x1: number, y0: number, y1: number) => emitArea(ctx, 'enclosures', B(x0, x1, y0, y1))
   const pagoda = (a: number, b: number, s: number) => mk('pagoda', a - s / 2, a + s / 2, b - s / 2, b + s / 2)
   /** 山门：楼门宽而深，四脚门小，仁王门居中 */
   const gateAt = (g: Gate, a: number, w: number) => mk('hall', a, a + (g === 'romon' ? 7 : g === 'nio' ? 6 : 4.5), bm - w / 2, bm + w / 2)
@@ -160,8 +160,8 @@ export function garan(ctx: Ctx, block: Poly, facing: P) {
       const pc = at(F, a0 + 9 * s + 3, bm)
       const pond = circlePoly(pc, clamp(W * 0.12, 3, 10), 14)
       if (ok(pond)) {
-        ctx.out.plazas.push(pond)
-        ctx.out.enclosures.push(pond)
+        emitArea(ctx, 'plazas', pond)
+        emitArea(ctx, 'enclosures', pond)
         ctx.occ.add(pond)
       }
     }
@@ -268,7 +268,7 @@ export function garan(ctx: Ctx, block: Poly, facing: P) {
     C.done(c)
     return
   }
-  ctx.out.enclosures.push(precinct)
+  emitArea(ctx, 'enclosures', precinct)
   ctx.out.landmarks.push({ p: at(F, (main[0] + main[1]) / 2, bm), name: ctx.namer.wa('temple'), kind: 'temple' })
   // 本堂后面：墓地、树林或方丈庭园
   const back = C.pick('back', BACK, { only: (k) => k !== 'bochi' || used === 'kinsei' || used === 'shinshu' || used === 'zen' })
@@ -277,7 +277,7 @@ export function garan(ctx: Ctx, block: Poly, facing: P) {
     const yard = clipConvex(box(F, g0, a1 - 2, b0 + 3, b1 - 3), precinct)
     if (yard.length >= 3 && area(yard) > 120) {
       if (back === 'bochi') {
-        ctx.out.greens.push({ poly: yard, kind: 'cemetery' })
+        emitArea(ctx, 'greens', yard, 'cemetery')
         for (let a = g0 + 2; a < a1 - 4; a += 3.2)
           for (let b = b0 + 5; b < b1 - 5; b += 2.6) {
             if (rng.next() < 0.3) continue
@@ -286,7 +286,7 @@ export function garan(ctx: Ctx, block: Poly, facing: P) {
           }
       } else if (back === 'niwa') {
         // 方丈庭园：白砂与几块石、几棵树
-        ctx.out.greens.push({ poly: yard, kind: 'garden' })
+        emitArea(ctx, 'greens', yard, 'garden')
         scatterTrees(ctx, yard, 0.008, 2, 3.5)
       } else scatterTrees(ctx, yard, 0.012, 2.5, 4.5)
     }

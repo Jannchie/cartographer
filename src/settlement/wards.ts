@@ -3,7 +3,7 @@ import { imperialPalace, royalPalace } from './palaces'
 import { eastCompound } from './compose/chinese'
 import { westChurch } from './compose/church'
 import { westCastle } from './compose/castle'
-import { clearOf, clipWater, hashAt, isFree, mark, northOf, placeable, type CorridorTag, type Ctx } from './ctx'
+import { emitArea, clearOf, clipWater, hashAt, isFree, mark, northOf, placeable, type CorridorTag, type Ctx } from './ctx'
 import { addRoad } from './roads'
 import { chord, clipConvex,
   area,
@@ -452,7 +452,7 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
 function croft(ctx: Ctx, poly: Poly) {
   const g = placeable(ctx, insetConvex(poly, 0.8), 1.5)
   if (!g || g.length < 3 || area(g) < 50 || ctx.occ.overlaps(g)) return
-  ctx.out.greens.push({ poly: g, kind: 'garden' })
+  emitArea(ctx, 'greens', g, 'garden')
   if (ctx.rng.next() < 0.5) scatterTrees(ctx, insetConvex(g, 1.5), 0.004, 2, 3.2)
 }
 
@@ -476,12 +476,12 @@ function detached(ctx: Ctx, lot: Lot, o: Dens) {
   const house = rect(hc, u, w, dep)
   if (!house.every((v) => pointInPoly(v, lot.poly)) || !put(ctx, house, 'house', o.floors)) return
   const yard = ctx.corridors.clip(insetConvex(lot.poly, 0.6))
-  if (yard && yard.length >= 3 && area(yard) > 80) ctx.out.enclosures.push(yard)
+  if (yard && yard.length >= 3 && area(yard) > 80) emitArea(ctx, 'enclosures', yard)
   const rear = rearOf(lot, set + dep + 2)
   if (rear && area(rear) > 60) {
     const g = placeable(ctx, insetConvex(rear, 1.2))
     if (g && area(g) > 40) {
-      ctx.out.greens.push({ poly: g, kind: 'garden' })
+      emitArea(ctx, 'greens', g, 'garden')
       scatterTrees(ctx, g, 0.006, 2, 3.5)
     }
   }
@@ -509,7 +509,7 @@ function courtyard(ctx: Ctx, lot: Lot, o: Dens) {
   put(ctx, box(u0, u1, v1 - t, v1), 'shed')
   put(ctx, box(u0, u0 + t, v0 + t + 0.6, v1 - t - 0.6), 'shed')
   if (ctx.rng.next() < 0.7) put(ctx, box(u1 - t, u1, v0 + t + 0.6, v1 - t - 0.6), 'shed')
-  ctx.out.greens.push({ poly: box(u0 + t, u1 - t, v0 + t, v1 - t), kind: 'courtyard' })
+  emitArea(ctx, 'greens', box(u0 + t, u1 - t, v0 + t, v1 - t), 'courtyard')
 }
 
 /** 作坊：临街一间师傅的住屋，后面一座大工棚，院墙围起的堆场里散着料棚、晾架 */
@@ -524,7 +524,7 @@ function works(ctx: Ctx, lot: Lot, o: Dens) {
   const house = rect(hc, u, w, 7)
   if (!house.every((v) => pointInPoly(v, lot.poly)) || !put(ctx, house, 'house', o.floors)) return
   const yard = ctx.corridors.clip(insetConvex(lot.poly, 0.6))
-  if (yard && yard.length >= 3 && area(yard) > 120) ctx.out.enclosures.push(yard)
+  if (yard && yard.length >= 3 && area(yard) > 120) emitArea(ctx, 'enclosures', yard)
   const rear = rearOf(lot, 11)
   const hall = rear && inscribedRect(rear, u, { v: n, minSide: 8 })
   if (hall) put(ctx, area(hall) > 380 ? shrink(hall, Math.sqrt(380 / area(hall))) : hall, 'shed')
@@ -580,7 +580,7 @@ function farmstead(ctx: Ctx, lot: Lot) {
     const yc: P = [m[0] + n[0] * (1.2 + yd / 2), m[1] + n[1] * (1.2 + yd / 2)]
     const raw = clipConvex(rect(yc, u, yw, yd), insetConvex(poly, 0.8))
     const yard = raw.length >= 3 ? ctx.corridors.clip(raw) : null
-    if (yard && yard.length >= 3 && area(yard) > 120) ctx.out.enclosures.push(yard)
+    if (yard && yard.length >= 3 && area(yard) > 120) emitArea(ctx, 'enclosures', yard)
   }
   if (rng.next() < 0.6) scatterTrees(ctx, clipHalf(insetConvex(poly, 2), [hc[0] + n[0] * (dep / 2 + 3), hc[1] + n[1] * (dep / 2 + 3)], [-n[0], -n[1]]), 0.003, 2.2, 3.6)
 }
@@ -620,7 +620,7 @@ export function plaza(ctx: Ctx, _ward: Ward, block: Poly, stallFactor = 1) {
   const rng = ctx.rng
   // 铺装直接连着街面，但不压城墙
   const pave = ctx.corridors.clip(clipWater(ctx, block, 1) ?? block, ['wall']) ?? block
-  ctx.out.plazas.push(pave)
+  emitArea(ctx, 'plazas', pave)
   const c = centroid(pave)
   const reserve: Poly[] = []
   // 市政厅 / 鼓楼
@@ -693,7 +693,7 @@ export function temple(ctx: Ctx, _ward: Ward, block: Poly) {
 /** 墓碑成排：沿 axis 方向按墓园自身的范围排布，每块都必须完整落在墓园内（离围墙留一点空） */
 export function graves(ctx: Ctx, zone: Poly, axis: P) {
   const rng = ctx.rng
-  ctx.out.greens.push({ poly: zone, kind: 'cemetery' })
+  emitArea(ctx, 'greens', zone, 'cemetery')
   const inner = insetConvex(zone, 1.2)
   if (inner.length < 3) return
   const across: P = [-axis[1], axis[0]]
@@ -726,7 +726,7 @@ export function cemetery(ctx: Ctx, ward: Ward, block: Poly) {
   const chapel = fit(zone, (q, s) => rect(q, b.axis, 12 * s, 7 * s), (h) => inside(h, zone) && isFree(ctx, h, { pad: 1 }), [1, 0.8])
   if (chapel) addBuilding(ctx, chapel, eastAsian(ctx.p.culture) ? 'hall' : 'temple', 1)
   graves(ctx, zone, b.axis)
-  ctx.out.enclosures.push(zone)
+  emitArea(ctx, 'enclosures', zone)
   scatterTrees(ctx, zone, 0.002, 3, 5)
   void ward
 }
@@ -770,8 +770,8 @@ export function noble(ctx: Ctx, ward: Ward, block: Poly) {
       siheyuan(ctx, encl)
       continue
     }
-    ctx.out.enclosures.push(encl)
-    ctx.out.greens.push({ poly: encl, kind: 'garden' })
+    emitArea(ctx, 'enclosures', encl)
+    emitArea(ctx, 'greens', encl, 'garden')
     const b = obb(encl)
     // 宅邸靠临街一侧
     let shift: P = [0, 0]
@@ -851,7 +851,7 @@ export function magicWard(ctx: Ctx, _ward: Ward, block: Poly) {
   const spot = fit(g, (q, s) => ({ q, r: r0 * s }), (t) => inside(circlePoly(t.q, t.r * 1.2, 16), g) && isFree(ctx, circlePoly(t.q, t.r * 1.2, 16), { pad: 1 }), [1, 0.85, 0.7, 0.55])
   if (!spot) return urban(ctx, block, 'common')
   const { q: mc, r } = spot
-  ctx.out.greens.push({ poly: g, kind: 'garden' })
+  emitArea(ctx, 'greens', g, 'garden')
   ctx.out.wonders.push({ p: mc, r, kind: 'circle' })
   addBuilding(ctx, circlePoly(mc, r * 0.28, 20), 'magic')
   // 围绕的石柱
@@ -888,7 +888,7 @@ export function siheyuan(ctx: Ctx, lot: Poly) {
   const h = v1 - v0
   // 院墙等到至少放下一座房子再画，免得留下空框
   let built = 0
-  const wall = () => built === 1 && ctx.out.enclosures.push(lot)
+  const wall = () => built === 1 && emitArea(ctx, 'enclosures', lot)
   const put = (p: Poly, kind: BuildingKind = 'house') => {
     let q: Poly = p
     for (let i = 0; i < lot.length && q.length >= 3; i++) {
@@ -979,8 +979,8 @@ export function eastWard(ctx: Ctx, block: Poly, rich: boolean, nearRoad = Infini
       ctx.estate = false
       const g = garden && ctx.out.buildings.length > n0 ? insetConvex(garden, 1) : null
       if (g && g.length >= 3) {
-        ctx.out.greens.push({ poly: g, kind: 'garden' })
-        ctx.out.enclosures.push(garden!)
+        emitArea(ctx, 'greens', g, 'garden')
+        emitArea(ctx, 'enclosures', garden!)
         scatterTrees(ctx, g, 0.01, 2, 3.5)
       }
     }
@@ -997,7 +997,7 @@ export function eastMarket(ctx: Ctx, block: Poly) {
   const { n, e } = northOf(ctx)
   const wall = placeable(ctx, insetConvex(block, 1.5), 2, 0.4)
   if (!wall || area(wall) < 500) return urban(ctx, block, 'market')
-  ctx.out.enclosures.push(wall)
+  emitArea(ctx, 'enclosures', wall)
   const { u0, u1, v0, v1, at, box } = localBox(wall, e, n)
   const A = area(wall)
   const k = A > 9000 ? 3 : A > 2500 ? 2 : 1
@@ -1021,7 +1021,7 @@ export function eastMarket(ctx: Ctx, block: Poly) {
     const t = Math.min(5, (u1 - u0) * 0.08, (v1 - v0) * 0.08)
     const sq = box(cu - t - 5, cu + t + 5, cv - t - 5, cv + t + 5)
     if (sq.every((q) => pointInPoly(q, wall))) {
-      ctx.out.plazas.push(sq)
+      emitArea(ctx, 'plazas', sq)
       ctx.occ.add(sq)
       place(ctx, box(cu - t, cu + t, cv - t, cv + t), 'tower', { tags: ['river', 'wall'] })
     }
@@ -1038,7 +1038,7 @@ export function eastMarket(ctx: Ctx, block: Poly) {
       if (cell.length < 3 || area(cell) < 100) continue
       if (k === 3 && i === 1 && j === 1) {
         // 市署：铺装的院子，北面正厅，当中市楼
-        ctx.out.plazas.push(cell)
+        emitArea(ctx, 'plazas', cell)
         const mu = (a0 + a1) / 2
         const hw = Math.min(14, (a1 - a0) * 0.35)
         place(ctx, box(mu - hw, mu + hw, b1 - Math.min(12, (b1 - b0) * 0.3), b1 - 2), 'civic', { pad: 0.5 })

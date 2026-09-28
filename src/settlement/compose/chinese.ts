@@ -1,4 +1,4 @@
-import { northOf, siteDice, type Ctx } from '../ctx'
+import { emitArea, northOf, siteDice, type Ctx } from '../ctx'
 import { at, box, centroid, circlePoly, localBox, pointInPoly, type Frame, type P, type Poly } from '../geom'
 import { clamp } from '../../gen/util'
 import type { BuildingKind } from '../types'
@@ -13,7 +13,7 @@ import { allot, composer, flanks, type Elem, type Preset } from './core'
 
 
 /** 院落的局部坐标：a 从正面往里（米），b 横向（米）；inside 给了就只在它里面盖 */
-export function kit(ctx: Ctx, F: Frame, o: { pad?: number; inside?: Poly } = {}) {
+export function yard(ctx: Ctx, F: Frame, o: { pad?: number; inside?: Poly } = {}) {
   const B = (a0: number, a1: number, b0: number, b1: number): Poly => box(F, Math.min(a0, a1), Math.max(a0, a1), Math.min(b0, b1), Math.max(b0, b1))
   const big = (a0: number, a1: number, b0: number, b1: number, s: number) => Math.abs(a1 - a0) >= s && Math.abs(b1 - b0) >= s
   return {
@@ -29,13 +29,13 @@ export function kit(ctx: Ctx, F: Frame, o: { pad?: number; inside?: Poly } = {})
       return addBuilding(ctx, p, kind, o.pad ?? 0.2)
     },
     pave(a0: number, a1: number, b0: number, b1: number) {
-      if (big(a0, a1, b0, b1, 1)) ctx.out.plazas.push(B(a0, a1, b0, b1))
+      if (big(a0, a1, b0, b1, 1)) emitArea(ctx, 'plazas', B(a0, a1, b0, b1))
     },
     fence(a0: number, a1: number, b0: number, b1: number) {
-      if (big(a0, a1, b0, b1, 6)) ctx.out.enclosures.push(B(a0, a1, b0, b1))
+      if (big(a0, a1, b0, b1, 6)) emitArea(ctx, 'enclosures', B(a0, a1, b0, b1))
     },
     green(kind: 'garden' | 'park' | 'courtyard', a0: number, a1: number, b0: number, b1: number) {
-      if (big(a0, a1, b0, b1, 4)) ctx.out.greens.push({ poly: B(a0, a1, b0, b1), kind })
+      if (big(a0, a1, b0, b1, 4)) emitArea(ctx, 'greens', B(a0, a1, b0, b1), kind)
     },
     tree: (a: number, b: number, r: number) => plantTree(ctx, at(F, a, b), r),
     trees(a0: number, a1: number, b0: number, b1: number, dens: number, r0 = 2, r1 = 3.6) {
@@ -43,7 +43,7 @@ export function kit(ctx: Ctx, F: Frame, o: { pad?: number; inside?: Poly } = {})
     },
   }
 }
-export type Kit = ReturnType<typeof kit>
+export type Yard = ReturnType<typeof yard>
 
 // —————————————————————— 一进院落 ——————————————————————
 
@@ -92,7 +92,7 @@ export const CENTRES: Elem<Centre>[] = [
  * 盖一进院落（a0 → a1 从前往后，b0 ~ b1 横向）：院墙、院门、正殿坐在院子后部（有后殿时后殿贴后墙），
  * 两侧配殿或廊庑，院心的塔、香炉、树。院子太小返回 false。
  */
-export function jin(K: Kit, a0: number, a1: number, b0: number, b1: number, s: Jin): boolean {
+export function jin(K: Yard, a0: number, a1: number, b0: number, b1: number, s: Jin): boolean {
   const w = b1 - b0
   const d = a1 - a0
   if (w < 12 || d < 12) return false
@@ -153,8 +153,8 @@ export function jin(K: Kit, a0: number, a1: number, b0: number, b1: number, s: J
         const r = clamp(Math.min(inner * 0.18, room * 0.3), 2.5, 9)
         const c = K.at(cc, bm)
         const half = circlePoly(c, r, 14).filter((q) => (q[0] - c[0]) * K.F.f[0] + (q[1] - c[1]) * K.F.f[1] <= 0.01)
-        K.ctx.out.plazas.push(half)
-        K.ctx.out.enclosures.push(half)
+        emitArea(K.ctx, 'plazas', half)
+        emitArea(K.ctx, 'enclosures', half)
         break
       }
     }
@@ -256,11 +256,11 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: Kind): Poly | null {
     break
   }
   if (!court) return null
-  if (!court.every((p) => pointInPoly(p, area0))) ctx.out.enclosures.push(area0)
-  else ctx.out.enclosures.push(court)
-  ctx.out.plazas.push(court)
+  if (!court.every((p) => pointInPoly(p, area0))) emitArea(ctx, 'enclosures', area0)
+  else emitArea(ctx, 'enclosures', court)
+  emitArea(ctx, 'plazas', court)
   const F: Frame = { o: A.at(uc, vc - ch / 2), f: n, l: e }
-  const K = kit(ctx, F, { inside: area0 })
+  const K = yard(ctx, F, { inside: area0 })
   const rank = Math.min(2, (ctx.p.capital ? 2 : ctx.p.size === 'city' ? 1 : 0) + (grand ? 1 : 0))
   const C = composer(siteDice(ctx, centroid(area0), `east.${kind}`), `east-${kind}`, PRESETS[kind], { size: Math.min(cw, ch), rank, tier: ctx.tier })
   const big: BuildingKind = kind === 'palace' ? 'keep' : 'temple'
@@ -324,7 +324,7 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: Kind): Poly | null {
       const pr = clamp(Math.min(Wc, d) * 0.18, 3, 12)
       const pc = K.at((a0 + a1) / 2, 0)
       const pond = circlePoly(pc, pr, 16, C.num('pondPh', 0, 3))
-      ctx.out.plazas.push(pond)
+      emitArea(ctx, 'plazas', pond)
       ctx.occ.add(pond)
       K.put('pagoda', a1 - 2 - 5, a1 - 2, Wc * 0.25 - 2.5, Wc * 0.25 + 2.5)
       K.trees(a0 + 2, a1 - 2, b0 + 2, b1 - 2, 0.012, 2, 3.6)
@@ -364,7 +364,7 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: Kind): Poly | null {
 }
 
 /** 东西路的一条：小院一两进、成排的屋、园子、库房 */
-export function wingFill(K: Kit, C: { num: (n: string, a: number, b: number) => number }, wing: Wing, a0: number, a1: number, c0: number, c1: number, sd: number) {
+export function wingFill(K: Yard, C: { num: (n: string, a: number, b: number) => number }, wing: Wing, a0: number, a1: number, c0: number, c1: number, sd: number) {
   const w = c1 - c0
   const d = a1 - a0
   if (w < 8 || d < 10) return

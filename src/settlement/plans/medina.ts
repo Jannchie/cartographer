@@ -1,5 +1,5 @@
 import { addRoad } from '../roads'
-import { clipWater, hashAt, isFree, placeable, siteDice, type Ctx } from '../ctx'
+import { emitArea, clipWater, hashAt, isFree, placeable, siteDice, type Ctx } from '../ctx'
 import {
   add,
   area,
@@ -29,6 +29,7 @@ import { drop } from '../undo'
 import type { CityPlan } from './types'
 import { composer } from '../compose/core'
 import { MOSQUE_PRESETS, mosqueForm, mosqueParts, plainMosque, type MosqueForm } from '../compose/islamic'
+import { addWall, connectGates } from '../walls'
 
 /**
  * 麦地那（伊斯兰传统城市：非斯、突尼斯、大马士革老城，缩到地图的尺度）。规划不在方格，而在结构与街巷的层级：
@@ -373,8 +374,8 @@ export function quarter(ctx: Ctx, ward: Ward, block: Poly, o: Fabric, baths: num
 export function orchard(ctx: Ctx, block: Poly) {
   const g = placeable(ctx, insetConvex(block, 2), 2, 0.5)
   if (!g || area(g) < 200) return
-  ctx.out.greens.push({ poly: g, kind: 'garden' })
-  ctx.out.enclosures.push(g)
+  emitArea(ctx, 'greens', g, 'garden')
+  emitArea(ctx, 'enclosures', g)
   scatterTrees(ctx, insetConvex(g, 2), 0.008, 2, 3.2)
 }
 
@@ -411,7 +412,7 @@ export function fabric(ctx: Ctx, block: Poly, o: Fabric, reserve: Poly[] = []) {
       // 空着的宅地是园子：围墙里种几棵果树
       const g = placeable(ctx, insetConvex(lot.poly, 1.2), 2)
       if (g && area(g) > 80 && ctx.rng.next() < 0.6) {
-        ctx.out.enclosures.push(g)
+        emitArea(ctx, 'enclosures', g)
         scatterTrees(ctx, insetConvex(g, 1.5), 0.012, 1.8, 3)
       }
       continue
@@ -512,7 +513,7 @@ export function courtHouse(ctx: Ctx, q: Poly, o: Fabric) {
   if (o.work && rng.next() < 0.35) {
     if (!addBuilding(ctx, box(u0, u1, v0, v0 + t + 1), 'house', 0, o.floors ?? 2)) return
     const yard = box(u0 + 0.6, u1 - 0.6, v0 + t + 1.6, v1 - 0.6)
-    ctx.out.enclosures.push(yard)
+    emitArea(ctx, 'enclosures', yard)
     if (rng.next() < 0.6) wing(ctx, box(u0 + 0.8, u0 + 0.8 + Math.min(6, w * 0.4), v1 - 0.8 - Math.min(5, d * 0.3), v1 - 0.8), 'shed')
     return
   }
@@ -526,7 +527,7 @@ export function courtHouse(ctx: Ctx, q: Poly, o: Fabric) {
   for (const [p, keep] of parts.slice(1)) if (keep) wing(ctx, p)
   const court = box(u0 + t, u1 - t, v0 + t, parts[1][1] ? v1 - t : v1 - 0.4)
   if (area(court) < 6) return
-  ctx.out.greens.push({ poly: court, kind: o.riad ? 'garden' : 'courtyard' })
+  emitArea(ctx, 'greens', court, o.riad ? 'garden' : 'courtyard')
   // 院心：大宅的花园种几棵树，小院偶尔一棵
   const cc = centroid(court)
   const { u0: a0, u1: a1, v0: b0, v1: b1 } = localBox(court, ax)
@@ -567,7 +568,7 @@ export function placeMosque(ctx: Ctx, zone: Poly, block: Poly, D0: number, W0: n
   }
   if (!got || !addGroup(ctx, got.parts, 1)) return null
   if (got.sahn) {
-    ctx.out.plazas.push(got.sahn)
+    emitArea(ctx, 'plazas', got.sahn)
     const c = centroid(got.sahn)
     // 庭院中央的净水池
     if (form.fountain && area(got.sahn) > 150) {
@@ -700,7 +701,7 @@ export function khan(ctx: Ctx, block: Poly, zone: Poly, axis: P, s0: number, kin
   )
   if (!got || !addBuilding(ctx, got.parts[0], kind, 0.5, 2)) return null
   for (const p of got.parts.slice(1)) wing(ctx, p, kind)
-  ctx.out.plazas.push(got.court)
+  emitArea(ctx, 'plazas', got.court)
   ctx.occ.add(got.court)
   return got.foot
 }
@@ -712,7 +713,7 @@ export function rahba(ctx: Ctx, block: Poly) {
   const sq = zone.length >= 3 && fit(zone, (q, s) => rect(q, b.axis, 34 * s, 26 * s), (p) => inside(p, block) && isFree(ctx, p, { pad: 0.5 }), [1, 0.8, 0.6])
   if (sq) {
     const pave = ctx.corridors.clip(sq, ['wall']) ?? sq
-    ctx.out.plazas.push(pave)
+    emitArea(ctx, 'plazas', pave)
     ctx.occ.add(pave)
     ctx.out.landmarks.push({ p: centroid(pave), kind: 'fountain' })
     stallRow(ctx, pave[0], pave[1], [(pave[3][0] - pave[0][0]) / (dist(pave[0], pave[3]) || 1), (pave[3][1] - pave[0][1]) / (dist(pave[0], pave[3]) || 1)], -6.4)
@@ -736,7 +737,7 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
   }
   if (!curtain) return false
   const c = centroid(curtain)
-  ctx.out.plazas.push(curtain)
+  emitArea(ctx, 'plazas', curtain)
   // 门朝城里
   const toC: P = [ctx.center[0] - c[0], ctx.center[1] - c[1]]
   let gi = 0
@@ -761,14 +762,18 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
     const k = Math.floor(L / 28)
     for (let j = 1; j <= k; j++) if (i !== gi) towers.push([a[0] + ((e[0] - a[0]) * j) / (k + 1), a[1] + ((e[1] - a[1]) * j) / (k + 1)])
   })
-  ctx.out.walls.push({
-    loop: curtain,
-    solid: curtain.map(() => true),
-    towers,
-    gates: [{ p: [(ga[0] + gb[0]) / 2, (ga[1] + gb[1]) / 2], angle: Math.atan2(gb[1] - ga[1], gb[0] - ga[0]) + Math.PI / 2 }],
-    kind: 'stone',
-    thickness: 3,
-  })
+  const wall = addWall(
+    ctx,
+    {
+      loop: curtain,
+      solid: curtain.map(() => true),
+      towers,
+      gates: [{ p: [(ga[0] + gb[0]) / 2, (ga[1] + gb[1]) / 2], angle: Math.atan2(gb[1] - ga[1], gb[0] - ga[0]) + Math.PI / 2 }],
+      kind: 'stone',
+      thickness: 3,
+    },
+    'keep',
+  )
   ctx.out.landmarks.push({ p: c, name: ctx.namer.islamic('kasbah'), kind: 'castle' })
   // 沿幕墙的兵营、仓房（门所在的那面墙留空）
   for (let i = 0; i < curtain.length; i++) {
@@ -809,11 +814,13 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
   if (pal && addGroup(ctx, pal.map((p) => [p, 'keep'] as [Poly, BuildingKind]), 1)) {
     const { u0, u1, v0, v1, box } = localBox([...pal[0], ...pal[1]], b.axis)
     const t = Math.min(6, (u1 - u0) * 0.2)
-    ctx.out.greens.push({ poly: box(u0 + t, u1 - t, v0 + t, v1 - t), kind: 'garden' })
+    emitArea(ctx, 'greens', box(u0 + t, u1 - t, v0 + t, v1 - t), 'garden')
   }
   // 要塞里的小清真寺
   const mz = insetConvex(court, 2)
   if (mz.length >= 3) placeMosque(ctx, mz, court, 22, 18, false)
+  // 要塞的门接上路
+  connectGates(ctx, [wall])
   scatterTrees(ctx, court, 0.001, 2, 3)
   return true
 }
@@ -852,8 +859,8 @@ export function tannery(ctx: Ctx, block: Poly): Poly | null {
   const b = obb(block)
   const yard = fit(zone, (q, s) => rect(q, b.axis, 26 * s, 18 * s), (p) => inside(p, block) && isFree(ctx, p, { pad: 0.5 }), [1, 0.8, 0.65])
   if (!yard) return null
-  ctx.out.plazas.push(yard)
-  ctx.out.enclosures.push(yard)
+  emitArea(ctx, 'plazas', yard)
+  emitArea(ctx, 'enclosures', yard)
   const { u0, u1, v0, v1 } = localBox(yard, b.axis)
   const n: P = [-b.axis[1], b.axis[0]]
   for (let u = u0 + 2.2; u < u1 - 1.5; u += 2.9)

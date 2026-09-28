@@ -1,5 +1,5 @@
 import { eastAsian } from './culture'
-import { isFree, mark, type Ctx } from './ctx'
+import { emitArea, isFree, mark, type Ctx } from './ctx'
 import { bboxOf, centroid, circlePoly, convexOverlap, dist, obb, pointInPoly, rect, type BBox, type P, type Poly } from './geom'
 import { vegetation } from './outer'
 import type { BuildingKind, Field, Tree } from './types'
@@ -73,8 +73,8 @@ export function tavernAt(ctx: Ctx, at: P, axis: P): boolean {
     ]
     if (!addGroup(ctx, parts, 0.3)) return false
     clear(ctx, L.foot)
-    ctx.out.greens.push({ poly: box(-w / 2 + 7.5, w / 2 - 7.5, -d / 2 + 9.5, d / 2 - 7), kind: 'courtyard' })
-    ctx.out.enclosures.push(L.foot)
+    emitArea(ctx, 'greens', box(-w / 2 + 7.5, w / 2 - 7.5, -d / 2 + 9.5, d / 2 - 7), 'courtyard')
+    emitArea(ctx, 'enclosures', L.foot)
     return true
   }
   const parts: [Poly, BuildingKind][] = [
@@ -84,8 +84,8 @@ export function tavernAt(ctx: Ctx, at: P, axis: P): boolean {
   ]
   if (!addGroup(ctx, parts, 0.3)) return false
   clear(ctx, L.foot)
-  ctx.out.greens.push({ poly: box(-w / 2 + 0.5, w / 2 - 7.5, -d / 2 + 11.5, d / 2 - 7.5), kind: 'courtyard' })
-  ctx.out.enclosures.push(L.foot)
+  emitArea(ctx, 'greens', box(-w / 2 + 0.5, w / 2 - 7.5, -d / 2 + 11.5, d / 2 - 7.5), 'courtyard')
+  emitArea(ctx, 'enclosures', L.foot)
   trees(ctx, [L.pt(-w / 2 + 3.5, 1)], 2.8)
   return true
 }
@@ -107,8 +107,8 @@ export function hospitalAt(ctx: Ctx, at: P, axis: P): boolean {
     ]
     if (!addGroup(ctx, parts, 0.3)) return false
     clear(ctx, L.foot)
-    ctx.out.greens.push({ poly: box(-w / 2 + 7, w / 2 - 7, -d / 2 + 8, d / 2 - 7), kind: 'courtyard' })
-    ctx.out.enclosures.push(L.foot)
+    emitArea(ctx, 'greens', box(-w / 2 + 7, w / 2 - 7, -d / 2 + 8, d / 2 - 7), 'courtyard')
+    emitArea(ctx, 'enclosures', L.foot)
     trees(ctx, [L.pt(-4, 1), L.pt(4, 1)], 2.4)
     return true
   }
@@ -119,8 +119,8 @@ export function hospitalAt(ctx: Ctx, at: P, axis: P): boolean {
   ]
   if (!addGroup(ctx, parts, 0.3)) return false
   clear(ctx, L.foot)
-  ctx.out.greens.push({ poly: box(-w / 2 + 8, w / 2 - 0.5, -d / 2 + 13.5, d / 2 - 0.5), kind: 'garden' })
-  ctx.out.enclosures.push(L.foot)
+  emitArea(ctx, 'greens', box(-w / 2 + 8, w / 2 - 0.5, -d / 2 + 13.5, d / 2 - 0.5), 'garden')
+  emitArea(ctx, 'enclosures', L.foot)
   trees(ctx, [L.pt(w / 2 - 4, d / 2 - 3), L.pt(0, d / 2 - 4)], 2.4)
   return true
 }
@@ -143,8 +143,8 @@ export function schoolAt(ctx: Ctx, at: P, axis: P): boolean {
     ]
     if (!addGroup(ctx, parts, 0.3)) return false
     clear(ctx, L.foot)
-    ctx.out.greens.push({ poly: box(-w / 2 + 6.5, w / 2 - 6.5, -d / 2 + 6.5, -4), kind: 'courtyard' })
-    ctx.out.enclosures.push(L.foot)
+    emitArea(ctx, 'greens', box(-w / 2 + 6.5, w / 2 - 6.5, -d / 2 + 6.5, -4), 'courtyard')
+    emitArea(ctx, 'enclosures', L.foot)
     trees(ctx, [L.pt(-10, -d / 2 + 10), L.pt(10, -d / 2 + 10), L.pt(-11, d / 2 - 11), L.pt(11, d / 2 - 11)], 2.6)
     return true
   }
@@ -156,8 +156,8 @@ export function schoolAt(ctx: Ctx, at: P, axis: P): boolean {
   ]
   if (!addGroup(ctx, parts, 0.3)) return false
   clear(ctx, L.foot)
-  ctx.out.greens.push({ poly: box(-w / 2 + 7.5, w / 2 - 7.5, -d / 2 + 8.5, d / 2 - 9.5), kind: 'courtyard' })
-  ctx.out.enclosures.push(L.foot)
+  emitArea(ctx, 'greens', box(-w / 2 + 7.5, w / 2 - 7.5, -d / 2 + 8.5, d / 2 - 9.5), 'courtyard')
+  emitArea(ctx, 'enclosures', L.foot)
   trees(ctx, [L.pt(0, 0)], 3.2)
   return true
 }
@@ -178,7 +178,7 @@ export function stageAt(ctx: Ctx, at: P, axis: P): boolean {
     fan.push(L.pt(-Math.cos(a) * R, d / 2 - 8 - Math.sin(a) * R))
   }
   fan.push(L.pt(R, d / 2 - 8))
-  ctx.out.plazas.push(fan)
+  emitArea(ctx, 'plazas', fan)
   // 几排弧形的长凳（西式）/ 看台两侧的厢楼（东式）
   if (east(ctx)) addGroup(ctx, [[box(-w / 2 + 0.5, -w / 2 + 4.5, -d / 2 + 4, d / 2 - 1), 'large'], [box(w / 2 - 4.5, w / 2 - 0.5, -d / 2 + 4, d / 2 - 1), 'large']], 0.2)
   else
@@ -199,7 +199,7 @@ export function pulpitAt(ctx: Ctx, at: P, axis: P): boolean {
   const stand = circlePoly(L.pt(0, 2), 2.4, 8, Math.PI / 8)
   if (!addGroup(ctx, [[stand, 'civic']], 0.3)) return false
   clear(ctx, pad)
-  ctx.out.plazas.push(pad)
+  emitArea(ctx, 'plazas', pad)
   return true
 }
 
@@ -214,8 +214,8 @@ export function arenaAt(ctx: Ctx, at: P, axis: P): boolean {
   parts.push(east(ctx) ? [box(-4.5, 4.5, -4.5, 4.5), 'civic'] : [box(-w * 0.3, w * 0.3, -0.35, 0.35), 'shed'])
   if (!addGroup(ctx, parts, 0.3)) return false
   clear(ctx, L.foot)
-  ctx.out.plazas.push(box(-w / 2 + 1, w / 2 - 1, -d / 2 + 5, d / 2 - 5))
-  ctx.out.enclosures.push(L.foot)
+  emitArea(ctx, 'plazas', box(-w / 2 + 1, w / 2 - 1, -d / 2 + 5, d / 2 - 5))
+  emitArea(ctx, 'enclosures', L.foot)
   return true
 }
 
@@ -233,8 +233,8 @@ export function wineryAt(ctx: Ctx, at: P, axis: P): boolean {
   ]
   if (!addGroup(ctx, parts, 0.3)) return false
   clear(ctx, L.foot)
-  ctx.out.plazas.push(box(-w / 2 + 9.5, w / 2 - 1, -d / 2 + 8.5, d / 2 - 8.5))
-  ctx.out.enclosures.push(L.foot)
+  emitArea(ctx, 'plazas', box(-w / 2 + 9.5, w / 2 - 1, -d / 2 + 8.5, d / 2 - 8.5))
+  emitArea(ctx, 'enclosures', L.foot)
   trees(ctx, [L.pt(-w / 2 + 13, d / 2 - 4), L.pt(0, d / 2 - 4)], 3)
   // 酒庄周围的田都是葡萄园
   const c = centroid(L.foot)
@@ -274,8 +274,8 @@ export function amphitheater(ctx: Ctx, block: Poly): boolean {
       parts.push([[seg(a, e, k), seg(a, e, k + 1), seg(a - t, e - t, k + 1), seg(a - t, e - t, k)], 'civic'])
     }
     if (!addGroup(ctx, parts, 0)) continue
-    ctx.out.plazas.push(apron)
-    ctx.out.plazas.push(ell(a - t - 0.5, e - t - 0.5))
+    emitArea(ctx, 'plazas', apron)
+    emitArea(ctx, 'plazas', ell(a - t - 0.5, e - t - 0.5))
     ctx.occ.add(apron)
     mark(ctx, c, 'amphitheater')
     // 片区其余的角落照常是街坊

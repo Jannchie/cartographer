@@ -1,4 +1,4 @@
-import { clipWater, isFree, mark, placeable, siteDice, type Ctx } from '../ctx'
+import { emitArea, clipWater, isFree, mark, placeable, siteDice, type Ctx } from '../ctx'
 import { area, at, box, centroid, circlePoly, insetConvex, obb, pointInPoly, rect, type Frame, type P, type Poly } from '../geom'
 import type { BuildingKind } from '../types'
 import type { SacredKind } from '../names'
@@ -206,12 +206,12 @@ export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boole
   const reserve: Poly[] = [rect(tc, east, L + 14, hb * 2 + 30)]
   // 西门前的广场
   const fore = rect([tc[0] - east[0] * (L * 0.5 + 8), tc[1] - east[1] * (L * 0.5 + 8)], east, 16, hb * 3)
-  if (isFree(ctx, fore, { tags: ['wall', 'river'] })) ctx.out.plazas.push(fore)
+  if (isFree(ctx, fore, { tags: ['wall', 'river'] })) emitArea(ctx, 'plazas', fore)
   const beside = (sd: number, k: number): P => [tc[0] + north[0] * sd * k, tc[1] + north[1] * sd * k]
   const walled = !!cl
   if (cloister) C.note('cloisterBuilt', walled ? 'y' : 'n')
   if (cl) {
-    ctx.out.greens.push({ poly: cl.garth, kind: 'courtyard' })
+    emitArea(ctx, 'greens', cl.garth, 'courtyard')
     ctx.occ.add(cl.garth)
     reserve.push(cl.around)
     if (cl.chapter && inside(cl.chapter, block)) place(ctx, cl.chapter, 'temple', { pad: 0.5 })
@@ -248,8 +248,8 @@ function close(ctx: Ctx, block: Poly, reserve: Poly[], abbey = false) {
   const w = clipWater(ctx, insetConvex(block, 1.5), 2)
   const zone = w && ctx.corridors.clip(w)
   if (!zone || zone.length < 3) return
-  ctx.out.enclosures.push(zone)
-  ctx.out.greens.push({ poly: zone, kind: 'park' })
+  emitArea(ctx, 'enclosures', zone)
+  emitArea(ctx, 'greens', zone, 'park')
   const busy = (q: Poly) => reserve.some((r) => r.some((v) => pointInPoly(v, q)) || q.some((v) => pointInPoly(v, r)))
   // 主教宫：离教堂最远的一段墙内侧的大厅
   const ring = insetConvex(zone, 3)

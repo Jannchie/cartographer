@@ -1,9 +1,10 @@
-import { cityDice, type Ctx, type Dice } from './ctx'
-import { at as gat, centroid, circlePoly, insetConvex, type Frame as GFrame, type P, type Poly } from './geom'
+import { emitArea, cityDice, type Ctx, type Dice } from './ctx'
+import { at as gat, centroid, circlePoly, insetConvex, type Frame, type P, type Poly } from './geom'
 import type { BuildingKind } from './types'
 import { addBuilding, addGroup, plantTree, scatterTrees } from './wards'
 import { composer, flanks, rectFrame, type Composer, type Elem, type Preset } from './compose/core'
-import { jin, kit, type Centre, type Kit, type Side } from './compose/chinese'
+import { jin, yard, type Centre, type Yard, type Side } from './compose/chinese'
+import { addWall, connectGates } from './walls'
 
 /**
  * 都城的宫殿（东方的紫禁城式宫城、西式的王宫），铺满宫城地盘里的整个矩形（见 generate.ts 的 palaceSite）。
@@ -13,21 +14,12 @@ import { jin, kit, type Centre, type Kit, type Side } from './compose/chinese'
  * 抽签只看种子（cityDice）：人口变了、宫城伸缩了，构成不变，只随地盘缩放。
  */
 
-/** 园林用的矩形局部坐标：u 横向（-W/2 ~ W/2，米），f 从正面（0）到背面（1）的进深比例 */
-interface Frame {
-  W: number
-  D: number
-  /** 局部坐标 → 地图点 */
-  at(u: number, f: number): P
-  /** 局部矩形：u0 ~ u1（米），f0 ~ f1（进深比例） */
-  box(u0: number, u1: number, f0: number, f1: number): Poly
-}
-
-/** 米制标架（a 进深、b 横向）换成园林用的比例标架 */
-function frac(G: GFrame, W: number, D: number): Frame {
-  const at = (u: number, f: number) => gat(G, f * D, u)
-  return { W, D, at, box: (u0, u1, f0, f1) => [at(u0, f0), at(u1, f0), at(u1, f1), at(u0, f1)] }
-}
+/*
+ * 园林与池苑都在宫城的标架（geom 的 Frame：a 从正面往里的进深、b 横向，米）里摆；
+ * 下面的 fat / fbox 只是把参数排成"横向在前、进深在后"，读起来与画图的习惯一致
+ */
+const fat = (F: Frame, u: number, f: number) => gat(F, f, u)
+const fbox = (F: Frame, u0: number, u1: number, f0: number, f1: number): Poly => [fat(F, u0, f0), fat(F, u1, f0), fat(F, u1, f1), fat(F, u0, f1)]
 
 // 宫里的殿宇都不是民居（不占住户名额）：只用 hall、keep、civic、temple、shed、pagoda
 const put = (ctx: Ctx, poly: Poly, kind: BuildingKind) => addBuilding(ctx, poly, kind, 0.2)
@@ -49,11 +41,11 @@ function treeLine(ctx: Ctx, a: P, b: P, step: number, r: number) {
 function pond(ctx: Ctx, F: Frame, uc: number, fc: number, ru: number, rd: number, ph: number) {
   const shore = (t: number, s: number): P => {
     const k = 1 + 0.16 * Math.sin(3 * t + ph) + 0.08 * Math.cos(5 * t - ph)
-    return F.at(uc + Math.cos(t) * ru * k * s, fc + (Math.sin(t) * rd * k * s) / F.D)
+    return fat(F, uc + Math.cos(t) * ru * k * s, fc + Math.sin(t) * rd * k * s)
   }
   const poly: Poly = []
   for (let i = 0; i < 22; i++) poly.push(shore((i / 22) * Math.PI * 2, 1))
-  ctx.out.plazas.push(poly)
+  emitArea(ctx, 'plazas', poly)
   ctx.occ.add(poly)
   const trees = () => {
     const n = Math.round((ru + rd) * 0.3)
@@ -76,11 +68,11 @@ const kiosk = (c: P, s: number): Poly => [
  */
 function pondGarden(ctx: Ctx, F: Frame, u0: number, u1: number, f0: number, f1: number, h: number) {
   const w = u1 - u0
-  const d = (f1 - f0) * F.D
+  const d = f1 - f0
   if (w < 16 || d < 16) return
-  const zone = F.box(u0, u1, f0, f1)
-  ctx.out.enclosures.push(zone)
-  ctx.out.greens.push({ poly: zone, kind: 'garden' })
+  const zone = fbox(F, u0, u1, f0, f1)
+  emitArea(ctx, 'enclosures', zone)
+  emitArea(ctx, 'greens', zone, 'garden')
   const ru = w * 0.27
   const rd = d * 0.25
   const uc = (u0 + u1) / 2 + (h - 0.5) * w * 0.18
@@ -88,8 +80,8 @@ function pondGarden(ctx: Ctx, F: Frame, u0: number, u1: number, f0: number, f1: 
   const po = pond(ctx, F, uc, fc, ru, rd, h * 6.28)
   // 水榭：池北岸，面宽随池
   const hw = Math.min(ru * 0.5, 12)
-  const hb = fc + (rd * 1.35) / F.D
-  put(ctx, F.box(uc - hw, uc + hw, hb, hb + Math.min(8, d * 0.1) / F.D), 'hall')
+  const hb = fc + rd * 1.35
+  put(ctx, fbox(F, uc - hw, uc + hw, hb, hb + Math.min(8, d * 0.1)), 'hall')
   // 两座亭：池的东南、西南岸
   for (const t of [0.7 + h, 2.4 + h]) put(ctx, kiosk(po.shore(t, 1.35), Math.min(3.5, w * 0.05)), 'pagoda')
   po.trees()
@@ -186,7 +178,7 @@ const IMP_PRESETS: Preset[] = [
  * 中轴上的一组殿：n 座，按 profile 排大小（正殿面宽 hw 米），a0 ~ a1 里前后排开；terrace 定台基。
  * 殿都是面宽大、进深小的长方形。
  */
-function axisHalls(K: Kit, a0: number, a1: number, hw: number, n: number, profile: Profile, terrace: Terrace, main: number) {
+function axisHalls(K: Yard, a0: number, a1: number, hw: number, n: number, profile: Profile, terrace: Terrace, main: number) {
   const ws = Array.from({ length: n }, (_, i) => {
     if (profile === 'gongzi' && n === 3) return [1, 0.32, 0.78][i]
     const t = n > 1 ? i / (n - 1) : 0
@@ -215,20 +207,20 @@ function axisHalls(K: Kit, a0: number, a1: number, hw: number, n: number, profil
 }
 
 /** 一排仓廒、值房：沿 b 方向切成一间间 */
-function rowB(K: Kit, a0: number, a1: number, b0: number, b1: number, kind: BuildingKind, unit = 16) {
+function rowB(K: Yard, a0: number, a1: number, b0: number, b1: number, kind: BuildingKind, unit = 16) {
   const n = Math.max(1, Math.round((b1 - b0) / unit))
   const s = (b1 - b0) / n
   for (let k = 0; k < n; k++) K.put(kind, a0, a1, b0 + k * s + 0.8, b0 + (k + 1) * s - 0.8)
 }
 /** 一列（沿进深）仓廒、值房 */
-function colA(K: Kit, a0: number, a1: number, b0: number, b1: number, kind: BuildingKind, unit = 18) {
+function colA(K: Yard, a0: number, a1: number, b0: number, b1: number, kind: BuildingKind, unit = 18) {
   const n = Math.max(1, Math.round((a1 - a0) / unit))
   const s = (a1 - a0) / n
   for (let k = 0; k < n; k++) K.put(kind, a0 + k * s + 0.8, a0 + (k + 1) * s - 0.8, b0, b1)
 }
 
 /** 宫里一座院落（东西路、六宫、南三所）：院子的样子全宫统一抽一次（一座宫城里的院落是一个规制） */
-function palaceJin(K: Kit, C: Composer, a0: number, a1: number, b0: number, b1: number, centre?: Centre) {
+function palaceJin(K: Yard, C: Composer, a0: number, a1: number, b0: number, b1: number, centre?: Centre) {
   const side = C.pick('yard.side', [{ id: 'xiang', w: 3 }, { id: 'lang', w: 1 }, { id: 'double', w: 1 }] as Elem<Side>[])
   jin(K, a0, a1, b0, b1, { gate: 'men', main: 'hall', mw: 0.3, back: a1 - a0 > 34 ? 'hall' : null, side, centre: centre ?? 'none' })
 }
@@ -244,7 +236,7 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
   // 地图上 y 向下：南是 +y
   const { F, W, D } = rectFrame(R, [0, 1])
   if (W < 70 || D < 70) return false
-  const K = kit(ctx, F)
+  const K = yard(ctx, F)
   const C = composer(cityDice(ctx, 'imperial'), 'imperial', IMP_PRESETS, { size: Math.min(W, D), rank: 2 })
   const m = 4
   const U = W / 2 - m
@@ -262,18 +254,22 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
   const loop = [P0(0, -W / 2), P0(0, 0), P0(0, W / 2), ...(side ? [P0(as, W / 2)] : []), P0(D, W / 2), P0(D, 0), P0(D, -W / 2), ...(side ? [P0(as, -W / 2)] : [])]
   const ang = (v: P) => Math.atan2(v[1], v[0])
   const { f, l } = F
-  ctx.out.walls.push({
-    loop,
-    solid: loop.map(() => true),
-    towers: [],
-    gates: [
-      { p: P0(0, 0), angle: ang([-f[0], -f[1]]) },
-      { p: P0(D, 0), angle: ang(f) },
-      ...(side ? [{ p: P0(as, W / 2), angle: ang(l) }, { p: P0(as, -W / 2), angle: ang([-l[0], -l[1]]) }] : []),
-    ],
-    kind: 'stone',
-    thickness: 3,
-  })
+  const wall = addWall(
+    ctx,
+    {
+      loop,
+      solid: loop.map(() => true),
+      towers: [],
+      gates: [
+        { p: P0(0, 0), angle: ang([-f[0], -f[1]]) },
+        { p: P0(D, 0), angle: ang(f) },
+        ...(side ? [{ p: P0(as, W / 2), angle: ang(l) }, { p: P0(as, -W / 2), angle: ang([-l[0], -l[1]]) }] : []),
+      ],
+      kind: 'stone',
+      thickness: 3,
+    },
+    'keep',
+  )
   // 四角
   const corner = C.pick('corner', CORNER)
   const tw = Math.min(10, W * 0.03)
@@ -354,7 +350,7 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
       // 仓廒：一院里一排排的长仓
       K.fence(a0, fb, u0, u1)
       for (let a = a0 + 3; a + 9 < fb - 2; a += 14) rowB(K, a, a + 8, u0 + 2, u1 - 2, 'shed', 18)
-    } else pondGarden(ctx, frac(F, W, D), u0, u1, a0 / D, fb / D, C.num(`wingPond${sd}`, 0, 1))
+    } else pondGarden(ctx, F, u0, u1, a0, fb, C.num(`wingPond${sd}`, 0, 1))
   }
   // 中院（奉先殿、交泰殿一类的一进小院）
   if (mid) palaceJin(K, C, fb + 2, fm - 1, -W * 0.13, W * 0.13, 'ding')
@@ -381,7 +377,7 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
     const lo = (x: number, y: number): [number, number] => (sd < 0 ? [-y, -x] : [x, y])
     if (kind === 'garden') {
       const [p, q] = lo(inn0 + 1, out)
-      pondGarden(ctx, frac(F, W, D), p, q, s0 / D, s1 / D, C.num(`gongPond${sd}`, 0, 1))
+      pondGarden(ctx, F, p, q, s0, s1, C.num(`gongPond${sd}`, 0, 1))
       continue
     }
     const cols = kind === 'suo' ? Math.max(1, Math.floor((out - inn0) / 22)) : Math.max(1, Math.min(cols0, Math.floor((out - inn0) / 26)))
@@ -406,7 +402,7 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
     const pw = Math.min(6, W * 0.02)
     for (const sd of [-1, 1]) for (const t of [0.25, 0.7]) K.put('pagoda', ga + (g1 - ga) * t - pw, ga + (g1 - ga) * t + pw, sd * gw * 0.6 - pw, sd * gw * 0.6 + pw)
     K.trees(ga, g1, -gw, gw, 0.01, 2.2, 3.4)
-  } else if (garden === 'pond') pondGarden(ctx, frac(F, W, D), -gw, gw, ga / D, g1 / D, C.num('gardenPond', 0, 1))
+  } else if (garden === 'pond') pondGarden(ctx, F, -gw, gw, ga, g1, C.num('gardenPond', 0, 1))
   else if (garden === 'grove') {
     // 古柏林：园墙里一行行的柏树，当中一座亭
     K.fence(ga, g1, -gw, gw)
@@ -427,11 +423,13 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
   // 宫门外的御道两旁的松柏
   K.trees(D * 0.06, fa - D * 0.01, -W * 0.28, W * 0.28, fore === 'grove' ? 0.004 : 0.0015, 2.5, 3.5)
   C.done(gat(F, D / 2, 0))
+  // 宫门接上路
+  connectGates(ctx, [wall])
   return true
 }
 
 /** 宫门两侧、后苑两侧的一片：院落、两座小院、仓廒、树林；row 为真时临宫门的一侧先是一排朝房 */
-function aside(K: Kit, C: Composer, kind: Aside, a0: number, a1: number, b0: number, b1: number, row: boolean) {
+function aside(K: Yard, C: Composer, kind: Aside, a0: number, a1: number, b0: number, b1: number, row: boolean) {
   if (b1 - b0 < 14 || a1 - a0 < 14) return
   if (row && kind !== 'grove') {
     rowB(K, a0, a0 + Math.min(7, (a1 - a0) * 0.2), b0, b1, 'hall', 20)
@@ -545,7 +543,7 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
   const L = Math.hypot(toCity[0], toCity[1]) || 1
   const { F, W, D } = rectFrame(R, [toCity[0] / L, toCity[1] / L])
   if (W < 60 || D < 60) return false
-  const K = kit(ctx, F)
+  const K = yard(ctx, F)
   const V = cityDice(ctx, 'royal')
   const C = composer(V, 'royal', ROYAL_PRESETS, { size: Math.min(W, D), rank: 2 })
   const plan = C.pick('plan', PLAN)
@@ -558,7 +556,7 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
   // 阅兵广场与荣誉庭的分界
   const fp = fm * 0.43
   const at = (a: number, b: number) => gat(F, a, b)
-  ctx.out.enclosures.push(R)
+  emitArea(ctx, 'enclosures', R)
   // 主楼；正中的主阁 / 穹顶 / 柱廊；两端的角阁
   const mid = C.pick('mid', MID)
   const ac = W * C.num('ac', 0.05, 0.09)
@@ -606,18 +604,18 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
   const parade = C.pick('parade', PARADE)
   K.pave(D * 0.01, fp, -mw, mw)
   if (parade === 'avenue') for (const sd of [-1, 1]) treeLine(ctx, at(D * 0.02, sd * mw * 0.55), at(fp - 3, sd * mw * 0.55), 6, 2.3)
-  if (parade === 'grille') ctx.out.enclosures.push(K.B(D * 0.01, fp, -mw * 0.8, mw * 0.8))
+  if (parade === 'grille') emitArea(ctx, 'enclosures', K.B(D * 0.01, fp, -mw * 0.8, mw * 0.8))
   // 荣誉庭；一字楼、T 形楼前没有围合的院子，是一片修剪整齐的草坪
   const open = plan === 'block' || plan === 'T'
   const court = K.B(fp, fm - (open ? 7 : 0), -(mw - ww), mw - ww)
   if (open) {
-    ctx.out.greens.push({ poly: court, kind: 'garden' })
+    emitArea(ctx, 'greens', court, 'garden')
     for (const sd of [-1, 1]) treeLine(ctx, at(fp + 3, sd * (mw - ww)), at(fm - 9, sd * (mw - ww)), 6, 2.2)
   } else {
     const ct = C.pick('court', COURT)
-    ctx.out.plazas.push(court)
+    emitArea(ctx, 'plazas', court)
     const cc = at((fp + fm) / 2 - (plan === 'E' ? D * 0.04 : 0), plan === 'E' ? mw * 0.45 : 0)
-    if (ct === 'lawn') for (const sd of [-1, 1]) ctx.out.greens.push({ poly: K.B(fp + 4, fm - 4, sd < 0 ? -(mw - ww) + 3 : ww * 0.8, sd < 0 ? -ww * 0.8 : mw - ww - 3), kind: 'garden' })
+    if (ct === 'lawn') for (const sd of [-1, 1]) emitArea(ctx, 'greens', K.B(fp + 4, fm - 4, sd < 0 ? -(mw - ww) + 3 : ww * 0.8, sd < 0 ? -ww * 0.8 : mw - ww - 3), 'garden')
     else if (ct === 'fountain') ctx.out.landmarks.push({ p: cc, kind: 'fountain' })
     else if (ct === 'statue') ctx.out.landmarks.push({ p: cc, kind: 'statue' })
     if (ct === 'fountain' || ct === 'statue') ctx.occ.add(circlePoly(cc, 3, 10))
@@ -660,10 +658,9 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
   const g1 = D - 3
   if (g1 - g0 >= 20) {
     const G = C.pick('garden', RGARDEN)
-    const Fr = frac(F, W, D)
-    if (G === 'parterre') parterreGarden(ctx, Fr, g0 / D, g1 / D, V)
-    else if (G === 'terrace') terraceGarden(ctx, Fr, g0 / D, g1 / D, V)
-    else landscapeGarden(ctx, Fr, g0 / D, g1 / D, V)
+    if (G === 'parterre') parterreGarden(ctx, F, W, g0, g1, V)
+    else if (G === 'terrace') terraceGarden(ctx, F, W, g0, g1, V)
+    else landscapeGarden(ctx, F, W, g0, g1, V)
   }
   C.done(at(fm, 0))
   return true
@@ -671,12 +668,12 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
 
 /** 花坛（parterre）：一方花圃，四周修剪整齐的矮树篱 */
 function parterre(ctx: Ctx, F: Frame, u0: number, u1: number, f0: number, f1: number) {
-  ctx.out.greens.push({ poly: F.box(u0, u1, f0, f1), kind: 'garden' })
+  emitArea(ctx, 'greens', fbox(F, u0, u1, f0, f1), 'garden')
   for (const [p, q] of [
-    [F.at(u0, f0), F.at(u1, f0)],
-    [F.at(u0, f1), F.at(u1, f1)],
-    [F.at(u0, f0), F.at(u0, f1)],
-    [F.at(u1, f0), F.at(u1, f1)],
+    [fat(F, u0, f0), fat(F, u1, f0)],
+    [fat(F, u0, f1), fat(F, u1, f1)],
+    [fat(F, u0, f0), fat(F, u0, f1)],
+    [fat(F, u1, f0), fat(F, u1, f1)],
   ] as [P, P][])
     treeLine(ctx, p, q, 3, 1.1)
 }
@@ -685,97 +682,92 @@ function parterre(ctx: Ctx, F: Frame, u0: number, u1: number, f0: number, f1: nu
  * 法式园林（凡尔赛）：楼后的几何花坛与喷泉、中轴大道、横向的林荫道，林荫道之间一格格的丛林（bosquet），
  * 可能有一条长长的大水渠。林荫道一两条、花坛一两列、水渠有无、橘园在哪边按宫城抽签。
  */
-function parterreGarden(ctx: Ctx, F: Frame, g0: number, g1: number, V: Dice) {
-  const { W } = F
-  const df = (x: number) => x / F.D
+function parterreGarden(ctx: Ctx, F: Frame, W: number, g0: number, g1: number, V: Dice) {
   const G = g1 - g0
   const cross = V.pick('parterre.cross', [[0.3, 0.58], [0.42], [0.26, 0.5, 0.74]], [3, 2, 1]).map((t) => g0 + G * t)
   const cols = V.pick('parterre.cols', [[[0.05, 0.22], [0.25, 0.44]], [[0.05, 0.44]], [[0.05, 0.16], [0.19, 0.3], [0.33, 0.44]]], [3, 2, 1])
   const canal = V.chance('parterre.canal', 0.6)
   // 中轴大道与横向的林荫道
-  ctx.out.plazas.push(F.box(-W * 0.035, W * 0.035, g0, g1))
-  for (const f of cross) ctx.out.plazas.push(F.box(-W * 0.46, W * 0.46, f - df(3), f + df(3)))
+  emitArea(ctx, 'plazas', fbox(F, -W * 0.035, W * 0.035, g0, g1))
+  for (const f of cross) emitArea(ctx, 'plazas', fbox(F, -W * 0.46, W * 0.46, f - 3, f + 3))
   // 楼前的几何花坛，中间喷泉
   for (const sd of [-1, 1])
     for (const [a, b] of cols) {
       const [u0, u1] = sd < 0 ? [-W * b, -W * a] : [W * a, W * b]
-      parterre(ctx, F, u0, u1, g0 + df(2), cross[0] - df(5))
+      parterre(ctx, F, u0, u1, g0 + 2, cross[0] - 5)
     }
-  ctx.out.plazas.push(F.box(-W * 0.06, W * 0.06, (g0 + cross[0]) / 2 - df(W * 0.06), (g0 + cross[0]) / 2 + df(W * 0.06)))
+  emitArea(ctx, 'plazas', fbox(F, -W * 0.06, W * 0.06, (g0 + cross[0]) / 2 - W * 0.06, (g0 + cross[0]) / 2 + W * 0.06))
   // 橘园（orangery）：花坛一侧
   const os = V.side('parterre.side')
-  put(ctx, F.box(os < 0 ? -W * 0.46 : W * 0.3, os < 0 ? -W * 0.3 : W * 0.46, g0 + df(1), g0 + df(9)), 'hall')
+  put(ctx, fbox(F, os < 0 ? -W * 0.46 : W * 0.3, os < 0 ? -W * 0.3 : W * 0.46, g0 + 1, g0 + 9), 'hall')
   // 丛林：林荫道之间一格格密林
   const bands: [number, number][] = []
-  for (let i = 0; i < cross.length; i++) bands.push([cross[i] + df(4), (i + 1 < cross.length ? cross[i + 1] - df(4) : g1 - df(1))])
+  for (let i = 0; i < cross.length; i++) bands.push([cross[i] + 4, (i + 1 < cross.length ? cross[i + 1] - 4 : g1 - 1)])
   for (const [f0, f1] of bands)
     for (const [a, b] of [
       [0.05, 0.24],
       [0.27, 0.46],
     ])
       for (const sd of [-1, 1]) {
-        if (f1 - f0 < df(8)) continue
+        if (f1 - f0 < 8) continue
         const [u0, u1] = sd < 0 ? [-W * b, -W * a] : [W * a, W * b]
-        const q = F.box(u0, u1, f0, f1)
-        ctx.out.greens.push({ poly: q, kind: 'park' })
+        const q = fbox(F, u0, u1, f0, f1)
+        emitArea(ctx, 'greens', q, 'park')
         scatterTrees(ctx, q, 0.02, 2.2, 3.6)
       }
   // 大水渠（没有水面图元，画成铺地的长条）
   const last = cross[cross.length - 1]
-  if (canal) ctx.out.plazas.push(F.box(-W * 0.05, W * 0.05, last + df(4), g1 - df(2)))
+  if (canal) emitArea(ctx, 'plazas', fbox(F, -W * 0.05, W * 0.05, last + 4, g1 - 2))
   // 林荫道两旁成行的树
   for (const f of cross)
-    for (const off of [-4.5, 4.5]) treeLine(ctx, F.at(-W * 0.45, f + df(off)), F.at(W * 0.45, f + df(off)), 7, 2.6)
-  for (const sd of [-1, 1]) treeLine(ctx, F.at(sd * W * 0.045, g0 + df(3)), F.at(sd * W * 0.045, g1 - df(2)), 7, 2.6)
+    for (const off of [-4.5, 4.5]) treeLine(ctx, fat(F, -W * 0.45, f + off), fat(F, W * 0.45, f + off), 7, 2.6)
+  for (const sd of [-1, 1]) treeLine(ctx, fat(F, sd * W * 0.045, g0 + 3), fat(F, sd * W * 0.045, g1 - 2), 7, 2.6)
 }
 
 /**
  * 意式台地园（埃斯特别墅、波波里）：园子沿中轴分成几层台地，层间是挡土墙与台阶，
  * 每层两侧是树篱围着的花坛、中轴一座喷泉；两侧成行的柏树，最里面一座洞窟亭（grotto / casino）。
  */
-function terraceGarden(ctx: Ctx, F: Frame, g0: number, g1: number, V: Dice) {
-  const { W } = F
-  const df = (x: number) => x / F.D
-  const n = Math.max(1, Math.min(V.int('terrace.n', 2, 4), Math.floor(((g1 - g0) * F.D) / 24)))
+function terraceGarden(ctx: Ctx, F: Frame, W: number, g0: number, g1: number, V: Dice) {
+  const n = Math.max(1, Math.min(V.int('terrace.n', 2, 4), Math.floor((g1 - g0) / 24)))
   const T = (g1 - g0) / n
   const wide = V.num('terrace.wide', 0.3, 0.42)
-  ctx.out.plazas.push(F.box(-W * 0.03, W * 0.03, g0, g1))
+  emitArea(ctx, 'plazas', fbox(F, -W * 0.03, W * 0.03, g0, g1))
   for (let k = 0; k < n; k++) {
     const f0 = g0 + k * T
-    const f1 = f0 + T - df(4)
+    const f1 = f0 + T - 4
     // 挡土墙：层间一道铺石的台阶
-    ctx.out.plazas.push(F.box(-W * wide, W * wide, f1, f1 + df(3)))
-    if (f1 - f0 < df(8)) continue
+    emitArea(ctx, 'plazas', fbox(F, -W * wide, W * wide, f1, f1 + 3))
+    if (f1 - f0 < 8) continue
     for (const sd of [-1, 1]) {
       const [u0, u1] = sd < 0 ? [-W * wide, -W * 0.05] : [W * 0.05, W * wide]
-      parterre(ctx, F, u0, u1, f0 + df(2), f1 - df(2))
+      parterre(ctx, F, u0, u1, f0 + 2, f1 - 2)
     }
     const fc = (f0 + f1) / 2
-    ctx.out.landmarks.push({ p: F.at(0, fc), kind: 'fountain' })
+    ctx.out.landmarks.push({ p: fat(F, 0, fc), kind: 'fountain' })
   }
   // 两侧的柏树行与台地外的林子
   for (const sd of [-1, 1]) {
-    treeLine(ctx, F.at(sd * W * (wide + 0.02), g0 + df(2)), F.at(sd * W * (wide + 0.02), g1 - df(2)), 4, 1.6)
+    treeLine(ctx, fat(F, sd * W * (wide + 0.02), g0 + 2), fat(F, sd * W * (wide + 0.02), g1 - 2), 4, 1.6)
     const [u0, u1] = sd < 0 ? [-W * 0.47, -W * (wide + 0.04)] : [W * (wide + 0.04), W * 0.47]
     if (u1 - u0 > 8) {
-      const q = F.box(u0, u1, g0, g1)
-      ctx.out.greens.push({ poly: q, kind: 'park' })
+      const q = fbox(F, u0, u1, g0, g1)
+      emitArea(ctx, 'greens', q, 'park')
       scatterTrees(ctx, q, 0.018, 2.2, 3.8)
     }
   }
   // 洞窟亭：中轴尽头
-  put(ctx, F.box(-W * 0.06, W * 0.06, g1 - df(10), g1 - df(1)), 'civic')
+  put(ctx, fbox(F, -W * 0.06, W * 0.06, g1 - 10, g1 - 1), 'civic')
 }
 
 /**
  * 英式风景园（斯托、邱园）：一大片起伏的草地，蜿蜒的园路绕一圈，一面不规则的湖，
  * 一丛丛的树林，湖边一座仿古的小神殿（folly）。湖与林的位置按宫城抽签。
  */
-function landscapeGarden(ctx: Ctx, F: Frame, g0: number, g1: number, V: Dice) {
-  const { W, D } = F
-  const zone = F.box(-W * 0.47, W * 0.47, g0, g1)
-  ctx.out.greens.push({ poly: zone, kind: 'park' })
-  const G = (g1 - g0) * D
+function landscapeGarden(ctx: Ctx, F: Frame, W: number, g0: number, g1: number, V: Dice) {
+  const zone = fbox(F, -W * 0.47, W * 0.47, g0, g1)
+  emitArea(ctx, 'greens', zone, 'park')
+  const G = g1 - g0
   // 湖：偏向一侧，靠园子深处
   const lu = V.side('landscape.side') * W * V.num('landscape.lu', 0.04, 0.14)
   const lf = g0 + (g1 - g0) * V.num('landscape.lf', 0.5, 0.65)
@@ -791,7 +783,7 @@ function landscapeGarden(ctx: Ctx, F: Frame, g0: number, g1: number, V: Dice) {
   for (let i = 0; i <= 28; i++) {
     const a = (i / 28) * Math.PI * 2
     const k = 1 + 0.08 * Math.sin(3 * a + V.h('landscape.shore') * 6)
-    loop.push(F.at(Math.cos(a) * W * 0.38 * k, (g0 + g1) / 2 + (Math.sin(a) * (g1 - g0) * 0.4 * k)))
+    loop.push(fat(F, Math.cos(a) * W * 0.38 * k, (g0 + g1) / 2 + (Math.sin(a) * (g1 - g0) * 0.4 * k)))
   }
   ctx.out.roads.push({ line: loop, width: 2, kind: 'path' })
   lake.trees()
@@ -802,7 +794,7 @@ function landscapeGarden(ctx: Ctx, F: Frame, g0: number, g1: number, V: Dice) {
     const f = (g0 + g1) / 2 + Math.sin(a) * (g1 - g0) * 0.42
     if (f < g0 + (g1 - g0) * 0.2) continue
     const r = 8 + V.h('landscape.clumpR', k) * 12
-    scatterTrees(ctx, circlePoly(F.at(u, f), r, 10), 0.03, 2.4, 4.2)
+    scatterTrees(ctx, circlePoly(fat(F, u, f), r, 10), 0.03, 2.4, 4.2)
   }
   scatterTrees(ctx, insetConvex(zone, 2), 0.002, 3, 5)
 }

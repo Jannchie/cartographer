@@ -85,11 +85,23 @@ class SegGrid {
         }
     }
   }
+  /** q 周围 r 米（按格子粗查）的线段，每段只给一次 */
+  *around(q: P, r: number): Generator<Seg> {
+    const seen = new Set<number>()
+    for (let y = Math.floor((q[1] - r) / this.B); y <= Math.floor((q[1] + r) / this.B); y++)
+      for (let x = Math.floor((q[0] - r) / this.B); x <= Math.floor((q[0] + r) / this.B); x++)
+        for (const id of this.grid.get(y * 4096 + x) ?? []) {
+          if (seen.has(id)) continue
+          seen.add(id)
+          yield this.segs[id]
+        }
+  }
   /** 离 q 最近、且（给了方向时）与方向平行的线段；返回它上面的最近点与净距（减去半宽）。ok 可以筛掉不合适的落点 */
-  nearest(q: P, reach: number, dir?: P, ok?: (p: P, s: Seg) => boolean): { p: P; gap: number } | null {
-    let best: { p: P; gap: number } | null = null
+  nearest(q: P, reach: number, dir?: P, ok?: (p: P, s: Seg) => boolean): { p: P; gap: number; s: Seg } | null {
+    let best: { p: P; gap: number; s: Seg } | null = null
     const r = reach + 12
     const seen = new Set<number>()
+    // 路网整理时每 2 米问一次：不用 around 的生成器，直接扫格子
     for (let y = Math.floor((q[1] - r) / this.B); y <= Math.floor((q[1] + r) / this.B); y++)
       for (let x = Math.floor((q[0] - r) / this.B); x <= Math.floor((q[0] + r) / this.B); x++)
         for (const id of this.grid.get(y * 4096 + x) ?? []) {
@@ -107,10 +119,72 @@ class SegGrid {
           }
           const p: P = [s.a[0] + (s.b[0] - s.a[0]) * t, s.a[1] + (s.b[1] - s.a[1]) * t]
           if (ok && !ok(p, s)) continue
-          best = { p, gap }
+          best = { p, gap, s }
         }
     return best
   }
+}
+
+// —————————————————————— 找最近的路 ——————————————————————
+
+/** 能走车马的路：小径、石阶（园路、上山的小路）不算 */
+export const through = (r: Road) => r.kind !== 'path' && r.kind !== 'stair'
+
+/** 路网的线段索引（按 ctx.out.roads 懒建：只追加时补上新的，删过、换过、撤回过就重建） */
+interface RoadIndex {
+  grid: SegGrid
+  roads: Road[]
+  n: number
+  last: Road | undefined
+  dropped: number
+}
+const indexes = new WeakMap<Ctx, RoadIndex>()
+function roadIndex(ctx: Ctx): RoadIndex {
+  const roads = ctx.out.roads
+  let ix = indexes.get(ctx)
+  if (!ix || ix.roads !== roads || roads.length < ix.n || ix.dropped !== ctx.dropped.length || (ix.n > 0 && roads[ix.n - 1] !== ix.last)) {
+    ix = { grid: new SegGrid(), roads, n: 0, last: undefined, dropped: ctx.dropped.length }
+    indexes.set(ctx, ix)
+  }
+  for (; ix.n < roads.length; ix.n++) ix.grid.add(roads[ix.n].line, roads[ix.n].width / 2, ix.n)
+  ix.last = roads[ix.n - 1]
+  return ix
+}
+
+/** 路上离 q 最近的一点：p 落点，d 到中线的距离，gap 到路边的净距（减去半宽），road 哪条路 */
+export interface RoadHit {
+  p: P
+  d: number
+  gap: number
+  road: Road
+}
+
+/**
+ * 离 q 最近的路（按到路边的净距）：只看净距 within 米以内的；缺省只要能走车马的路（through），
+ * accept 可以另定要哪些路、哪些落点（落点在桥的这一侧、接过去不下水……）
+ */
+export function nearestRoad(ctx: Ctx, q: P, within = Infinity, accept: (r: Road, p: P) => boolean = through): RoadHit | null {
+  const ix = roadIndex(ctx)
+  const reach = Math.min(within, ctx.MW + ctx.MH)
+  const hit = ix.grid.nearest(q, reach, undefined, (p, s) => accept(ix.roads[s.road!], p))
+  return hit && { p: hit.p, d: hit.gap + hit.s.hw, gap: hit.gap, road: ix.roads[hit.s.road!] }
+}
+
+/** q 附近（净距 within 米以内）的各条路上各自离 q 最近的一点，由近到远 */
+export function roadsNear(ctx: Ctx, q: P, within = Infinity, accept: (r: Road, p: P) => boolean = through): RoadHit[] {
+  const ix = roadIndex(ctx)
+  const reach = Math.min(within, ctx.MW + ctx.MH)
+  const best = new Map<number, RoadHit>()
+  for (const s of ix.grid.around(q, reach + 12)) {
+    const { d, t } = segDist(q, s.a, s.b)
+    const gap = d - s.hw
+    const id = s.road!
+    if (gap > reach || gap >= (best.get(id)?.gap ?? Infinity)) continue
+    const p: P = [s.a[0] + (s.b[0] - s.a[0]) * t, s.a[1] + (s.b[1] - s.a[1]) * t]
+    if (!accept(ix.roads[id], p)) continue
+    best.set(id, { p, d, gap, road: ix.roads[id] })
+  }
+  return [...best.values()].sort((a, b) => a.gap - b.gap)
 }
 
 /**
@@ -192,15 +266,52 @@ function narrowest(T: TerrainResult, q: P): { w: number; d: P } {
 /** 宽 w 米的水面上，桥最长能架多长 */
 const maxSpanOf = (w: number) => Math.min(BRIDGE_MAX, Math.max(w * BRIDGE_SPAN, w + BRIDGE_SLACK))
 
-function bridgeLine(pts: P[], s: number, e: number, iaMin: number, ibMax: number, T: TerrainResult): { ia: number; ib: number } | null {
-  // 水面最窄处的方向与宽度按桥线自己最深的一点量（同一段水里各处宽窄、走向可以差很多，比如支流、护城河汇进来的地方）
+/** 水面最窄处的方向与宽度（按 2 米取整缓存：同一处会被问好多次） */
+function acrossWater(T: TerrainResult) {
   const memo = new Map<number, { w: number; d: P }>()
-  const across = (q: P) => {
+  return (q: P) => {
     const key = Math.round(q[0] / 2) * 65536 + Math.round(q[1] / 2)
     let v = memo.get(key)
     if (!v) memo.set(key, (v = narrowest(T, q)))
     return v
   }
+}
+
+/**
+ * 直线 a → b 能不能是一座桥：过水只有一段（中间的干地、沙洲不超过 10 米）、不碰海，桥身不超过这里水面最窄宽度允许的长度，
+ * 大体横过水面（与河道中线的法向或水面最窄方向夹角不大）。水面最窄处的方向与宽度按桥线自己最深的一点量
+ * （同一段水里各处宽窄、走向可以差很多，比如支流、护城河汇进来的地方）。整条在岸上也算行
+ */
+function bridgeOk(T: TerrainResult, a: P, b: P, across: (q: P) => { w: number; d: P } = acrossWater(T)): boolean {
+  const C = dist(a, b)
+  const m = Math.max(1, Math.ceil(C))
+  let first = -1
+  let last = -1
+  let gap = 0
+  let q: P = a
+  let qd = Infinity
+  for (let k = 0; k <= m; k++) {
+    const p: P = [a[0] + ((b[0] - a[0]) * k) / m, a[1] + ((b[1] - a[1]) * k) / m]
+    const w = T.waterAt(p)
+    if (w < qd) (qd = w), (q = p)
+    if (T.seaAt(p)) return false
+    if (w < 0.5) {
+      if (first >= 0 && gap > 10) return false
+      if (first < 0) first = k
+      last = k
+      gap = 0
+    } else if (first >= 0) gap += C / m
+  }
+  if (first < 0) return true
+  const span = ((last - first) * C) / m
+  const nw = across(q)
+  if (span > maxSpanOf(nw.w)) return false
+  const d = riverNormal(T, q) ?? nw.d
+  return Math.abs(((b[0] - a[0]) * d[0] + (b[1] - a[1]) * d[1]) / (C || 1)) >= BRIDGE_COS
+}
+
+function bridgeLine(pts: P[], s: number, e: number, iaMin: number, ibMax: number, T: TerrainResult): { ia: number; ib: number } | null {
+  const across = acrossWater(T)
   let best: { ia: number; ib: number; cost: number } | null = null
   for (let ia = s - 1; ia >= iaMin; ia--) {
     if (T.waterAt(pts[ia]) < 0.5) continue
@@ -211,35 +322,7 @@ function bridgeLine(pts: P[], s: number, e: number, iaMin: number, ibMax: number
       const C = dist(a, b)
       const cost = C + 0.35 * STEP * (s - 1 - ia + ib - e)
       if (best && cost >= best.cost) continue
-      // 桥线的过水情况：第一处、最后一处落水，中间的干地（沙洲）不超过 10 米，不碰海
-      const m = Math.max(1, Math.ceil(C))
-      let first = -1
-      let last = -1
-      let gap = 0
-      let ok = true
-      let q: P = a
-      let qd = Infinity
-      for (let k = 0; k <= m && ok; k++) {
-        const p: P = [a[0] + ((b[0] - a[0]) * k) / m, a[1] + ((b[1] - a[1]) * k) / m]
-        const w = T.waterAt(p)
-        if (w < qd) (qd = w), (q = p)
-        if (T.seaAt(p)) ok = false
-        else if (w < 0.5) {
-          if (first >= 0 && gap > 10) ok = false
-          if (first < 0) first = k
-          last = k
-          gap = 0
-        } else if (first >= 0) gap += C / m
-      }
-      if (!ok) continue
-      if (first >= 0) {
-        const span = ((last - first) * C) / m
-        const nw = across(q)
-        if (span > maxSpanOf(nw.w)) continue
-        const d = riverNormal(T, q) ?? nw.d
-        const cos = Math.abs(((b[0] - a[0]) * d[0] + (b[1] - a[1]) * d[1]) / (C || 1))
-        if (cos < BRIDGE_COS) continue
-      }
+      if (!bridgeOk(T, a, b, across)) continue
       best = { ia, ib, cost }
     }
   }
@@ -406,35 +489,6 @@ export function fixWet(r: Road, T: TerrainResult): Road[] {
 }
 
 /**
- * 首尾相接的两条路（干道的城内段与城外段）接头落在水里时，把过水的这一截整段划给前一条：
- * 各条路分头理过水段（fixWet），接头在水里的话两边都只看到"止于水中"，会把过河的路截断。
- */
-function wetSeams(roads: Road[], T: TerrainResult): Road[] {
-  // 只复制改动的路：没动的保持原对象（generate.ts 按对象认新修的路登记走廊）
-  const out = roads.slice()
-  const key = (q: P) => `${Math.round(q[0] * 2)},${Math.round(q[1] * 2)}`
-  const starts = new Map<string, number>()
-  out.forEach((r, i) => r.kind !== 'path' && r.line.length > 1 && starts.set(key(r.line[0]), i))
-  out.forEach((_, i) => {
-    let a = out[i]
-    if (a.kind === 'path' || a.line.length < 2) return
-    const end = a.line[a.line.length - 1]
-    if (T.waterAt(end) >= 0.5) return
-    const j = starts.get(key(end))
-    if (j === undefined || j === i) return
-    const b = out[j]
-    const pts = resample(b.line, STEP)
-    const runs = wetRuns(pts, T)
-    // b 从水里起头：上岸处（整条都在水里就不动）
-    const up = runs.length && runs[0][0] === 0 ? runs[0][1] : 0
-    if (up <= 0 || up >= pts.length - 1 || T.waterAt(pts[up]) < 0.5) return
-    out[i] = a = { ...a, line: [...a.line, ...pts.slice(1, up + 1)] }
-    out[j] = { ...b, line: pts.slice(up) }
-  })
-  return out
-}
-
-/**
  * 桥（渡口、浅滩）的两头都要有路：路过了桥头还要再走一段（MIN_STUB 米以上），或者那一小段的尽头接着别的路，
  * 或者这条路本来就是一圈（环城路）。整理、截断以后只剩一小截桥头的，把那截连同桥一起去掉：
  * 一头悬空就截到过河之前，两头都悬空就整条去掉。去掉一段可能让别的桥头也悬空，所以反复做到不再变。
@@ -474,7 +528,7 @@ export function trimDangling(roads: Road[], T: TerrainResult): Road[] {
 export function tidyRoads(roads: Road[], T: TerrainResult): Road[] {
   // 同级的路里宽的先占：重叠时留下宽的那条（规划的大街与沿它出城的干道重合时，大街不被窄的干道截断）
   // 先把各条路的过水段理顺（直线过桥、顺河的截掉），同一处只留一座桥才判得准
-  roads = wetSeams(roads, T).flatMap((r) => fixWet(r, T))
+  roads = roads.flatMap((r) => fixWet(r, T))
   const order = roads.map((_, i) => i).sort((a, b) => RANK[roads[a].kind] - RANK[roads[b].kind] || roads[b].width - roads[a].width || a - b)
   const net = new SegGrid()
   const bridges: P[] = []

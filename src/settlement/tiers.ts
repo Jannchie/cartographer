@@ -1,6 +1,6 @@
 import { clamp } from '../gen/util'
 import { eastAsian } from './culture'
-import { hashAt, isFree, memo, type Ctx } from './ctx'
+import { emitArea, hashAt, isFree, memo, type Ctx } from './ctx'
 import type { FeatureEnv, FeatureId, Site } from './features'
 import { add, area, bboxOf, centroid, circlePoly, convexOverlap, dist, insetConvex, obb, pointInPoly, rect, type P, type Poly } from './geom'
 import { isVillage } from './scale'
@@ -11,6 +11,7 @@ import { westChurch } from './compose/church'
 import { placeMosque } from './plans/medina'
 import { park } from './parks'
 import { villageShrine } from './styles/wa'
+import { addWall, connectDoor } from './walls'
 
 /**
  * 地标的规模档（见 types.ts 的 Tier）：神社、寺观、教堂、园林、城堡都可大可小。
@@ -319,8 +320,8 @@ function ancestralHall(ctx: Ctx, poly: Poly, front: P, key: string): boolean {
   addGroup(ctx, parts, 0.3)
   const main = ctx.out.buildings[ctx.out.buildings.length - 3]
   main.role = '祠堂'
-  ctx.out.enclosures.push(wall)
-  ctx.out.plazas.push(box(-D / 2 + 5.5, D / 2 - 10, -W / 2 + 5, W / 2 - 5))
+  emitArea(ctx, 'enclosures', wall)
+  emitArea(ctx, 'plazas', box(-D / 2 + 5.5, D / 2 - 10, -W / 2 + 5, W / 2 - 5))
   plantTree(ctx, at(0, 0), 3.2)
   ctx.out.landmarks.push({ p: at(D / 2 - 5, 0), name: ctx.namer.sacred(isVillage(ctx.p.size) || ctx.p.size === 'town' ? 'tudi' : 'villageShrine', key), kind: 'shrine' })
   return true
@@ -367,10 +368,11 @@ function manor(ctx: Ctx, poly: Poly, front: P, key: string): boolean {
   const wall: Wall = { loop, solid, towers, gates: [], kind: cult === 'wa' ? 'palisade' : 'stone', thickness: thick }
   for (let i = 0; i < loop.length; i++) if (solid[i] && ctx.corridors.hitsPoly([loop[i], loop[(i + 1) % loop.length]], thick / 2 + 0.3, ['road', 'river', 'wall'])) return false
   for (const [p, k] of parts) place(ctx, p, k, { pad: 0.5 }, dwelling({ kind: k } as Building) ? { floors: 1, units: 0 } : { role: k === 'keep' ? (cult === 'islamic' ? '碉楼' : '塔楼') : undefined })
-  ctx.out.walls.push(wall)
-  for (let i = 0; i < loop.length; i++) if (solid[i]) ctx.corridors.add([loop[i], loop[(i + 1) % loop.length]], thick / 2 + 1, 'wall')
+  addWall(ctx, wall, 'compound')
+  // 门口接上路
+  connectDoor(ctx, wall, at(-h, 0))
   ctx.occ.add(box(-h, h, -h, h))
-  ctx.out.plazas.push(box(-h + 1.5, h - 1.5, -h + 1.5, h - 1.5))
+  emitArea(ctx, 'plazas', box(-h + 1.5, h - 1.5, -h + 1.5, h - 1.5))
   if (cult === 'wa') for (let k = 0; k < 8; k++) plantTree(ctx, at(h + 3, (k / 7 - 0.5) * S), 2.4)
   ctx.out.landmarks.push({ p: c, name: ctx.namer.sacred('manor', key), kind: 'shrine' })
   return true
@@ -435,7 +437,7 @@ function microBuild(ctx: Ctx, b: Building, c: P, d: P, kind: MicroKind, outside 
         // 土地庙：一间小庙、门前一方小坪
         if (!put(rect(at(-0.8, 0), d, 3, 3.2), 'temple', '土地庙')) return false
         const fore = rect(at(1.8, 0), d, 2, 3.2)
-        if (isFree(ctx, fore, { pad: 0.1 })) ctx.out.plazas.push(fore)
+        if (isFree(ctx, fore, { pad: 0.1 })) emitArea(ctx, 'plazas', fore)
         plantTree(ctx, at(-3.5, 2.5), 3)
         return true
       }
@@ -453,7 +455,7 @@ function microBuild(ctx: Ctx, b: Building, c: P, d: P, kind: MicroKind, outside 
       if (outside || ruralRole(ctx, c)) {
         const pad = rect(at(0.5, 0), d, 4, 4)
         if (!isFree(ctx, pad, { pad: 0.1 })) return false
-        ctx.out.plazas.push(pad)
+        emitArea(ctx, 'plazas', pad)
         // 石十字：一竖一横（两块可以相交，一起落地）
         if (addGroup(ctx, [[rect(at(0.4, 0), d, 3, 0.7), 'tower'], [rect(at(0.9, 0), d, 0.7, 2), 'tower']], 0.1))
           for (const x of ctx.out.buildings.slice(-2)) x.role = '路边十字架'
@@ -466,7 +468,7 @@ function microBuild(ctx: Ctx, b: Building, c: P, d: P, kind: MicroKind, outside 
       // 口袋花园：房子原来的地方铺成一小块绿地，几棵树，当中一口井或一座雕像
       const g = circlePoly(c, clamp(room * 0.75, 4, 8), 12)
       if (!isFree(ctx, g, { pad: 0.2, tags: ['road', 'river', 'wall'] })) return false
-      ctx.out.greens.push({ poly: g, kind: 'park' })
+      emitArea(ctx, 'greens', g, 'park')
       ctx.out.landmarks.push({ p: c, kind: cult === 'western' || cult === 'islamic' ? 'fountain' : 'well' })
       ctx.occ.add(circlePoly(c, 2, 8))
       for (let k = 0; k < 3; k++) {

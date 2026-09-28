@@ -1,5 +1,5 @@
 import { addRoad } from '../roads'
-import { hashAt, isFree, siteDice, placeable, type Ctx } from '../ctx'
+import { emitArea, hashAt, isFree, siteDice, placeable, type Ctx } from '../ctx'
 import { area, at, box, centroid, clipConvex, dist, insetConvex, obb, polylineDist, unit, type Frame, type P, type Poly } from '../geom'
 import type { BuildingKind, Density, Wall } from '../types'
 import { addBuilding, addGroup, inside, place, scatterTrees, subdivide } from '../wards'
@@ -7,6 +7,7 @@ import type { Layout } from './jokamachi'
 import type { PlanZone } from './types'
 import { garan } from '../compose/wa'
 import { composer, type Elem, type Preset } from '../compose/core'
+import { addWall, connectGates } from '../walls'
 
 /**
  * 城下町的填法：城堡（堀、石垣、本丸与天守）、武家屋敷、町屋、寺院、枡形。
@@ -147,7 +148,6 @@ export function rampart(ctx: Ctx, corners: P[], gates: { edge: number; p: P; ang
     }
   }
   const wall: Wall = { loop, solid, towers: [], gates: gates.map((g) => ({ p: g.p, angle: g.angle })), kind: 'stone', thickness }
-  for (let i = 0; i < loop.length; i++) if (solid[i]) ctx.corridors.add([loop[i], loop[(i + 1) % loop.length]], thickness / 2 + 1.5, 'wall')
   if (moatRing) {
     const runs: P[][] = []
     let cur: P[] = []
@@ -186,11 +186,9 @@ export function rampart(ctx: Ctx, corners: P[], gates: { edge: number; p: P; ang
         if (best && bd < moatW * 2 + 12) bridges.push({ p: best, angle: g.angle })
       }
       wall.moat = { runs, width: moatW, bridges }
-      for (const r of runs) ctx.corridors.add(r, moatW / 2 + 1, 'wall')
     }
   }
-  ctx.out.walls.push(wall)
-  return wall
+  return addWall(ctx, wall, 'plan')
 }
 
 // —————————————————————— 城堡 ——————————————————————
@@ -202,6 +200,7 @@ export function rampart(ctx: Ctx, corners: P[], gates: { edge: number; p: P; ang
  * 规划区外缘干道入口的枡形也在这里一并修（城堡最先盖）。
  */
 export function castle(ctx: Ctx, z: PlanZone, L: Layout) {
+  const w0 = ctx.out.walls.length
   const C = L.C
   const s = L.front
   const F: Frame = { o: z.c, f: dirOf(z, SIDE_UV[s][0], SIDE_UV[s][1]), l: dirOf(z, -SIDE_UV[s][1], SIDE_UV[s][0]) }
@@ -221,7 +220,7 @@ export function castle(ctx: Ctx, z: PlanZone, L: Layout) {
   rampart(ctx, sq(wo), outerGates, sq(mo), mw, th)
   // 二之丸的地面
   const inner2 = sq(wo - th / 2 - 0.5)
-  ctx.out.plazas.push(inner2)
+  emitArea(ctx, 'plazas', inner2)
   // 本丸：偏向背面
   const hh = C * 0.36
   const ob = C * 0.1
@@ -234,7 +233,7 @@ export function castle(ctx: Ctx, z: PlanZone, L: Layout) {
   const ring: P[] = [at(F, H1 + mc, -hh - mc), at(F, H1 + mc, hh + mc), at(F, H0 - mc, hh + mc), at(F, H0 - mc, -hh - mc)]
   const fAngle = Math.atan2(F.f[1], F.f[0])
   rampart(ctx, honmaru, [{ edge: 0, p: at(F, H1, gl), angle: fAngle }], ring, mi, th)
-  ctx.out.plazas.push(box(F, H0 + th / 2, H1 - th / 2, -hh + th / 2, hh - th / 2))
+  emitArea(ctx, 'plazas', box(F, H0 + th / 2, H1 - th / 2, -hh + th / 2, hh - th / 2))
   // 登城路：堀端大街 → 大手门（过外堀的桥）→ 二之丸里拐弯 → 过内堀进本丸
   const inner = (line: P[], w: number) => {
     addRoad(ctx, { line, width: w, kind: 'street' }, 0.8)
@@ -297,6 +296,8 @@ export function castle(ctx: Ctx, z: PlanZone, L: Layout) {
       for (let a = H0 * 0.8; a < H1 * 0.6; a += 22) put(ctx, box(F, a, a + 16, sd * (wo - th / 2 - 3 - Math.min(8, lat * 0.4)), sd * (wo - th / 2 - 3)), 'shed')
   scatterTrees(ctx, insetConvex(inner2, 3), 0.0015, 2.5, 4)
   for (const m of L.masu) masugata(ctx, z, L, m)
+  // 城门（外郭的门在干道上，本丸、二之丸的门在城里）接上路
+  connectGates(ctx, ctx.out.walls.slice(w0))
 }
 
 /** 枡形：干道进规划区的地方一圈方石垣，外门、内门成直角，进门要拐弯 */
@@ -397,13 +398,13 @@ export function buke(ctx: Ctx, block: Poly, grid: P | null, upper: boolean) {
     const kura = box(F, a1 - 9, a1 - 3, kc, kc + 5)
     if (ok(kura)) addBuilding(ctx, kura, 'shed')
     // 预算用完时盖不了房子，也还是一处空着的屋敷：土墙与庭园
-    ctx.out.enclosures.push(encl)
+    emitArea(ctx, 'enclosures', encl)
     // 庭园：主屋后面到后墙
     const g0 = f0 + hd * (upper && D > 50 ? 2.1 : 1.6) + 2
     if (a1 - 2 - g0 > 8) {
       const garden = clipConvex(box(F, g0, a1 - 1.5, b0 + 1.5, b1 - 1.5), encl)
       if (garden.length >= 3 && area(garden) > 80) {
-        ctx.out.greens.push({ poly: garden, kind: 'garden' })
+        emitArea(ctx, 'greens', garden, 'garden')
         scatterTrees(ctx, insetConvex(garden, 1.5), upper ? 0.012 : 0.008, 2, 4)
       }
     }
@@ -490,7 +491,7 @@ export function machiya(ctx: Ctx, block: Poly, grid: P | null, type: string, o: 
         if (ok(shed)) addBuilding(ctx, shed, 'shed')
       }
     } else {
-      ctx.out.greens.push({ poly: deep, kind: 'garden' })
+      emitArea(ctx, 'greens', deep, 'garden')
       scatterTrees(ctx, insetConvex(deep, 1), 0.006, 2, 3.5)
     }
     return

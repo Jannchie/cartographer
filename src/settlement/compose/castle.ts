@@ -1,9 +1,10 @@
-import { isFree, siteDice, type Ctx } from '../ctx'
+import { emitArea, isFree, siteDice, type Ctx } from '../ctx'
 import { area, centroid, circlePoly, clipHalf, dist, inscribedRect, insetConvex, obb, pointInPoly, rect, type P, type Poly } from '../geom'
 import type { BuildingKind, Wall } from '../types'
-import { roadGap } from '../walls'
+import { addWall, connectGates } from '../walls'
 import { addBuilding, fit, inside, place, scatterTrees } from '../wards'
 import { composer, type Elem, type Preset } from './core'
+import { nearestRoad } from '../roads'
 
 /**
  * 西式城堡的语法：幕墙（顺着地块 / 规整的方院 / 内外两圈的同心城）+ 塔（圆塔 / 方塔，疏密）
@@ -72,7 +73,7 @@ function gateEdge(ctx: Ctx, loop: Poly, c: P, minLen: number) {
     const e = loop[(i + 1) % loop.length]
     const mid: P = [(a[0] + e[0]) / 2, (a[1] + e[1]) / 2]
     const m: P = [mid[0] - c[0], mid[1] - c[1]]
-    const s = ((m[0] * toCenter[0] + m[1] * toCenter[1]) / (Math.hypot(...m) || 1)) * 8 - Math.min(80, roadGap(ctx, mid, 80))
+    const s = ((m[0] * toCenter[0] + m[1] * toCenter[1]) / (Math.hypot(...m) || 1)) * 8 - Math.min(80, nearestRoad(ctx, mid, 80)?.gap ?? Infinity)
     if (s > gd && dist(a, e) > minLen) {
       gd = s
       gi = i
@@ -119,7 +120,9 @@ function curtainWall(poly: Poly, gi: number, spacing: number, thickness: number,
  * 西式城堡（城堡片区，都城盖不下王宫时也是它）：curtain 是已经让开路、河、城墙的幕墙轮廓。
  * 骨架与各部件按城堡的位置抽签（siteDice）。
  */
-export function westCastle(ctx: Ctx, curtain0: Poly) {
+/** connect：城门接上路（山上的城堡不接，上山的小路另修） */
+export function westCastle(ctx: Ctx, curtain0: Poly, o: { connect?: boolean } = {}) {
+  const w0 = ctx.out.walls.length
   const rng = ctx.rng
   const c0 = centroid(curtain0)
   const M = Math.sqrt(area(curtain0))
@@ -135,7 +138,7 @@ export function westCastle(ctx: Ctx, curtain0: Poly) {
     if (r && area(r) > area(curtain0) * 0.55) {
       curtain = r
       // 方院外面余下的是一圈草坡（glacis）
-      ctx.out.greens.push({ poly: curtain0, kind: 'park' })
+      emitArea(ctx, 'greens', curtain0, 'park')
     } else enceinte = 'follow'
   }
   // 同心城要够大；合成的大城（grand）内外两圈靠得近一些也要做成同心
@@ -143,7 +146,7 @@ export function westCastle(ctx: Ctx, curtain0: Poly) {
   if (enceinte === 'concentric' && area(insetConvex(curtain0, grand ? 12 : 16)) < (grand ? 700 : 1400)) enceinte = 'follow'
   C.note('built', enceinte)
   const c = centroid(curtain)
-  ctx.out.plazas.push(curtain)
+  emitArea(ctx, 'plazas', curtain)
   const towers = C.pick('towers', TOWERS)
   const spacing = towers === 'corners' ? 0 : C.pick('spacing', [{ id: '24', w: 2 }, { id: '34', w: 2 }, { id: '0', w: 1 }] as Elem<'24' | '34' | '0'>[])
   const sp = Number(spacing)
@@ -154,7 +157,7 @@ export function westCastle(ctx: Ctx, curtain0: Poly) {
       for (const t of w.wall.towers) place(ctx, rect(t, w.u, th * 2.6, th * 2.6), 'tower', { tags: ['road', 'river'] })
       w.wall.towers = []
     }
-    ctx.out.walls.push(w.wall)
+    addWall(ctx, w.wall, 'keep')
     return w
   }
   const gi = gateEdge(ctx, curtain, c, 14)
@@ -248,7 +251,7 @@ export function westCastle(ctx: Ctx, curtain0: Poly) {
       })
       const w = curtainWall(ring, gi2, 0, 2.6)
       w.wall.towers = []
-      ctx.out.walls.push(w.wall)
+      addWall(ctx, w.wall, 'keep')
       for (const k of [0.35, -0.35]) {
         const h: P = [q[0] + outer.n[0] * r * 0.35 + w.u[0] * r * k, q[1] + outer.n[1] * r * 0.35 + w.u[1] * r * k]
         addBuilding(ctx, rect(h, w.u, r * 0.55, r * 0.4), 'hall', 0.5)
@@ -321,6 +324,8 @@ export function westCastle(ctx: Ctx, curtain0: Poly) {
   const well: P = [wc[0] - outer.n[0] * 4, wc[1] - outer.n[1] * 4]
   if (!ctx.occ.hitsPoint(well, 2) && pointInPoly(well, ward)) ctx.out.landmarks.push({ p: well, kind: 'well' })
   if (curtain !== curtain0) scatterTrees(ctx, curtain0, 0.0015, 2.5, 4)
+  // 城门接上路（门前一条小街）
+  if (o.connect !== false) connectGates(ctx, ctx.out.walls.slice(w0))
   C.done(c)
 }
 

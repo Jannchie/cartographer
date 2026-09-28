@@ -1,5 +1,5 @@
 import { CULTURE_INFO, eastAsian } from './culture'
-import { centerDist, clipWater, isFree, placeable, whereOf, mark, type Ctx } from './ctx'
+import { emitArea, centerDist, clipWater, isFree, placeable, whereOf, mark, type Ctx } from './ctx'
 import { area, centroid, circlePoly, dist, insetConvex, obb, rect, type P, type Poly } from './geom'
 import { amphitheater, arenaAt, hospitalAt, pulpitAt, schoolAt, stageAt, tavernAt, wineryAt } from './civic'
 import { isVillage, scaleOf, townShare } from './scale'
@@ -682,9 +682,9 @@ export function resolveCounts(p: SettlementParams, e: FeatureEnv): Record<Featur
 function barracks(ctx: Ctx, w: Ward, block: Poly) {
   const zone = placeable(ctx, insetConvex(block, 4), 3, 0.3)
   if (!zone || zone.length < 3 || area(zone) < 1200) return urban(ctx, block, 'common')
-  ctx.out.enclosures.push(zone)
+  emitArea(ctx, 'enclosures', zone)
   const yard = insetConvex(zone, 14)
-  if (yard.length >= 3) ctx.out.plazas.push(yard)
+  if (yard.length >= 3) emitArea(ctx, 'plazas', yard)
   const inner = insetConvex(zone, 2)
   const c = centroid(inner)
   for (let i = 0; i < inner.length; i++) {
@@ -715,7 +715,7 @@ function guildHall(ctx: Ctx, w: Ward, block: Poly) {
     mark(ctx, hc, 'guild')
     reserve.push(rect(hc, b.axis, 44, 28))
     const fore = rect([hc[0] - b.axis[1] * 14, hc[1] + b.axis[0] * 14], b.axis, 26, 8)
-    if (isFree(ctx, fore, { tags: ['wall', 'river'] }) && inside(fore, zone)) ctx.out.plazas.push(fore)
+    if (isFree(ctx, fore, { tags: ['wall', 'river'] }) && inside(fore, zone)) emitArea(ctx, 'plazas', fore)
   }
   urban(ctx, block, 'merchant', reserve)
   void w
@@ -746,7 +746,7 @@ function exchange(ctx: Ctx, w: Ward, block: Poly) {
   )
   const reserve: Poly[] = []
   if (got && addGroup(ctx, got.parts, 1)) {
-    ctx.out.plazas.push(rect(got.q, b.axis, got.L - got.t * 2, got.D - got.t * 2))
+    emitArea(ctx, 'plazas', rect(got.q, b.axis, got.L - got.t * 2, got.D - got.t * 2))
     mark(ctx, got.q, 'exchange')
     reserve.push(rect(got.q, b.axis, got.L + 10, got.D + 10))
   }
@@ -761,8 +761,8 @@ function observatory(ctx: Ctx, w: Ward, block: Poly) {
   const spot = fit(g, (q, s) => ({ q, r: 16 * s }), (t) => isFree(ctx, circlePoly(t.q, t.r * 1.3, 16), { pad: 1 }) && inside(circlePoly(t.q, t.r * 1.3, 16), g), [1, 0.8, 0.65])
   if (!spot) return urban(ctx, block, 'common')
   const { q, r } = spot
-  ctx.out.greens.push({ poly: circlePoly(q, r * 1.3, 20), kind: 'garden' })
-  ctx.out.plazas.push(circlePoly(q, r, 24))
+  emitArea(ctx, 'greens', circlePoly(q, r * 1.3, 20), 'garden')
+  emitArea(ctx, 'plazas', circlePoly(q, r, 24))
   addBuilding(ctx, circlePoly(q, r * 0.36, 18), 'magic')
   // 圆台上的观测仪：一圈小石墩
   for (let k = 0; k < 6; k++) {
