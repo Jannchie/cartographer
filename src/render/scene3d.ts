@@ -656,6 +656,9 @@ export class Scene3D {
       })
     }
     this.heightTex?.dispose()
+    // 烘焙器绑着旧世界的高度纹理：网格尺寸相同也不能复用
+    this.bake?.dispose()
+    this.bake = null
     // 水面材质随世界重建，河流材质跟着重建
     this.riverMat = null
 
