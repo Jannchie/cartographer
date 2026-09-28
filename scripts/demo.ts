@@ -71,7 +71,16 @@ function frameCity(st: any, pad: number): { c: P; w: number } {
 console.log('world…')
 const world = generateWorld({ ...DEFAULT_PARAMS, seed: 'aurelia' })
 const rivers = smoothRivers(world)
-const atlas = (s: string, S: number) => renderAtlas(world, rivers, s as any, { labels: true, contours: true, graticule: true }, S) as unknown as Canvas
+/** 纸图只留图框里的地图本身：各风格边距不同，裁掉后同一取景才逐像素对齐 */
+function atlas(s: string, S: number): Canvas {
+  const full = renderAtlas(world, rivers, s as any, { labels: true, contours: true, graticule: true }, S) as unknown as Canvas
+  const MW = world.W * S
+  const MH = world.H * S
+  const M = (full.width - MW) / 2
+  const c = createCanvas(MW, MH)
+  c.getContext('2d').drawImage(full as any, M, M, MW, MH, 0, 0, MW, MH)
+  return c
+}
 const physical = atlas('physical', 3)
 const STYLES: [string, string][] = [
   ['fantasy', 'Fantasy'],
@@ -81,6 +90,7 @@ const STYLES: [string, string][] = [
   ['topo', 'Topographic'],
 ]
 const styleShots = STYLES.map(([id, name]) => ({ name, img: atlas(id, 2) }))
+const mapShots = [{ name: 'Physical', img: physical }, ...styleShots]
 
 console.log('cultures…')
 const CULTURES: [string, string, Record<string, unknown>][] = [
@@ -89,10 +99,17 @@ const CULTURES: [string, string, Record<string, unknown>][] = [
   ['Japanese', 'Castle town', { seed: 'kaga', culture: 'wa', plan: 'jokamachi', river: true, hills: true, population: 14000 }],
   ['Islamic', 'Medina', { seed: 'qasr', culture: 'islamic', plan: 'medina', hills: true, population: 12000 }],
 ]
+const CULTURE_D = 7.5 / 4
 const cultureShots = CULTURES.map(([name, sub, p]) => {
   const st = settle(p)
   const f = frameCity(st, 1.2)
-  return { name, sub, img: settleShot(st, 'color', f.c, f.w, 3000) }
+  // 都城：取景中心往宫城挪一半，再以宫城为锚点轻推，宫城在画面里原地不动、始终完整
+  const palace = p.capital ? (st.landmarks.find((l: any) => l.kind === 'castle')?.p as P | undefined) : undefined
+  if (palace) f.c = [(f.c[0] + palace[0]) / 2, (f.c[1] + palace[1]) / 2]
+  const h = (f.w * H) / W
+  const fx = palace ? (palace[0] - (f.c[0] - f.w / 2)) / f.w : 0.5
+  const fy = palace ? (palace[1] - (f.c[1] - h / 2)) / h : 0.5
+  return { name, sub, fx, fy, img: settleShot(st, 'color', f.c, f.w, 3000) }
 })
 
 console.log('skins…')
@@ -137,13 +154,16 @@ const out = createCanvas(W, H)
 const layer = createCanvas(W, H)
 const ease = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t * t * (3 - 2 * t))
 
-/** 把 src 按 cover 铺满画面，再推近 zoom 倍（以 (fx, fy) 比例位置为中心） */
+/**
+ * 把 src 按 cover 铺满画面，再绕锚点推近 zoom 倍：
+ * src 上 (fx, fy) 比例处的点在画面上的比例位置始终是 (fx, fy)，推镜时它原地不动，取景永远不出图幅。
+ */
 function cover(g: SKRSContext2D, src: Canvas | Image, zoom = 1, fx = 0.5, fy = 0.5, alpha = 1) {
   const s = Math.max(W / src.width, H / src.height) * zoom
   const sw = W / s
   const sh = H / s
-  const sx = Math.min(Math.max(src.width * fx - sw / 2, 0), src.width - sw)
-  const sy = Math.min(Math.max(src.height * fy - sh / 2, 0), src.height - sh)
+  const sx = fx * (src.width - sw)
+  const sy = fy * (src.height - sh)
   g.globalAlpha = alpha
   g.drawImage(src as any, sx, sy, sw, sh, 0, 0, W, H)
   g.globalAlpha = 1
@@ -183,12 +203,19 @@ function caption(g: SKRSContext2D, kicker: string, title: string, t: number) {
   g.globalAlpha = 1
 }
 
-/** 一组镜头依次交叉淡入：每张 dur 秒、淡入 fade 秒；zoom(u) 是自身时段 u∈[0,1] 的推近倍数 */
-function sequence(g: SKRSContext2D, t: number, items: { img: Canvas }[], dur: number, fade: number, zoom: (u: number) => number) {
+type Shot = { img: Canvas; fx?: number; fy?: number }
+/**
+ * 一组镜头依次交叉淡入：每张 dur 秒、淡入 fade 秒。
+ * zoom(i, lt) 是第 i 张在自身第 lt 秒的推近倍数；淡入时旧的一张接着按自己的运镜走。
+ * 同一取景的一组（风格、皮肤）传只看总时间的 zoom，新旧两张严丝合缝地叠在一起。
+ * 每张绕锚点缩放：shot.fx/fy 优先，否则用 (fx, fy)。
+ */
+function sequence(g: SKRSContext2D, t: number, items: Shot[], dur: number, fade: number, zoom: (i: number, lt: number) => number, fx = 0.5, fy = 0.5) {
   const i = Math.min(items.length - 1, Math.floor(t / dur))
   const lt = t - i * dur
-  if (i > 0 && lt < fade) cover(g, items[i - 1].img, zoom(1 + lt / dur))
-  cover(g, items[i].img, zoom(lt / dur), 0.5, 0.5, i > 0 ? ease(lt / fade) : 1)
+  const draw = (k: number, l: number, alpha: number) => cover(g, items[k].img, zoom(k, l), items[k].fx ?? fx, items[k].fy ?? fy, alpha)
+  if (i > 0 && lt < fade) draw(i - 1, lt + dur, 1)
+  draw(i, lt, i > 0 ? ease(lt / fade) : 1)
   return { i, lt }
 }
 
@@ -217,17 +244,11 @@ if (frames3d.length) {
 }
 scenes.push(
   {
-    d: 3,
+    // 六种纸图一镜到底：同一次推镜里每 0.8 秒换一种风格，缩放只随总时间走
+    d: 4.8,
     draw: (g, t) => {
-      cover(g, physical, 1.05 + 0.3 * ease(t / 3), 0.46, 0.5)
-      caption(g, 'Plates · erosion · climate · rivers', 'Continents with a history', t - 0.3)
-    },
-  },
-  {
-    d: 3,
-    draw: (g, t) => {
-      const { i, lt } = sequence(g, t, styleShots, 0.6, 0.18, (u) => 1.1 + 0.06 * u)
-      caption(g, 'Six paper-map styles', styleShots[i].name, i === 0 ? lt : 1)
+      const { i, lt } = sequence(g, t, mapShots, 0.8, 0.2, (j, l) => 1.05 * Math.pow(1.4, (j * 0.8 + l) / 4.8), 0.46, 0.5)
+      caption(g, 'Six paper-map styles', mapShots[i].name, i === 0 ? lt - 0.2 : 1)
     },
   },
   {
@@ -239,16 +260,16 @@ scenes.push(
     },
   },
   {
-    d: 7.5,
+    d: CULTURE_D * cultureShots.length,
     draw: (g, t) => {
-      const { i, lt } = sequence(g, t, cultureShots, 7.5 / 4, 0.35, (u) => 1.02 + 0.16 * u)
+      const { i, lt } = sequence(g, t, cultureShots, CULTURE_D, 0.35, (_, lt) => 1.02 + (0.13 * lt) / CULTURE_D)
       caption(g, cultureShots[i].sub, cultureShots[i].name, lt)
     },
   },
   {
     d: 5,
     draw: (g, t) => {
-      const { i } = sequence(g, t, skinShots, 5 / skinShots.length, 0.12, (u) => 1 + 0.04 * u)
+      const { i } = sequence(g, t, skinShots, 5 / skinShots.length, 0.12, (j, lt) => 1 + (0.08 * (j * (5 / skinShots.length) + lt)) / 5)
       caption(g, 'Eight skins', skinShots[i].name, t)
     },
   },
@@ -268,9 +289,9 @@ for (let f = 0; f < frames; f++) {
   let t = f / FPS
   let sc = 0
   while (sc < scenes.length - 1 && t >= scenes[sc].d) t -= scenes[sc++].d
-  // 段落之间溶解：新段落的前 X 秒压在上一段的末帧上
+  // 段落之间溶解：新段落的前 X 秒压在上一段上，上一段接着自己的运镜多走 X 秒，不定格
   if (sc > 0 && t < X) {
-    await scenes[sc - 1].draw(g, scenes[sc - 1].d - 1 / FPS)
+    await scenes[sc - 1].draw(g, scenes[sc - 1].d + t)
     await scenes[sc].draw(lg, t)
     g.globalAlpha = ease(t / X)
     g.drawImage(layer as any, 0, 0)
