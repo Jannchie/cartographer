@@ -1,3 +1,4 @@
+import { dwelling } from '../undo'
 import { clamp } from '../../gen/util'
 import { emitArea, hashAt, isFree, placeable, wardRng, memo, type Ctx } from '../ctx'
 import { FEATURE, type FeatureId } from '../features'
@@ -241,7 +242,7 @@ function settled(ctx: Ctx, z: PlanZone, g: Grid): Set<Ward> {
     const own = special(ctx, z, g, w, block)
     if (!own) FEATURE[w.type as FeatureId].build!(ctx, w, block, ctx.env)
     // 一户也没盖上（多半是水边、陡坡）：留给通用填法，照常会改作菜园
-    if (own || ctx.out.buildings.slice(nb).some((h) => h.kind === 'house' || h.kind === 'large')) done.add(w)
+    if (own || ctx.out.buildings.slice(nb).some(dwelling)) done.add(w)
   }
   ctx.houseBudget = Math.max(0, ctx.houseBudget) + rest
   ctx.rng = keep.rng

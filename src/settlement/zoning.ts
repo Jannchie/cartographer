@@ -267,7 +267,7 @@ export function placeLandmarks(ctx: Ctx) {
       // 拆了却盖不成就撤回（不留空洞）；拆掉的住户退回民居预算
       const cp = checkpoint(ctx)
       // 成长史：第 k 座在自动数量长到 k + 1 时出现，腾地方拆掉的人家那时才拆
-      const hm = ctx.history ? outMark(ctx) : null
+      const hm = outMark(ctx)
       const gone = new Set(blocking)
       demolish(ctx, (b) => gone.has(b.poly))
       const before = checkpoint(ctx)
@@ -281,7 +281,7 @@ export function placeLandmarks(ctx: Ctx) {
       clearYards(ctx, fp, { to: before })
       mark(ctx, c.at, spec.mark)
       // 数量够了、所在的片区也有人住了才盖（不在那时还是田野的外围先冒出一座）
-      if (hm) stamp(ctx, hm, Math.max(ctx.history!.countPop(def.id, made.length), ctx.history!.life.get(ward)?.born ?? 0))
+      stamp(ctx, hm, Math.max(ctx.history.countPop(def.id, made.length), ctx.history.life.get(ward)?.born ?? 0))
       made.push(c.at)
     }
   }

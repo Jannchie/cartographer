@@ -1,6 +1,6 @@
 import { area, bboxOf, convexOverlap, pointInPoly, type BBox, type Poly } from './geom'
 import type { Ctx, RegMark } from './ctx'
-import type { Building } from './types'
+import type { Building, BuildingKind } from './types'
 
 /**
  * 撤回与拆除：一处地标、一块园子、一座名所试着盖，盖不成就整个撤回；盖之前要给它腾地方就拆掉挡路的人家。
@@ -107,7 +107,10 @@ export function drop<K extends OutKey>(ctx: Ctx, key: K, f: (x: Item<K>, k: numb
 }
 
 /** 住户（计入人口）的建筑 */
-export const dwelling = (b: Pick<Building, 'kind'>) => b.kind === 'house' || b.kind === 'large'
+export const dwelling = (b: Pick<Building, 'kind'> | BuildingKind) => {
+  const k = typeof b === 'string' ? b : b.kind
+  return k === 'house' || k === 'large'
+}
 
 /**
  * 能拆的建筑：民居与棚；minor 时连占一户宅地的小东西也算（路边的祠、小鸟居、礼拜龛、施水亭，见 tiers.ts 的 micro）。

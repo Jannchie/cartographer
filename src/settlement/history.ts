@@ -1,9 +1,10 @@
 import type { Ctx } from './ctx'
-import { bboxOf, convexOverlap, pointInPoly, type BBox, type P, type Poly } from './geom'
+import { area, bboxOf, convexOverlap, pointInPoly, type BBox, type P, type Poly } from './geom'
 import { hashAt } from './ctx'
 import { residentsOf } from './people'
 import { scaleOf } from './scale'
-import type { Settlement } from './types'
+import { dwelling } from './undo'
+import type { Culture, Settlement } from './types'
 
 /**
  * 城市的成长史：城市按人口一路长大，每样东西（房子、田、树、路……）都有出生与消亡的时刻（按人口计）。
@@ -95,7 +96,6 @@ export function outMark(ctx: Ctx): Mark {
  */
 export function stamp(ctx: Ctx, m: Mark, born: number, died = Infinity) {
   const h = ctx.history
-  if (!h) return
   // 记号之后删掉的（拆房子腾地方）删在记号前的部分时，后面的项往前挪一格：按删除的先后重放出新项从哪里起
   const start = new Map(m.lens)
   for (let i = m.dropped; i < ctx.dropped.length; i++) {
@@ -122,7 +122,7 @@ export interface SettlementHistory {
   until: number
 }
 
-const pieceBox = (key: OutKey, item: any): { box: BBox; poly?: Poly; p?: P } => {
+const pieceBox = (item: any): { box: BBox; poly?: Poly; p?: P } => {
   if (Array.isArray(item)) return { box: bboxOf(item as Poly), poly: item as Poly }
   if (item.poly) return { box: bboxOf(item.poly), poly: item.poly }
   if (item.line) return { box: bboxOf(item.line) }
@@ -131,11 +131,10 @@ const pieceBox = (key: OutKey, item: any): { box: BBox; poly?: Poly; p?: P } => 
   const p: P = item.p ?? [0, 0]
   const r = item.r ?? item.len ?? 1
   return { box: [p[0] - r, p[1] - r, p[0] + r, p[1] + r], p }
-  void key
 }
 
 export function piece(key: OutKey, item: object, units = 0): Piece {
-  return { key, item, units, ...pieceBox(key, item) }
+  return { key, item, units, ...pieceBox(item) }
 }
 
 const SOLID = new Set<OutKey>(['buildings', 'plazas', 'piers'])
@@ -320,28 +319,20 @@ export function snapshot(h: SettlementHistory, pop: number): Settlement {
   const out: any = { ...st }
   for (const k of ['roads', 'crossings', 'walls', 'wards', 'blocks', 'buildings', 'enclosures', 'plazas', 'greens', 'parkParts', 'fields', 'trees', 'piers', 'boats', 'wonders', 'landmarks', 'labels'] as const)
     out[k] = (st[k] as object[]).filter(at)
-  const dwellings = (out.buildings as Settlement['buildings']).filter((b) => b.kind === 'house' || b.kind === 'large')
-  const units = dwellings.reduce((s, b) => s + (b.units ?? 1), 0)
-  const innerArea = (out.wards as Settlement['wards']).filter((w) => w.inner).reduce((s, w) => s + Math.abs(signedArea(w.poly)), 0)
-  out.stats = {
-    ...st.stats,
-    buildings: (out.buildings as Settlement['buildings']).filter((b) => b.kind !== 'shed').length,
-    houses: dwellings.length,
-    households: units,
-    population: Math.round((out.buildings as Settlement['buildings']).reduce((s, b) => s + residentsOf(b, st.params.culture), 0) / 10) * 10,
-    area: innerArea / 10000,
-  }
+  out.stats = { ...st.stats, ...statsOf(out.buildings, out.wards, st.params.culture) }
   // 规模（村、镇、城）随那时的人口
   out.params = { ...st.params, population: pop, size: scaleOf(pop).size }
   return out as Settlement
 }
 
-function signedArea(poly: Poly) {
-  let a = 0
-  for (let i = 0; i < poly.length; i++) {
-    const p = poly[i]
-    const q = poly[(i + 1) % poly.length]
-    a += p[0] * q[1] - q[0] * p[1]
+/** 一张地图的统计：建筑（不算棚屋）、民居栋数、户数、人口（各户口数加总，取整到十）、城区面积（公顷） */
+export function statsOf(buildings: Settlement['buildings'], wards: Settlement['wards'], culture: Culture) {
+  const dwellings = buildings.filter(dwelling)
+  return {
+    buildings: buildings.filter((b) => b.kind !== 'shed').length,
+    houses: dwellings.length,
+    households: dwellings.reduce((s, b) => s + (b.units ?? 1), 0),
+    population: Math.round(buildings.reduce((s, b) => s + residentsOf(b, culture), 0) / 10) * 10,
+    area: wards.filter((w) => w.inner).reduce((s, w) => s + area(w.poly), 0) / 10000,
   }
-  return a / 2
 }

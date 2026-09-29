@@ -250,12 +250,16 @@ export function randomSeed() {
 let job = 0
 /** 推演成长史的序号：参数变了（新的请求）就作废还没用上的旧结果（与重绘的 job 分开，推演时切风格不会丢掉结果） */
 let gen = 0
-/** 在后台推演（见 historyWorker.ts）；被更新的请求取代时返回 null */
-async function historyFor(population: number): Promise<SettlementHistory | null> {
+/** 在后台推演（见 historyWorker.ts），期间显示加载提示 stage；被更新的请求取代时返回 null（提示留给新的请求收） */
+async function historyFor(population: number, stage = '推演城市的成长史'): Promise<SettlementHistory | null> {
   const g = ++gen
+  ss.loading.show = true
+  ss.loading.stage = stage
   try {
     const h = await computeHistory({ ...toRaw(ss.params), population, counts: { ...toRaw(ss.params.counts) } })
-    return g === gen ? markRaw(h) : null
+    if (g !== gen) return null
+    ss.loading.show = false
+    return markRaw(h)
   } catch (err) {
     if (err instanceof Superseded) return null
     throw err
@@ -270,10 +274,8 @@ export async function run() {
   storeSet('settleParams', JSON.stringify({ ...toRaw(p), ...INHERITED }))
   // 地址只在提交生成时改写（拖动人口的实时预览、成长动画不写）
   syncRoute('settlement')
-  ss.loading.show = true
-  ss.loading.stage = '规划街巷与街坊'
   try {
-    const h = await historyFor(p.population)
+    const h = await historyFor(p.population, '规划街巷与街坊')
     if (!h) return
     hist = h
     st = markRaw(snapshot(hist, p.population))
@@ -287,18 +289,23 @@ export async function run() {
   await refresh(true)
 }
 
+/** 还在下载字体、到齐后要重画的风格（风格|语言） */
+const fontWait = new Set<string>()
 /** wait：最多等字体多久（毫秒）；成长动画、拖动这类逐帧刷新只等一下，免得每帧都卡在下载字体上 */
 async function listFor(s: Settlement, id: SettleStyleId, wait = 2500) {
   let l = cache.get(id)
   if (l) return l
   const fonts = await ensureSettleFonts(s, id, lang, wait)
-  // 字体没等到就先用回退字体画；到齐以后这幅图作废重画（还在看这张图、这种风格时）
-  if (!fonts.ready)
+  // 字体没等到就先用回退字体画；到齐以后这种风格的图作废、还在看它就重画。每种风格与语言只等一个（成长动画逐帧都会走到这里）
+  const k = `${id}|${lang}`
+  if (!fonts.ready && !fontWait.has(k)) {
+    fontWait.add(k)
     void fonts.later.then(() => {
-      if (st !== s) return
+      fontWait.delete(k)
       cache.delete(id)
       if (ss.style === id) void refresh(false, true)
     })
+  }
   const measurer = document.createElement('canvas').getContext('2d')!
   l = buildSettlementVector(s, id, { ...toRaw(ss.opts), hidden: [...toRaw(ss.opts.hidden)], lang }, measurer)
   cache.set(id, l)
@@ -337,12 +344,9 @@ async function quickRun(population = ss.params.population) {
   // 比算好的成长史小：就是这座城当年的样子，直接取快照
   if (hist && population <= hist.until) return showFrame(snapshot(hist, population))
   // 比它大：在后台重新推演（拖动时新的值取代还没算完的），算好以前画面停在原处，照常能平移缩放
-  ss.loading.show = true
-  ss.loading.stage = '推演城市的成长史'
   const h = await historyFor(population)
   if (!h) return
   hist = h
-  ss.loading.show = false
   // 推演期间滑块可能又动过：按现在的人口取快照
   await showFrame(snapshot(hist, Math.min(ss.params.population, hist.until)))
 }
@@ -399,10 +403,7 @@ export async function playGrowth() {
   const pops = Array.from({ length: frames + 1 }, (_, k) => Math.round(Math.exp(Math.log(from) + ((Math.log(target) - Math.log(from)) * k) / frames)))
   // 现在显示的地图就是这座城成长史的最后一刻：还没算过（或拖小过人口）才推演一次
   if (!hist || hist.until !== target) {
-    ss.loading.show = true
-    ss.loading.stage = '推演城市的成长史'
     const h = await historyFor(target)
-    ss.loading.show = false
     if (!h || !ss.growing) {
       ss.growing = false
       return

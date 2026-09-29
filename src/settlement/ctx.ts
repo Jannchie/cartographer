@@ -338,8 +338,8 @@ export interface Ctx {
    * 某块片区翻建得更密，也不会把别的片区的房子挤掉（民居预算是全城的上限，名额是各片区自己的）
    */
   wardQuota: number
-  /** 生成成长史时的记录（见 history.ts）；单次生成时没有 */
-  history?: import('./history').HistoryState
+  /** 成长史的记录（见 history.ts）：每张地图都是从它的成长史里取的快照 */
+  history: import('./history').HistoryState
   /** 当前片区是街坊（true）还是零散的农家：村 → 镇连续过渡，各片区按位置哈希与街坊占比定（见 generate.ts 的 wardTown） */
   wardTown: boolean
   /** 当前片区定下功能时的人口（地标按它定规模；没有记录的按现在的人口） */

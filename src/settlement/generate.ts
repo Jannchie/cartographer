@@ -45,7 +45,7 @@ import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } fr
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 import { calibrateTrades, perHome, residentsOf } from './people'
-import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
+import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, statsOf, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
 
 /**
  * 规模与画幅：规模档位由人口推出，结构参数按人口连续插值；地图范围按要住下的人口铺开。
@@ -115,8 +115,7 @@ export function generateSettlement(input: SettlementParams): Settlement {
  * 成长动画只生成一次，逐帧取快照
  */
 export function generateHistory(input: SettlementParams, o: { lazy?: boolean } = {}): SettlementHistory {
-  const { st, history } = build(input, o.lazy)
-  const h = history!
+  const { st, history: h } = build(input, o.lazy)
   // 最终状态之外、只在历史上出现过的东西并进来（快照按生卒挑）
   const all = { ...st } as Settlement
   const past = new Map<string, object[]>()
@@ -134,7 +133,7 @@ export function generateHistory(input: SettlementParams, o: { lazy?: boolean } =
   return { st: all, life: h.life, until: st.params.population }
 }
 
-function build(input: SettlementParams, lazy = false): { st: Settlement; history?: HistoryState } {
+function build(input: SettlementParams, lazy = false): { st: Settlement; history: HistoryState } {
   const t0 = performance.now()
   const { p, cfg, households, extent: own } = scaled(input)
   // 画幅至少是 minExtent（成长动画各帧用同一个画幅，城在原地长大）
@@ -172,6 +171,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     wardDensity: 'mid',
     wardType: 'common',
     tier: 'standard',
+    history: { life: new Map(), past: [], sources: [], countPop: countPopper(p, p.walls !== 'none'), lazy },
     gridAngle: 0,
     // 要素环境与数量要等知道是否设防后才能定（见下方），这里先占位
     env: featureEnv(p),
@@ -200,7 +200,6 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     },
   }
   ctx.Rin = Math.sqrt((cfg.inner * 0.87 * cfg.patch * cfg.patch) / Math.PI)
-  ctx.history = { life: new Map(), past: [], sources: [], countPop: countPopper(p, p.walls !== 'none'), lazy }
   ctx.center = pickCenter(ctx)
   const arterials = routeArterials(ctx)
 
@@ -227,15 +226,13 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   // 地标建筑（酒馆、传送门……）插进填好的街坊
   placeLandmarks(ctx)
   // 城外的磨坊、风车、刑场、砖窑、灯塔（成长史里从一开始就有）
-  const hm = ctx.history ? outMark(ctx) : null
+  const hm = outMark(ctx)
   ruralExtras(ctx)
   magicExtras(ctx)
   // 名所：千本鸟居、海上鸟居、奥宫、神桥、山寺、山上的修道院、岩上的城……（按地形挑地方，见 sacred.ts）
   sacredSites(ctx)
-  if (hm) {
-    stamp(ctx, hm, 0)
-    clearFieldsUnder(ctx, ctx.out.buildings.slice(hm.lens.get('buildings')))
-  }
+  stamp(ctx, hm, 0)
+  clearFieldsUnder(ctx, ctx.out.buildings.slice(hm.lens.get('buildings')))
   // 聚落名等桥、渡口定下再取：有桥才叫"某某桥"
   const cross = ctx.out.crossings
   const crossing = cross.some((c) => c.kind === 'bridge') ? 'bridge' : cross.some((c) => c.kind === 'ferry') ? 'ferry' : cross.length ? 'ford' : null
@@ -244,20 +241,12 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   const riverName = T.river ? namer.river() : null
   const seaName = T.coast ? namer.sea() : null
   labels(ctx, riverName, seaName)
-  if (ctx.history) {
-    stampLabels(ctx)
-    joinRoadEnds(ctx)
-    clearRoadTrees(ctx)
-  }
+  stampLabels(ctx)
+  joinRoadEnds(ctx)
+  clearRoadTrees(ctx)
   // 各户的营生按全城的职业构成校准（只改混住片区里的户，见 people.ts）
   calibrateTrades(ctx.out.buildings, p)
 
-  const inner = ctx.out.wards.filter((w) => w.inner)
-  const innerArea = inner.reduce((s, w) => s + area(w.poly), 0)
-  const dwellings = ctx.out.buildings.filter((b) => b.kind === 'house' || b.kind === 'large')
-  const houses = dwellings.length
-  const units = dwellings.reduce((s, b) => s + (b.units ?? 1), 0)
-  const people = ctx.out.buildings.reduce((s, b) => s + residentsOf(b, p.culture), 0)
   const st: Settlement = {
     params: p,
     name: p.name || town.en,
@@ -270,14 +259,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     river: T.river && riverName ? { ...T.river, name: riverName } : null,
     sea: T.coast && seaName ? { name: seaName, p: seaPoint(ctx) } : null,
     ...ctx.out,
-    stats: {
-      buildings: ctx.out.buildings.filter((b) => b.kind !== 'shed').length,
-      houses,
-      households: units,
-      population: Math.round(people / 10) * 10,
-      area: innerArea / 10000,
-      ms: performance.now() - t0,
-    },
+    stats: { ...statsOf(ctx.out.buildings, ctx.out.wards, p.culture), ms: performance.now() - t0 },
   }
   return { st, history: ctx.history }
 }
@@ -286,7 +268,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
  * 成长史：城外一开始就有的房子（磨坊、山寺……在片区之后才放）底下，后来开垦的田不铺（田整块不要）
  */
 function clearFieldsUnder(ctx: Ctx, buildings: Building[]) {
-  const h = ctx.history!
+  const h = ctx.history
   const solid = buildings.map((b) => piece('buildings', b))
   for (const f of [...ctx.out.fields, ...h.past.filter((x) => x.key === 'fields').map((x) => x.item as Field)]) {
     const fp = piece('fields', f)
@@ -302,7 +284,7 @@ function clearFieldsUnder(ctx: Ctx, buildings: Building[]) {
  * 林子会压在后来的路上；田画在路下面，不用管
  */
 function clearRoadTrees(ctx: Ctx) {
-  const h = ctx.history!
+  const h = ctx.history
   const G = 16
   const trees = [...ctx.out.trees, ...h.past.filter((x) => x.key === 'trees').map((x) => x.item as Tree)]
   const grid = new Map<string, Tree[]>()
@@ -337,7 +319,7 @@ function clearRoadTrees(ctx: Ctx) {
  * 图题、河、海、山一直都在
  */
 function stampLabels(ctx: Ctx) {
-  const h = ctx.history!
+  const h = ctx.history
   const bornOf = (x: object | undefined) => (x ? (h.life.get(x)?.born ?? 0) : 0)
   for (const l of ctx.out.labels) {
     if (h.life.has(l)) continue
@@ -446,7 +428,7 @@ function routeArterials(ctx: Ctx): P[][] {
   ctx.gridAngle = hit.gridAngle
   const roads = hit.roads.map((l) => l.map((q) => [q[0], q[1]] as P))
   // 成长史：第 k 条干道在干道条数长到 k + 1 时开通
-  if (ctx.history) roads.forEach((line, j) => ctx.history!.sources.push({ line, born: roadOpenPop(p, hit!.slots[j]) }))
+  roads.forEach((line, j) => ctx.history.sources.push({ line, born: roadOpenPop(p, hit!.slots[j]) }))
   return roads
 }
 
@@ -709,13 +691,11 @@ function linkSubcenters(ctx: Ctx, arterials: P[][]): P[][] {
     const line = straighten(smoothRoute(raw, 4, ctx.T), ctx.p.regularity)
     out.push(line)
     // 成长史：两个副中心都出现了才修
-    if (ctx.history) {
-      const birth = (q: P) => {
-        const k = ctx.cores.findIndex((c) => c.c === q)
-        return k > 0 ? subBirth(ctx.p, k - 1, ctx.cores.length - 1) : 0
-      }
-      ctx.history.sources.push({ line, born: Math.max(birth(a), birth(b)) })
+    const birth = (q: P) => {
+      const k = ctx.cores.findIndex((c) => c.c === q)
+      return k > 0 ? subBirth(ctx.p, k - 1, ctx.cores.length - 1) : 0
     }
+    ctx.history.sources.push({ line, born: Math.max(birth(a), birth(b)) })
   }
   return out
 }
@@ -1392,9 +1372,9 @@ function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStag
   const moatFor = (st: WallStage) => st.kind === 'stone' && (ctx.plan?.def.moat ?? (CULTURE_INFO[ctx.p.culture].moat || ctx.p.function === 'fortress' || hashAt(ctx, ctx.center, 'wall.moat') < 0.65))
   if (planned) {
     const st = stages[stages.length - 1]
-    const m = ctx.history ? outMark(ctx) : null
+    const m = outMark(ctx)
     ctx.cityWalls.push(wallFromLoop(ctx, planned, st.kind, arterials, { barbicans: ctx.counts.barbican, moat: moatFor(st) }))
-    if (m) stamp(ctx, m, st.pop)
+    stamp(ctx, m, st.pop)
   }
   // 城区没怎么长（地形逼仄）：和下一道几乎重合的旧墙不画
   const drawn = (k: number) => k === stages.length - 1 || size(sets[k]) < size(sets[k + 1]) * 0.85
@@ -1415,11 +1395,11 @@ function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStag
     const built = stages[from].pop
     const next = stages[k + 1]?.pop ?? Infinity
     for (const loop of loopsBy[k]) {
-      const m = ctx.history ? outMark(ctx) : null
-      if (!keep && ctx.history) {
+      const m = outMark(ctx)
+      if (!keep) {
         // 拆掉以前它是一道完整的城墙：另修一道只记在历史里（走廊留着：老墙原址后来是环城路与空地，不盖房子）
         wallFromLoop(ctx, loop, st.kind, arterials, { moat: moatFor(st) })
-        for (const [key, n] of m!.lens) {
+        for (const [key, n] of m.lens) {
           const a = ctx.out[key] as object[]
           for (const item of a.splice(n)) {
             ctx.history.life.set(item, { born: built, died: next })
@@ -1437,7 +1417,7 @@ function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStag
           for (const piece of splitBy(line, (q, i) => dry[i] && within(q))) ctx.out.roads.push({ line: piece, width: stone ? ctx.cfg.main : ctx.cfg.lane + 1, kind: stone ? 'main' : 'street', name: stone ? ctx.namer.street('main') : undefined })
         }
         if (stone && age <= 2) wallRemnant(ctx, loop, age === 1 ? 0.3 : 0.12, k, within)
-        if (m) stamp(ctx, m, next)
+        stamp(ctx, m, next)
         continue
       }
       const barbicans = last ? ctx.counts.barbican : 0
@@ -1453,7 +1433,7 @@ function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStag
         // 保留下来的内城墙：跑到新墙外面（或贴着新墙）的那段修新墙时已拆掉
         ctx.cityWalls.push(wallFromLoop(ctx, loop, st.kind, arterials, { barbicans, moat, keep: last ? undefined : within }))
       }
-      if (m) stamp(ctx, m, built)
+      stamp(ctx, m, built)
     }
   })
   // 墙变形后墙内新圈进来的陆上片区算城内（方城的四角不留空）；墙外已经长出来的关厢仍是城区
@@ -1901,35 +1881,12 @@ function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Pol
 }
 
 /**
- * 成长史：路网定下以后给路定生卒（城墙那里修的环城路、城门街已经定过）：
- * - 城外的大路：它那条干道开通时；
- * - 城内的主街：沿路的地并进城区时（最早的那处）才是主街，在那之前这段是干道开通时就有的大路；
- * - 街巷：沿路的地大多并进城区时（取中位数）。
- * 沿路的地按最近的片区站点算（Voronoi：落在谁的片区里就离谁的站点最近，片区边上的巷子取两边早的那块）
- */
-/**
  * 路的端头差几米没接上别的路（布路时各自让开了房子、街坊的边、路口）：顺着来的方向延长到最近那条路的中心线上。
  * 只接 JOIN_GAP 米以内、不往回拐的；延长的一段压到房子、水面或城墙就不接。
  * 布完片区（按时间切段之前）接一遍，之后加的路（城门街……）在最后再接一遍
  */
 const JOIN_GAP = 8
 function joinRoadEnds(ctx: Ctx) {
-  const roads = ctx.out.roads.filter((r) => r.kind !== 'stair' && r.line.length > 1)
-  const G = 30
-  const grid = new Map<string, [Road, number][]>()
-  roads.forEach((r) => {
-    for (let i = 1; i < r.line.length; i++) {
-      const a = r.line[i - 1]
-      const b = r.line[i]
-      for (let y = Math.floor((Math.min(a[1], b[1]) - JOIN_GAP - 6) / G); y <= Math.floor((Math.max(a[1], b[1]) + JOIN_GAP + 6) / G); y++)
-        for (let x = Math.floor((Math.min(a[0], b[0]) - JOIN_GAP - 6) / G); x <= Math.floor((Math.max(a[0], b[0]) + JOIN_GAP + 6) / G); x++) {
-          const k = `${x},${y}`
-          let l = grid.get(k)
-          if (!l) grid.set(k, (l = []))
-          l.push([r, i])
-        }
-    }
-  })
   const clear = (a: P, b: P) => {
     const n = Math.ceil(dist(a, b))
     for (let k = 1; k <= n; k++) {
@@ -1938,28 +1895,15 @@ function joinRoadEnds(ctx: Ctx) {
     }
     return true
   }
-  for (const r of roads)
+  for (const r of ctx.out.roads) {
+    if (r.kind === 'stair' || r.line.length < 2) continue
     for (const head of [true, false]) {
       const e = head ? r.line[0] : r.line[r.line.length - 1]
       const prev = head ? r.line[1] : r.line[r.line.length - 2]
-      let touch = false
-      let best: P | null = null
-      let bd = JOIN_GAP
-      for (const [o, i] of grid.get(`${Math.floor(e[0] / G)},${Math.floor(e[1] / G)}`) ?? []) {
-        if (o === r) continue
-        const a = o.line[i - 1]
-        const b = o.line[i]
-        const { d, t } = segDist(e, a, b)
-        if (d < o.width / 2 + 0.3) {
-          touch = true
-          break
-        }
-        if (d - o.width / 2 < bd) {
-          bd = d - o.width / 2
-          best = lerpP(a, b, t)
-        }
-      }
-      if (touch || !best) continue
+      // 最近的别的路：净距不到 0.3 米就是接上了
+      const hit = nearestRoad(ctx, e, JOIN_GAP, (o) => o !== r && o.kind !== 'stair')
+      if (!hit || hit.gap < 0.3) continue
+      const best = hit.p
       // 不往回拐：延长的方向与路来的方向夹角不到 120°（再大就拐出一个钩）
       const ux = e[0] - prev[0]
       const uy = e[1] - prev[1]
@@ -1970,10 +1914,18 @@ function joinRoadEnds(ctx: Ctx) {
       if (head) r.line.unshift(best)
       else r.line.push(best)
     }
+  }
 }
 
+/**
+ * 成长史：路网定下以后给路定生卒（城墙那里修的环城路、城门街已经定过）：
+ * - 城外的大路：它那条干道开通时；
+ * - 城内的主街：沿路的地并进城区时（最早的那处）才是主街，在那之前这段是干道开通时就有的大路；
+ * - 街巷：沿路的地大多并进城区时（取中位数）。
+ * 沿路的地按最近的片区站点算（Voronoi：落在谁的片区里就离谁的站点最近，片区边上的巷子取两边早的那块）
+ */
 function stampRoads(ctx: Ctx, patches: Patch[], openAt: (i: number) => number) {
-  const h = ctx.history!
+  const h = ctx.history
   const G = 60
   const grid = new Map<string, number[]>()
   patches.forEach((pa, i) => {
@@ -2134,7 +2086,7 @@ const JOIN_SPREAD = 0.5
  */
 function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]): Map<number, number> {
   const { p } = ctx
-  const h = ctx.history!
+  const h = ctx.history
   const P = p.population
   const grid: number[] = []
   for (let t = 30; t < P; t *= 1.08) grid.push(t)
@@ -2831,9 +2783,9 @@ function avenueTrees(ctx: Ctx) {
   const mains = ctx.out.roads.filter((r) => r.kind === 'main' && r.width >= 6)
   for (const r of mains) {
     // 成长史：随路出生
-    const m = ctx.history ? outMark(ctx) : null
+    const m = outMark(ctx)
     plantAvenue(ctx, r, mains)
-    if (m) stamp(ctx, m, ctx.history!.life.get(r)?.born ?? 0)
+    stamp(ctx, m, ctx.history.life.get(r)?.born ?? 0)
   }
 }
 

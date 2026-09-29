@@ -25,6 +25,7 @@ import { chord, clipConvex,
   type Poly,
 } from './geom'
 import { householdsOf, institutionOf } from './people'
+import { dwelling } from './undo'
 import type { Building, BuildingKind, Ward } from './types'
 
 /** 地块细分参数 */
@@ -245,8 +246,6 @@ function occupied(ctx: Ctx, poly: Poly) {
   return hashAt(ctx, [ox + Math.floor((c[0] - ox) / g) * g, oy + Math.floor((c[1] - oy) / g) * g], 'ward.occupied')
 }
 
-/** 住户（计入人口）的建筑 */
-const dwelling = (kind: BuildingKind) => kind === 'house' || kind === 'large'
 
 /**
  * 民居的层数与住户数，按所在片区的密度档（位置哈希定，同一栋房子在任何规模下一样高）：
