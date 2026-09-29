@@ -1,7 +1,7 @@
 import { eastAsian } from './culture'
 import { Biome } from '../gen/types'
 import { clamp } from '../gen/util'
-import { centerDist, clipWater, gridFrame, hashAt, inCity, mark, nearestCore, placeable, type Core, type Ctx } from './ctx'
+import { centerDist, clipWater, gridFrame, hashAt, inCity, mark, placeable, rngAt, type Core, type Ctx } from './ctx'
 import { chaikin, centroid, dist, insetConvex, obb, pointAt, pointInPoly, polylineDist, polylineLength, rect, resample, segDist, splitConvex, voronoiNb, type P, type Poly } from './geom'
 import type { Density, Field, WardType } from './types'
 import { addBuilding, scatterTrees, subdivide } from './wards'
@@ -21,12 +21,16 @@ export interface Patch {
   type?: WardType
   /** 建筑密度档（城区片区，见 scale.ts 的 densityOf） */
   density?: Density
+  /** 密度得分（见 scale.ts 的 densityScore）：住户数随它连续变化 */
+  score?: number
   /** 规划区里的片区（站点是形制给的，见 plans/） */
   planned?: boolean
   /** 都城宫城的一部分：主片区的下标（宫殿按几块合起来的地盘一次盖好，见 generate.ts 的 palaceBlock） */
   palace?: number
   /** 合成的大地标（见 zoning.ts 的 Lot.grand） */
   grand?: boolean
+  /** 定下功能时的人口（见 zoning.ts 的 Lot.foundPop） */
+  foundPop?: number
 }
 
 /**
@@ -48,8 +52,23 @@ function polarRing(k: number, s: number) {
   return { rr, n: Math.max(6, Math.round((Math.PI * 2 * rr) / s)) }
 }
 
+/** 离 q 最近的剖分核心（含还没出现的副中心，见 Ctx.layoutCores；副中心按其权重放大距离） */
+function layoutCore(ctx: Ctx, q: P): Core {
+  const cores = ctx.layoutCores ?? ctx.cores
+  let core = cores[0]
+  let d = dist(q, core.c)
+  for (const c of cores.slice(1)) {
+    const dc = dist(q, c.c) * c.k
+    if (dc < d) {
+      d = dc
+      core = c
+    }
+  }
+  return core
+}
+
 /** 只留离这个核心最近的街段：相邻两片城区的街网在交界处各管各的，不会叠成两套 */
-const ownedBy = (ctx: Ctx, core: Core) => (q: P) => nearestCore(ctx, q).core === core
+const ownedBy = (ctx: Ctx, core: Core) => (q: P) => layoutCore(ctx, q) === core
 
 /**
  * 方格直街：以核心为原点、沿核心的方格方向，街线落在格点之间（正好是方格片区的边界），
@@ -176,6 +195,8 @@ function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extr
   }
   // 形制给的规划站点（固定，紧跟在核心之后；规划区里不再另外布点）
   for (const q of extra) addSite(q)
+  // 还没出现的副中心也先占一个站点（排在最后，不影响前面的编号）：出现时它那一片的剖分不变
+  for (const c of (ctx.layoutCores ?? ctx.cores).slice(ctx.cores.length)) addSite(c.c)
   const ok = (q: P, s: number) => {
     if (exclude?.(q)) return false
     if (q[0] < -pad || q[1] < -pad || q[0] > MW + pad || q[1] > MH + pad) return false
@@ -242,9 +263,9 @@ function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extr
   const r = ctx.p.regularity
   const g = ctx.p.radial
   // 每个投点按离它最近的核心的方格 / 环形格点吸附：各片城区的街坊对齐各自的核心
-  const frames = new Map(ctx.cores.map((c) => [c, gridFrame(c)]))
+  const frames = new Map((ctx.layoutCores ?? ctx.cores).map((c) => [c, gridFrame(c)]))
   const snap = (q: P, s: number): P => {
-    const core = nearestCore(ctx, q).core
+    const core = layoutCore(ctx, q)
     const grid = frames.get(core) ?? gridFrame(core)
     const center = core.c
     // 方格点
@@ -293,11 +314,11 @@ export function buildPatches(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boo
   const sites = makeSites(ctx, arterials, exclude, extra)
   const pad = sitePad(ctx)
   const bounds: [number, number, number, number] = [-pad, -pad, MW + pad, MH + pad]
-  const { cells, nb } = voronoiNb(sites, bounds)
+  const { cells, nb } = voronoiCached(sites, bounds)
   // 不做 Lloyd 松弛：按优先级、保持间距的布点已经足够均匀；松弛会把画面边界附近的差别一圈圈传到城心，
   // 聚落就不能连续长大了（每个片区的形状只该取决于它的直接邻居）
   const patches: Patch[] = sites.map((s, i) => {
-    const poly = cells[i]
+    const poly = canonical(cells[i], s)
     // 陆地占比：顶点、边中点与质心采样
     const samples: P[] = [...poly, centroid(poly)]
     for (let k = 0; k < poly.length; k++) {
@@ -312,6 +333,48 @@ export function buildPatches(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boo
   // 邻接：Voronoi 裁剪时顺手记下的
   patches.forEach((pa, i) => (pa.nb = nb[i]))
   return patches
+}
+
+/**
+ * 片区顶点从固定的一个开始（从站点看方位角最小的那个）：Voronoi 裁剪从哪个顶点起头随画面范围变，
+ * 而片区里按边取的随机数（各边让出的路面宽……）是按顶点顺序取的，起头一变整块街坊就重排了。
+ */
+function canonical(poly: Poly, site: P): Poly {
+  let k = 0
+  let best = Infinity
+  poly.forEach((v, i) => {
+    const a = Math.atan2(v[1] - site[1], v[0] - site[0])
+    if (a < best) {
+      best = a
+      k = i
+    }
+  })
+  return k ? [...poly.slice(k), ...poly.slice(0, k)] : poly
+}
+
+/**
+ * 片区剖分（Voronoi）按站点记下最近几次的结果：成长动画、拖人口时站点几乎不变，剖分是生成里最慢的一步之一。
+ * 取出的是副本（片区的多边形会被后面的步骤引用、改写）
+ */
+const voronoiMemo = new Map<string, { cells: Poly[]; nb: number[][] }>()
+function voronoiCached(sites: P[], bounds: [number, number, number, number]) {
+  let h = 2166136261
+  const f = new Float64Array(sites.length * 2 + 4)
+  sites.forEach((q, i) => {
+    f[i * 2] = q[0]
+    f[i * 2 + 1] = q[1]
+  })
+  f.set(bounds, sites.length * 2)
+  const u = new Uint32Array(f.buffer)
+  for (let k = 0; k < u.length; k++) h = Math.imul(h ^ u[k], 16777619)
+  const key = `${sites.length}#${(h >>> 0).toString(36)}`
+  let hit = voronoiMemo.get(key)
+  if (!hit) {
+    hit = voronoiNb(sites, bounds)
+    if (voronoiMemo.size >= 4) voronoiMemo.delete(voronoiMemo.keys().next().value!)
+    voronoiMemo.set(key, hit)
+  }
+  return { cells: hit.cells.map((c) => c.map((q) => [q[0], q[1]] as P)), nb: hit.nb.map((n) => [...n]) }
 }
 
 /** 公共边（两个片区都有的两个顶点） */
@@ -376,10 +439,10 @@ export interface FarmGroup {
  * g：这块地属于并成一片的农田（见 generate.ts 的 farmGroups），用地、色调、条带与同片的其他块连成一气。
  */
 export function farm(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>, g?: FarmGroup) {
-  const { rng, p, T } = ctx
+  const { T } = ctx
   const c0 = g?.c ?? centroid(block)
-  // 同片共用的随机量（按片的中心取哈希）；单独一块时照旧用片区的随机数流
-  const shared = (tag: string) => (g ? hashAt(ctx, g.c, `farm.${tag}`) : rng.next())
+  // 同片共用的随机量（按片的中心取哈希）；单独一块时按这块地的中心
+  const shared = (tag: string) => hashAt(ctx, c0, `farm.${tag}`)
   const uni = g && shared('uniform') < 0.6
   const onSeam = (a: P, b: P) => !!g?.seams.some(([s0, s1]) => segDist([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], s0, s1).d < 1.5)
   const slope0 = T.slopeAt(c0)
@@ -396,8 +459,10 @@ export function farm(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>, 
   const walled = ctx.cityWalls.length > 0 && inCity(ctx, c0)
   const parcels = walled
     ? subdivide(ctx, block, { maxA: 2400, minA: 400, alley: 2, alleyP: 0.6, depth: 0, fill: 1, irr: 0.7 })
-    : subdivide(ctx, block, { maxA: p.size === 'city' ? 16000 : 9000, minA: 1500, alley: 3, alleyP: 0.5, depth: 0, fill: 1, irr: 0.9 })
+    : subdivide(ctx, block, { maxA: fieldSize(ctx, c0), minA: 1500, alley: 3, alleyP: 0.5, depth: 0, fill: 1, irr: 0.9 })
   for (const { poly } of parcels) {
+    // 每块地自己的随机数流（按位置）：前面的地盖没盖农舍、种了几棵树，不会让后面的地换庄稼
+    const rng = rngAt(ctx, centroid(poly), 'farm.parcel')
     // 六成的片整片一种用地（一片牧场、一片麦田），其余每块地各自挑
     const r = uni ? shared('crop') : rng.next()
     const slope = T.slopeAt(centroid(poly))
@@ -458,6 +523,15 @@ export function farm(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>, 
       if ((kind === 'pasture' || kind === 'meadow') && rng.next() < 0.5) scatterTrees(ctx, q, kind === 'meadow' ? 0.0008 : 0.0004, 3, 5)
     }
   }
+}
+
+/**
+ * 一块田最大多大（平方米）：离城心越远越大（城边是小块的菜园、果园，远处是大片的条田与牧场），
+ * 按离城心的距离而不按城市的规模，城市长大时已有的田块不跟着重新划分
+ */
+function fieldSize(ctx: Ctx, q: P) {
+  const t = Math.min(1, Math.max(0, (centerDist(ctx, q) - 400) / 1000))
+  return 9000 + 7000 * t
 }
 
 /**
@@ -545,7 +619,8 @@ export function wild(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>) 
   const { rng, T } = ctx
   if (veg.trees <= 0.02) return
   const c = centroid(block)
-  const cluster = 0.5 + 0.5 * Math.sin(c[0] * 0.011 + ctx.p.seed.length) * Math.cos(c[1] * 0.013)
+  // 林木成片：按离地图中心（世界原点）的坐标取，地图大小变了，林子还在原地
+  const cluster = 0.5 + 0.5 * Math.sin((c[0] - ctx.MW / 2) * 0.011 + ctx.p.seed.length) * Math.cos((c[1] - ctx.MH / 2) * 0.013)
   const slope = T.slopeAt(c)
   const dens = veg.trees * (0.0006 + 0.004 * cluster * cluster + slope * 0.01)
   const g = clipWater(ctx, insetConvex(block, 3), 3)

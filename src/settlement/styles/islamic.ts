@@ -1,5 +1,5 @@
 import type { CultureStyle } from '../culture'
-import { emitArea, centerDist, clearOf, cityDice, clipWater, hashAt, isFree, placeable, type Ctx } from '../ctx'
+import { emitArea, clearOf, cityDice, clipWater, hashAt, isFree, placeable, type Ctx } from '../ctx'
 import { allot, composer, type Elem, type Preset } from '../compose/core'
 import { add, area, axes, centroid, circlePoly, clipConvex, clipHalf, dist, inscribedRect, insetConvex, localBox, obb, pointInPoly, rect, type P, type Poly } from '../geom'
 import {
@@ -17,7 +17,7 @@ import {
   st,
   type Fabric,
 } from '../plans/medina'
-import { isVillage, townShare } from '../scale'
+import { isVillage } from '../scale'
 import type { BuildingKind, Ward } from '../types'
 import { addBuilding, addGroup, fit, inside, place, plantTree, scatterTrees, subdivide } from '../wards'
 import { addWall, connectGates } from '../walls'
@@ -88,11 +88,14 @@ function preset(ctx: Ctx, type: Ward['type']): Fabric {
 
 function dwell(ctx: Ctx, ward: Ward, block: Poly, small: boolean) {
   const n0 = ctx.out.buildings.length
+  // 零散的农家院（村子的外围；村 → 镇连续过渡，见 generate.ts 的 wardTown）
+  if (!ctx.wardTown) {
+    farmsteads(ctx, block)
+    return
+  }
+  // 村子里成了街坊的：挤在一起的内院住宅
   if (small) {
-    // 村子：村心的片区是挤在一起的内院住宅，外围是零散的农家院
-    const townlike = ctx.rng.next() < townShare(ctx.p.population, centerDist(ctx, centroid(block)) / Math.max(1, ctx.Rin))
-    if (townlike) fabric(ctx, block, VILLAGE)
-    else farmsteads(ctx, block)
+    fabric(ctx, block, VILLAGE)
     return
   }
   const s = st(ctx)

@@ -3,10 +3,11 @@ import { imperialPalace, royalPalace } from './palaces'
 import { eastCompound } from './compose/chinese'
 import { westChurch } from './compose/church'
 import { westCastle } from './compose/castle'
-import { emitArea, clearOf, clipWater, hashAt, isFree, mark, northOf, placeable, type CorridorTag, type Ctx } from './ctx'
+import { emitArea, clearOf, clipWater, hashAt, isFree, mark, northOf, placeable, rngAt, type CorridorTag, type Ctx } from './ctx'
 import { addRoad } from './roads'
 import { chord, clipConvex,
   area,
+  bboxOf,
   centroid,
   circlePoly,
   clipHalf,
@@ -266,21 +267,25 @@ function storeys(ctx: Ctx, poly: Poly, cap = Infinity): { floors: number; units:
   return { floors, units }
 }
 
-/** 记下一栋建筑：色调取一个随机数，屋脊顺着长轴（extra 可改屋脊、定层数与住户） */
+/**
+ * 记下一栋建筑：色调按位置取哈希，屋脊顺着长轴（extra 可改屋脊、定层数与住户）。
+ * 色调不从随机数流里取：盖不盖得上会随人口变，取了就会让同一片区后面的房子全部错位。
+ */
 function record(ctx: Ctx, poly: Poly, kind: BuildingKind, extra?: Partial<Building>) {
   const b = obb(poly)
-  ctx.out.buildings.push({ poly, kind, tone: ctx.rng.next(), ridge: Math.atan2(b.axis[1], b.axis[0]), ...extra })
+  ctx.out.buildings.push({ poly, kind, tone: hashAt(ctx, b.center, 'building.tone'), ridge: Math.atan2(b.axis[1], b.axis[0]), ...extra })
 }
 
 export function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house', pad = 0, floorCap = Infinity): boolean {
   // 民居预算用完：不再盖住户（人口已够目标）；占用率不到的宅地空着（按位置哈希，占用率升高只会多盖）
-  if (dwelling(kind) && !ctx.uncounted && (ctx.houseBudget <= 0 || occupied(ctx, poly) >= ctx.wardFill)) return false
+  if (dwelling(kind) && !ctx.uncounted && (ctx.houseBudget <= 0 || ctx.wardQuota <= 0 || occupied(ctx, poly) >= ctx.wardFill)) return false
   if (!isFree(ctx, poly, { pad })) return false
   let extra: Partial<Building> | undefined
   if (dwelling(kind) && ctx.uncounted) extra = { floors: 1, units: 0 }
   else if (dwelling(kind)) {
     extra = storeys(ctx, poly, floorCap)
     ctx.houseBudget -= extra.units!
+    ctx.wardQuota -= extra.units!
   }
   record(ctx, poly, kind, extra)
   ctx.occ.add(poly)
@@ -307,7 +312,10 @@ export function addGroup(ctx: Ctx, parts: [Poly, BuildingKind][], pad: number): 
     // 不算人口的（城外的村子、宫殿）：不占民居预算，住户记 0
     if (dwelling(kind) && ctx.uncounted) record(ctx, p, kind, { floors: 1, units: 0 })
     else {
-      if (dwelling(kind)) ctx.houseBudget--
+      if (dwelling(kind)) {
+        ctx.houseBudget--
+        ctx.wardQuota--
+      }
       record(ctx, p, kind)
     }
   }
@@ -396,11 +404,13 @@ function put(ctx: Ctx, b: Poly, kind: BuildingKind, floorCap?: number): boolean 
 export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = [], nearRoad = Infinity) {
   const tier = `${densKey}_${ctx.wardDensity}`
   const o = TIERED.has(densKey) && DENS[tier] ? DENS[tier] : DENS[densKey]
-  const rng = ctx.rng
+  const wardRng = ctx.rng
   const lots = subdivide(ctx, block, o)
   for (const lot of lots) {
     if (reserve.length && overlaps(lot.poly, reserve)) continue
     const c = centroid(lot.poly)
+    // 每块宅地用自己的随机数流（按位置）：别的宅地盖没盖上（占用率、预算随人口变）不会让这块跟着重排
+    const rng = (ctx.rng = rngAt(ctx, c, 'ward.lot'))
     // 郊区与村落：只沿路建房
     if (nearRoad < Infinity && ctx.corridors.gap(c) > nearRoad) {
       if (rng.next() < 0.18) scatterTrees(ctx, insetConvex(lot.poly, 2), 0.004, 2.5, 4.5)
@@ -446,6 +456,7 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
       if (r && area(r) > 16) put(ctx, area(r) > 140 ? shrink(r, Math.sqrt(140 / area(r))) : r, o.backKind ?? 'house', o.floors)
     }
   }
+  ctx.rng = wardRng
 }
 
 /** 村里空着的宅地：菜园（让开道路、水与已有的房子） */
@@ -585,26 +596,29 @@ function farmstead(ctx: Ctx, lot: Lot) {
   if (rng.next() < 0.6) scatterTrees(ctx, clipHalf(insetConvex(poly, 2), [hc[0] + n[0] * (dep / 2 + 3), hc[1] + n[1] * (dep / 2 + 3)], [-n[0], -n[1]]), 0.003, 2.2, 3.6)
 }
 
+/**
+ * 在区域里按密度（棵 / 平方米）撒树。树位钉在世界坐标的一张 6 米网格上：每格一个候选点，
+ * 位置、树冠大小与"门槛"都按格子的位置取哈希，格子的门槛低于这里的密度才种。
+ * 于是同一棵树在任何规模下都在同一个地方：片区的边界挪一点只增减边上的几棵，密度升高只多种、不挪动已有的。
+ */
 export function scatterTrees(ctx: Ctx, poly: Poly, density: number, r0: number, r1: number) {
-  if (poly.length < 3) return
-  const rng = ctx.rng
-  const n = Math.round(area(poly) * density * (0.6 + rng.next() * 0.8))
-  let x0 = Infinity
-  let y0 = Infinity
-  let x1 = -Infinity
-  let y1 = -Infinity
-  for (const p of poly) {
-    x0 = Math.min(x0, p[0])
-    y0 = Math.min(y0, p[1])
-    x1 = Math.max(x1, p[0])
-    y1 = Math.max(y1, p[1])
-  }
-  for (let k = 0, placed = 0; k < n * 4 && placed < n; k++) {
-    const p: P = [x0 + rng.next() * (x1 - x0), y0 + rng.next() * (y1 - y0)]
-    if (!pointInPoly(p, poly)) continue
-    if (plantTree(ctx, p, r0 + rng.next() * (r1 - r0))) placed++
-  }
+  if (poly.length < 3 || density <= 0) return
+  const s = TREE_CELL
+  const p0 = density * s * s
+  const ox = ctx.MW / 2
+  const oy = ctx.MH / 2
+  const [x0, y0, x1, y1] = bboxOf(poly)
+  for (let j = Math.floor((y0 - oy) / s); j <= Math.floor((y1 - oy) / s); j++)
+    for (let i = Math.floor((x0 - ox) / s); i <= Math.floor((x1 - ox) / s); i++) {
+      const cell: P = [ox + i * s, oy + j * s]
+      if (hashAt(ctx, cell, 'tree.gate') >= p0) continue
+      const p: P = [cell[0] + hashAt(ctx, cell, 'tree.x') * s, cell[1] + hashAt(ctx, cell, 'tree.y') * s]
+      if (!pointInPoly(p, poly)) continue
+      plantTree(ctx, p, r0 + hashAt(ctx, cell, 'tree.r') * (r1 - r0))
+    }
 }
+/** 撒树的网格（米）：最密的撒法（约 0.02 棵 / 平方米）每格也不到一棵 */
+const TREE_CELL = 6
 
 /** 种一棵树：离水、不上路、树冠不压房子；种上了返回 true */
 export function plantTree(ctx: Ctx, p: P, r: number) {

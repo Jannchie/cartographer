@@ -307,6 +307,11 @@ export interface Ctx {
   estate: boolean
   /** 城区核心：主中心与副中心（副都心），见 Core */
   cores: Core[]
+  /**
+   * 片区剖分用的核心：现有的核心，再加上城市长大后才出现的副中心（按它们出现时的位置）。
+   * 片区的站点、方格吸附、街网归属都按它：副中心出现时那一带的片区早已按它划好，不会整片重划
+   */
+  layoutCores?: Core[]
   /** 各片城区的城墙（卫星城各有一道；不含城堡幕墙与瓮城） */
   cityWalls: Wall[]
   /** 都城布局时预留的宫城矩形（见 generate.ts 的 palaceZone） */
@@ -315,6 +320,15 @@ export interface Ctx {
   houseBudget: number
   /** 当前片区的占用率（0 ~ 1）：每块宅地按位置哈希决定盖不盖（见 generate.ts 的 occupancy） */
   wardFill: number
+  /**
+   * 当前片区还能住多少户（按片区的容量 × 占用率分下来的名额）：各片区只盖自己名额里的，
+   * 某块片区翻建得更密，也不会把别的片区的房子挤掉（民居预算是全城的上限，名额是各片区自己的）
+   */
+  wardQuota: number
+  /** 当前片区是街坊（true）还是零散的农家：村 → 镇连续过渡，各片区按位置哈希与街坊占比定（见 generate.ts 的 wardTown） */
+  wardTown: boolean
+  /** 当前片区定下功能时的人口（地标按它定规模；没有记录的按现在的人口） */
+  wardPop?: number
   /** 当前片区的密度档（决定地块大小、层数与形态，见 scale.ts 的 densityOf） */
   wardDensity: Density
   /** 正在盖的地标的规模档（见 Tier）：教堂、神社、园林、城堡的盖法据此收放元素池与尺度 */

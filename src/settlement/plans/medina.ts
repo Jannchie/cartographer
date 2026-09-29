@@ -30,6 +30,7 @@ import type { CityPlan } from './types'
 import { composer } from '../compose/core'
 import { MOSQUE_PRESETS, mosqueForm, mosqueParts, plainMosque, type MosqueForm } from '../compose/islamic'
 import { addWall, connectGates } from '../walls'
+import { planPopOf } from '../scale'
 
 /**
  * 麦地那（伊斯兰传统城市：非斯、突尼斯、大马士革老城，缩到地图的尺度）。规划不在方格，而在结构与街巷的层级：
@@ -277,7 +278,7 @@ export const medina: CityPlan = {
     const center = lots.find((l) => dist(l.site, z.c) < 1)
     if (center) center.type = 'temple'
     // 集市：大清真寺周围、沿主街的几块
-    const nSouq = Math.max(1, Math.min(6, Math.round((ctx.p.population * ctx.p.planStrength!) / 4500) + 1))
+    const nSouq = Math.max(1, Math.min(6, Math.round((planPopOf(ctx.p) * ctx.p.planStrength!) / 4500) + 1))
     free
       .filter((l) => l !== center && dist(l.site, z.c) < S * 1.9 && onMain(l.site, S * 0.7))
       .sort((a, b) => dist(a.site, z.c) - dist(b.site, z.c))
@@ -289,7 +290,7 @@ export const medina: CityPlan = {
     if (kl) kl.type = 'castle'
     // 墓地：城门外、主街旁的片区
     const gates: P[] = ctx.cityWalls.length ? ctx.cityWalls.flatMap((w) => w.gates.map((gt) => gt.p)) : mains.map((l) => l.find((q) => !pointInPoly(q, loop))).filter((q): q is P => !!q)
-    const nCem = Math.max(1, Math.min(gates.length, Math.round(ctx.p.population / 9000) + 1))
+    const nCem = Math.max(1, Math.min(gates.length, Math.round(planPopOf(ctx.p) / 9000) + 1))
     let placed = 0
     for (const gp of [...gates].sort((a, b) => hashAt(ctx, a, 'medina.gateOrder') - hashAt(ctx, b, 'medina.gateOrder'))) {
       if (placed >= nCem) break
@@ -329,7 +330,7 @@ export const medina: CityPlan = {
       return true
     }
     const n0 = ctx.out.buildings.length
-    quarter(ctx, ward, block, o, (ctx.p.population * ctx.p.planStrength!) / 4000)
+    quarter(ctx, ward, block, o, (planPopOf(ctx.p) * ctx.p.planStrength!) / 4000)
     if (!ctx.out.buildings.slice(n0).some((b) => b.kind === 'house' || b.kind === 'large')) orchard(ctx, block)
     return true
   },
@@ -354,7 +355,7 @@ export const FABRIC: Partial<Record<Ward['type'], Fabric>> = {
 export function quarter(ctx: Ctx, ward: Ward, block: Poly, o: Fabric, baths: number, reserve: Poly[] = []) {
   const s = st(ctx)
   const h = hashAt(ctx, centroid(ward.poly), 'medina.quarter')
-  if (ward.type === 'craft' && block.some((v) => ctx.T.waterAt(v) < 14) && s.tanneries < 1 + Math.floor(ctx.p.population / 20000)) {
+  if (ward.type === 'craft' && block.some((v) => ctx.T.waterAt(v) < 14) && s.tanneries < 1 + Math.floor(planPopOf(ctx.p) / 20000)) {
     const t = tannery(ctx, block)
     if (t) {
       reserve.push(t)

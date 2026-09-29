@@ -1,7 +1,6 @@
 import { clamp } from '../gen/util'
-import { eastAsian } from './culture'
 import { emitArea, hashAt, isFree, memo, type Ctx } from './ctx'
-import type { FeatureEnv, FeatureId, Site } from './features'
+import type { FeatureEnv, FeatureId } from './features'
 import { add, area, bboxOf, centroid, circlePoly, convexOverlap, dist, insetConvex, obb, pointInPoly, rect, type P, type Poly } from './geom'
 import { isVillage } from './scale'
 import type { Building, BuildingKind, Culture, Tier, Wall, Ward } from './types'
@@ -56,19 +55,6 @@ export function grandSize(ctx: Ctx, id: FeatureId): number {
   const pop = ctx.p.population
   if (id === 'park') return pop > 24000 ? 5 : pop > 9000 ? 4 : 3
   return pop > 20000 ? 4 : 3
-}
-
-/** 地形的偏好（加在合成面积上的倍数）：神社靠山脚与城边的林，城堡占高处，园囿临水，大教堂靠城心 */
-export function grandFit(ctx: Ctx, id: FeatureId, s: Site): number {
-  switch (id) {
-    case 'temple':
-      return ctx.p.culture === 'wa' ? s.high * 0.8 + (s.wall ? 0.5 : 0) : eastAsian(ctx.p.culture) ? s.high * 0.5 : Math.max(0, 0.6 - s.dc * 0.5)
-    case 'castle':
-      return s.high * 1.2 + (s.wall ? 0.3 : 0)
-    case 'park':
-      return (s.water ? 0.8 : 0) + s.dc * 0.2
-  }
-  return 0
 }
 
 // —————————————————————— small 与 micro ——————————————————————

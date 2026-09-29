@@ -92,6 +92,9 @@ export function scaleOf(pop: number): { size: SettlementSize; cfg: SizeCfg; exte
   }
 }
 
+/** 规划按多少人口定（见 SettlementParams.planPop） */
+export const planPopOf = (p: Pick<SettlementParams, 'population' | 'planPop'>) => Math.max(p.population, p.planPop ?? 0)
+
 /** 每户人数（见 culture.ts） */
 export const perHousehold = (culture: Culture) => CULTURE_INFO[culture].perHousehold
 
@@ -110,12 +113,14 @@ const HOUSING: Record<Culture, { farm: number; street: number; town: number; reg
 }
 export function housesPerHa(p: Pick<SettlementParams, 'population' | 'culture' | 'function' | 'regularity'>) {
   const h = HOUSING[p.culture]
-  if (isVillage(sizeOf(p.population))) {
-    const s = townShare(p.population, 2 / 3)
-    return h.farm * (1 - s) + h.street * 0.7 * s
-  }
-  return h.town * (1 - h.regular * p.regularity) * (p.function === 'fortress' ? 0.95 : p.function === 'trade' ? h.trade : 1)
+  const town = h.town * (1 - h.regular * p.regularity) * (p.function === 'fortress' ? 0.95 : p.function === 'trade' ? h.trade : 1)
+  // 农家与街坊按全村平均的街坊占比混合，街坊的密度随城镇化从村里的七成升到城镇：村 → 镇连续过渡，没有分界上的跳变
+  const s = townShare(p.population, 2 / 3)
+  return h.farm * (1 - s) + town * (0.7 + 0.3 * urbanT(p.population)) * s
 }
+
+/** 零散农家的片区每公顷住多少户（盖满时） */
+export const farmPerHa = (culture: Culture) => HOUSING[culture].farm
 
 /**
  * 片区盖满时每公顷（片区全面积）的住户数，按功能与密度档实测（scripts 里全部占用率为 1 时统计）。
@@ -169,20 +174,48 @@ export const fullPerHa = (culture: Culture, type: WardType, d: Density) => FULL[
  * 城市长大时老城的 age 变小，会从疏到中、从中到密一档档加密（翻建），但不会反过来。
  */
 export function densityOf(pop: number, age: number, road: number, noise: number): Density {
-  const s = (1 - Math.min(1.3, age)) * 0.85 + road * 0.3 + (noise - 0.5) * 0.55
+  return densityTier(pop, densityScore(age, road, noise))
+}
+/** 密度得分（见 densityOf）：越老、离大路越近越高 */
+export const densityScore = (age: number, road: number, noise: number) => (1 - Math.min(1.3, age)) * 0.85 + road * 0.3 + (noise - 0.5) * 0.55
+/**
+ * 得分到中档、密档的门槛。中档、密档随城镇化逐步放开：小村的街坊都是疏的，快成镇时村心才连成排，城市里才有密档
+ */
+function densityCuts(pop: number) {
   const big = clamp(Math.log(pop / 3000) / Math.log(4), 0, 1)
-  if (s > 1.1 - 0.5 * big) return 'high'
-  return s > 0.2 ? 'mid' : 'low'
+  const u = 1 - urbanT(pop)
+  return { mid: 0.2 + 1.5 * u, high: 1.1 - 0.5 * big + 1.5 * u }
+}
+export function densityTier(pop: number, s: number): Density {
+  const c = densityCuts(pop)
+  return s > c.high ? 'high' : s > c.mid ? 'mid' : 'low'
+}
+/** 刚升档的片区从上一档的住户数起、得分再高出这么多才住满这一档（翻建是一户户来的） */
+const DENSITY_RAMP = 0.3
+/**
+ * 街坊每公顷住多少户（盖满时）：按得分连续变化。升到中档、密档时地块按新的档切分，但住户从原来的档起、
+ * 随得分升高逐步住满——一块片区加密是一户户添的，不会一下子多出几倍的住户、把别的片区的人都吸过来。
+ * 贵族宅第、贫民窟的密度是固定的；市集至少按中档
+ */
+export function wardRate(culture: Culture, type: WardType, pop: number, s: number): number {
+  if (type === 'noble') return fullPerHa(culture, type, 'low')
+  if (type === 'slum') return fullPerHa(culture, type, 'high')
+  const c = densityCuts(pop)
+  const f = (d: Density) => fullPerHa(culture, type, d)
+  const ramp = (a: number) => clamp((s - a) / DENSITY_RAMP, 0, 1)
+  const r = f('low') + (f('mid') - f('low')) * ramp(c.mid) + (f('high') - f('mid')) * ramp(c.high)
+  return type === 'market' ? Math.max(r, f('mid')) : r
 }
 
 /**
- * 村落里盖成连排街坊（而非零散农家）的片区占比：小村为 0，快到城镇（1500 人）时村心大多是街坊。
- * dc 是离村心的距离（按城区半径归一），越靠村心占比越高；传 2/3 得到全村的平均。
+ * 盖成街坊（而非零散农家）的片区占比：小村为 0，到 1500 人时村心大多是街坊、村边约一半，
+ * 再往上连续升高，约 4000 人时全城都是街坊。dc 是离城心的距离（按城区半径归一），越靠城心占比越高；传 2/3 得到全城的平均。
+ * 村 → 镇没有分界：各片区按自己的位置哈希与这个占比比较，占比升高只会有更多片区变成街坊（见 generate.ts 的 wardTown）
  */
-export const townShare = (pop: number, dc: number) => clamp(villageT(pop) ** 2 * (1.5 - dc), 0, 1)
+export const townShare = (pop: number, dc: number) => clamp(urbanT(pop) ** 2 * (2 - dc), 0, 1)
 
-/** 村落大小的位置：150 人以下为 0，1500 人为 1（按对数） */
-export const villageT = (pop: number) => clamp(Math.log(pop / 150) / Math.log(1500 / 150), 0, 1)
+/** 城镇化的程度：150 人以下为 0，4000 人为 1（按对数） */
+export const urbanT = (pop: number) => clamp(Math.log(pop / 150) / Math.log(4000 / 150), 0, 1)
 
 /** 旧参数（只有档位）换算成人口 */
 export const POP_OF_SIZE: Record<SettlementSize, number> = { hamlet: 45, village: 300, town: 3800, city: 13000 }

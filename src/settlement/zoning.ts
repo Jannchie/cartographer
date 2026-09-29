@@ -1,8 +1,8 @@
 import { ROAD_CLEAR } from './roads'
 import { cityDice, hashAt, isFree, mark, type Ctx } from './ctx'
-import { grandChance, grandFit, grandSize } from './tiers'
+import { grandChance, grandSize } from './tiers'
 import { FEATURES, featureEnv, resolveCounts, type FeatureId, type Site } from './features'
-import { bboxOf, convexOverlap, dist, insetConvex, LineIndex, pointAt, pointInPoly, polylineLength, polylineDist, rect, type P, type Poly } from './geom'
+import { bboxOf, convexOverlap, dist, insetConvex, LineIndex, pointAt, pointInPoly, polylineLength, polylineDist, rect, resample, type P, type Poly } from './geom'
 import type { Building, SettlementParams, WardType } from './types'
 import { addBuilding, inside } from './wards'
 import { checkpoint, clearYards, demolish, removable, rollback } from './undo'
@@ -22,6 +22,8 @@ export interface Lot {
   palace?: number
   /** 合成的大地标（大社、朝圣大教堂、大园囿、同心城）：grand */
   grand?: boolean
+  /** 定下功能时的人口：地标按那时的规模盖，城市后来长大也不跟着放大、挪动 */
+  foundPop?: number
 }
 
 /**
@@ -34,6 +36,8 @@ export interface Lot {
 export function zoneLots(ctx: Ctx, lots: Lot[], center: number, households: (cum: number) => number) {
   const { p } = ctx
   const arterials = ctx.out.roads.filter((r) => r.kind === 'main' || r.kind === 'highway').map((r) => r.line)
+  // 干道（城内段与城外段合起来）不随人口变；城里后来开的街巷不算，否则同一段历史随现在修了哪些街而改写
+  const dense = arterials.map((l) => resample(l, 3))
   const h0 = ctx.T.heightAt(ctx.center)
   // 与时间无关的部分先算好
   const fixed = lots.map((l, i) => {
@@ -44,7 +48,7 @@ export function zoneLots(ctx: Ctx, lots: Lot[], center: number, households: (cum
       water: l.poly.some((v) => ctx.T.waterAt(v) < 4),
       sea: l.poly.some((v) => ctx.T.seaAt(v)),
       high: Math.min(1, Math.max(0, 0.5 + (ctx.T.heightAt(l.site) - h0) / 40)),
-      clear: !ctx.corridors.hitsPoly(core, 0, ['road']),
+      clear: !dense.some((l) => l.some((q) => pointInPoly(q, core))),
       nearCenter: center >= 0 && lots[center].nb.includes(i),
       road: Math.max(0, 1 - gap / (ctx.cfg.patch * 0.9)),
       area: Math.abs(l.poly.reduce((a, v, k) => a + v[0] * l.poly[(k + 1) % l.poly.length][1] - l.poly[(k + 1) % l.poly.length][0] * v[1], 0)) / 2,
@@ -68,9 +72,11 @@ export function zoneLots(ctx: Ctx, lots: Lot[], center: number, households: (cum
     areaJoined += fixed[order[k]].area
     // 同一时刻加入的（填洞）一起算
     if (k + 1 < order.length && lots[order[k + 1]].joinedAt === lots[order[k]].joinedAt) continue
-    // 墙里规划了、还没住上人的片区（加入时的人口超过现在）不放要素，留作民居
-    if (households(lots[order[k]].joinedAt) > p.population * 1.1) break
-    const pop = Math.min(p.population, households(lots[order[k]].joinedAt))
+    // 只在历史上真有的时刻（某块片区加入时）放要素，不在"现在"另加一步：
+    // 否则同一个要素在这一帧按现在的城区选址，城再长一点又按下一块片区加入时的城区重选，跳来跳去。
+    // 墙里规划了、还没住上人的片区（加入时的人口超过现在）也不放要素，留作民居
+    const pop = households(lots[order[k]].joinedAt)
+    if (pop > p.population) break
     const R = Math.max(1, Math.sqrt(areaJoined / Math.PI))
     const q: SettlementParams = { ...p, population: pop }
     const env = featureEnv(q, walled)
@@ -132,29 +138,22 @@ export function zoneLots(ctx: Ctx, lots: Lot[], center: number, households: (cum
           }
           if (group.length) best = group[0]
         } else if (nth === 0 && grandChance(ctx, def.id, env) > cityDice(ctx, 'zoning.grand').h(def.id)) {
-          // 大地标（大社、朝圣大教堂、大园囿、同心城）：同样由几块相邻片区合成，挑合得最大、地形最合适的一处
-          // （神社偏爱山脚、林边，城堡偏爱高处，园囿偏爱临水）。骰子只看种子：城长大时一旦成了大地标就一直是
-          const want = grandSize(ctx, def.id)
-          let ba = 0
-          for (const [, i] of scored.sort((a, b) => b[0] - a[0]).slice(0, 30)) {
-            const g = precinct(ctx, lots, fixed, i, want, true)
-            if (g.length < 2) continue
-            const a = g.reduce((s, j) => s + fixed[j].area, 0) * (1 + grandFit(ctx, def.id, site(i)))
-            if (a > ba) {
-              ba = a
-              group = g
-            }
-          }
+          // 大地标（大社、朝圣大教堂、大园囿、同心城）：同样由几块相邻片区合成。骰子只看种子：城长大时一旦成了大地标就一直是。
+          // 就在不合成时本该落的那块地上向四周并（不另挑别处）：城长大、跨过门槛升格时，地标原地扩大，不会跳到别的片区去
+          const g = precinct(ctx, lots, fixed, best, grandSize(ctx, def.id), true)
+          if (g.length >= 2) group = g
           if (group.length) {
             best = group[0]
             grand = true
           }
         }
         lots[best].type = def.id as WardType
+        lots[best].foundPop = pop
         put(def.id, lots[best].site)
         for (const j of group) {
           lots[j].type = def.id as WardType
           lots[j].palace = best
+          lots[j].foundPop = pop
           if (grand) lots[j].grand = true
         }
       }

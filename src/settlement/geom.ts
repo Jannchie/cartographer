@@ -328,7 +328,8 @@ export function obb(poly: Poly): { axis: P; len: number; wid: number; center: P 
       v1 = Math.max(v1, v)
     }
     const ar = (u1 - u0) * (v1 - v0)
-    if (ar < best.a) {
+    // 并列（矩形的对边给出同一个外接矩形）时留先到的：只差舍入误差的比较，结果会随坐标原点变
+    if (ar < best.a * (1 - 1e-9)) {
       const uc = (u0 + u1) / 2
       const vc = (v0 + v1) / 2
       const center: P = [uc * ux - vc * uy, uc * uy + vc * ux]

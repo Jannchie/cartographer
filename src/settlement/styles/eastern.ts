@@ -13,7 +13,7 @@ export const eastern: CultureStyle = {
     switch (ward.type) {
       case 'common':
         // 村里不成街坊的是零散农家
-        if (townlike(ctx, block)) eastWard(ctx, block, false)
+        if (townlike(ctx)) eastWard(ctx, block, false)
         else urban(ctx, block, 'village', [])
         return true
       case 'market':

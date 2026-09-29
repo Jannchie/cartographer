@@ -5,6 +5,7 @@ import { buke, castle, jiin, machiya, MASU } from './jokamachi-build'
 import { rectOutline, RESIDENTIAL as MACHI } from './common'
 import { checkpoint, drop, rollback } from '../undo'
 import type { CityPlan, PlanRoad, PlanZone } from './types'
+import { planPopOf, scaleOf } from '../scale'
 
 /**
  * 城下町（江户时代日本的形制，缩到地图的尺度）：
@@ -57,8 +58,8 @@ export interface Layout {
 const layoutOf = (ctx: Ctx, z: Pick<PlanZone, 'R'>) => memo(ctx, 'jokamachi', () => makeLayout(ctx, z))
 
 function makeLayout(ctx: Ctx, z: Pick<PlanZone, 'R'>): Layout {
-  const big = ctx.p.population >= 30000
-  const city = ctx.p.size === 'city'
+  const big = planPopOf(ctx.p) >= 30000
+  const city = scaleOf(planPopOf(ctx.p)).size === 'city'
   const C = big ? 160 : city ? 120 : 90
   // 方形规划区与同面积的圆：半宽 ≈ 0.886 R
   const H = z.R * 0.886

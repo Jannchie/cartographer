@@ -1,12 +1,12 @@
 import { addRoad, nearestRoad, through } from '../roads'
 import { clamp } from '../../gen/util'
 import type { CultureStyle } from '../culture'
-import { emitArea, centerDist, cityDice, clipWater, hashAt, isFree, memo, placeable, siteDice, whereOf, mark, type Ctx } from '../ctx'
+import { emitArea, cityDice, clipWater, hashAt, isFree, memo, placeable, siteDice, whereOf, mark, type Ctx } from '../ctx'
 import { composer, type Composer, type Elem, type Preset } from '../compose/core'
 import { area, at, box, centroid, dist, extent, insetConvex, obb, pointInPoly, rect, segDist, splitConvex, unit, type Frame, type P, type Poly } from '../geom'
 import { buke, jiin, machiya, put, rampart, tenshu } from '../plans/jokamachi-build'
 import { connectGates } from '../walls'
-import { isVillage, townShare } from '../scale'
+import { isVillage } from '../scale'
 import type { BuildingKind, Road, Ward } from '../types'
 import { addBuilding, addGroup, eastCompound, inside, place, plantTree, scatterTrees, urban } from '../wards'
 import { drop } from '../undo'
@@ -214,11 +214,10 @@ function clipLine(line: [P, P] | P[], poly: Poly): P[] | null {
 /** 町人地（民居、商人、工匠、贫民、市、城郊）：沿街的町家 */
 function machiWard(ctx: Ctx, ward: Ward, block: Poly) {
   const t = ward.type
+  // 零散的农家（村子的外围；村 → 镇连续过渡，见 generate.ts 的 wardTown）
+  if (t !== 'suburb' && !ctx.wardTown) return urban(ctx, block, 'village', [])
   if (small(ctx)) {
-    // 村子：村心附近是沿街的町家，其余是零散的农家（与通用填法同一套比例）
-    const townlike = t === 'suburb' || ctx.rng.next() < townShare(ctx.p.population, centerDist(ctx, centroid(block)) / Math.max(1, ctx.Rin))
-    // 沿街的一排是宿场町那样挨着的町家，屋后是小宅地；其余是零散的农家
-    if (!townlike) return urban(ctx, block, 'village', [])
+    // 村子里成了街坊的：沿街的一排是宿场町那样挨着的町家，屋后是小宅地
     machiya(ctx, block, null, 'common', { streetOnly: true, dens: 'mid' })
     urban(ctx, block, 'suburb')
     return

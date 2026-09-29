@@ -248,7 +248,8 @@ export function wineryAt(ctx: Ctx, at: P, axis: P): boolean {
  */
 export function amphitheater(ctx: Ctx, block: Poly): boolean {
   const b = obb(block)
-  const pop = ctx.p.population
+  // 按建成时的人口定大小：城市后来长大，竞技场还是原来那座
+  const pop = ctx.wardPop ?? ctx.p.population
   const want = Math.min(95, Math.max(22, 26 + 20 * Math.log2(Math.max(1, pop / 5000)))) * (0.85 + ctx.rng.next() * 0.3)
   const c = centroid(block)
   const ell = (a: number, e: number, n = 36): Poly =>

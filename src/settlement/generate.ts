@@ -3,7 +3,7 @@ import { contours, simplify } from '../render/atlas/svg/contour'
 import { dryArea, emitArea, Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, mainCore, squareness, seedRng, wardRng, type Core, mark, type Ctx } from './ctx'
 import { FEATURE, FEATURES, featureEnv, resolveCounts, type FeatureId } from './features'
 import { placeLandmarks, zoneLots, type Lot } from './zoning'
-import { PATCH, POP_OF_SIZE, densityOf, isVillage, fullPerHa, housesPerHa, perHousehold, scaleOf } from './scale'
+import { PATCH, POP_OF_SIZE, densityScore, densityTier, farmPerHa, wardRate, isVillage, fullPerHa, housesPerHa, perHousehold, planPopOf, scaleOf, townShare } from './scale'
 import {
   area,
   centroid,
@@ -41,12 +41,15 @@ import { PLANS } from './plans'
 import type { PlanLot, PlanZone } from './plans/types'
 import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
-import { buildTerrain, landPieces, levelTerrain, routeOnTerrain } from './terrain'
+import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 
-export function generateSettlement(input: SettlementParams): Settlement {
-  const t0 = performance.now()
+/**
+ * 规模与画幅：规模档位由人口推出，结构参数按人口连续插值；地图范围按要住下的人口铺开。
+ * 不必生成就能算出（成长动画先用它定下各帧共用的画幅）。
+ */
+function scaled(input: SettlementParams) {
   // 规模档位由人口推出；结构参数按人口连续插值
   const target = input.population ?? POP_OF_SIZE[input.size]
   const sc = scaleOf(target)
@@ -63,14 +66,17 @@ export function generateSettlement(input: SettlementParams): Settlement {
     walls: input.walls === 'auto' && !CULTURE_INFO[input.culture].autoWalls && input.function !== 'fortress' ? 'none' : input.walls,
   }
   const cfg = { ...sc.cfg }
+  // 干道、大路的路宽按规划的规模（成长动画里是最终的人口）：路一开始就按全城修好，
+  // 城市长大时不会一档档拓宽、把沿街的房子和地标切掉重盖
+  const planned0 = scaleOf(planPopOf(input)).cfg
+  cfg.main = Math.max(cfg.main, planned0.main)
+  cfg.highway = Math.max(cfg.highway, planned0.highway)
   // 商贸城：干道更宽、对外道路更多
   if (p.function === 'trade') {
     cfg.main *= 1.6
     cfg.highway *= 1.25
     cfg.roads = [cfg.roads[0] + 1, cfg.roads[1] + 1]
   }
-  // 随机数只由种子与文明定（不含规模档位）：同一个种子换人口，地形与骨架不变
-  const rng = new RNG(hashString(`${p.seed}|${p.culture}`))
   // 副中心离得远（卫星城）时地图放大，放得下隔着田野的几座城
   const env0 = featureEnv(p)
   const subN = env0.big ? resolveCounts(p, env0).subcenter : 0
@@ -85,6 +91,20 @@ export function generateSettlement(input: SettlementParams): Settlement {
   const grow = (subN ? 1 + 0.45 * p.spread * p.spread : 1) * room
   // 取整到 20 米：地形网格（5 米）与寻路网格（10 米）都对齐地图中心（世界原点）
   const extent: [number, number] = [Math.round((sc.extent[0] * grow) / 20) * 20, Math.round((sc.extent[1] * grow) / 20) * 20]
+  return { p, cfg, extent, households }
+}
+
+/** 这组参数生成的地图范围（米） */
+export const settlementExtent = (input: SettlementParams) => scaled(input).extent
+
+export function generateSettlement(input: SettlementParams): Settlement {
+  const t0 = performance.now()
+  const { p, cfg, households, extent: own } = scaled(input)
+  // 画幅至少是 minExtent（成长动画各帧用同一个画幅，城在原地长大）
+  const min = input.minExtent
+  const extent: [number, number] = min ? [Math.max(own[0], min[0]), Math.max(own[1], min[1])] : own
+  // 随机数只由种子与文明定（不含规模档位）：同一个种子换人口，地形与骨架不变
+  const rng = new RNG(hashString(`${p.seed}|${p.culture}`))
   // 地形用自己的随机数流（见 terrainKey）；这里照样分出一支，后面的随机数不变
   rng.fork()
   const T = buildTerrain(p, extent)
@@ -110,6 +130,8 @@ export function generateSettlement(input: SettlementParams): Settlement {
     // 民居预算：目标人口折成户数，盖满就不再盖（见 addBuilding）
     houseBudget: households,
     wardFill: 1,
+    wardQuota: Infinity,
+    wardTown: true,
     wardDensity: 'mid',
     tier: 'standard',
     gridAngle: 0,
@@ -149,7 +171,14 @@ export function generateSettlement(input: SettlementParams): Settlement {
   ctx.env = featureEnv(p, !!walled)
   ctx.counts = resolveCounts(p, ctx.env)
   // 副都心：沿干道离城心一段距离处另起中心，相邻的副中心之间修干道相连
-  ctx.cores = [mainCore(ctx), ...pickSubcenters(ctx, arterials, ctx.env.big ? ctx.counts.subcenter : 0)]
+  // 按时出现的副中心取自"城市一路长下去会有的"那一串（位置按各自出现时的城区大小定，与现在的人口无关），
+  // 还没出现的几个只参与片区剖分；手动要的比按人口该有的多时另排
+  const nSub = ctx.env.big ? ctx.counts.subcenter : 0
+  // 任何规模都先算好（村子也按它们划片区）：成镇的那一刻不会因为多了这几个站点而整片重划
+  const natural = pickSubcenters(ctx, arterials, Math.max(MAX_SUB, nSub), (k) => SUB_BIRTH * (k + 1))
+  const onTime = nSub <= Math.floor(p.population / SUB_BIRTH)
+  ctx.cores = [mainCore(ctx), ...(onTime ? natural.slice(0, nSub) : pickSubcenters(ctx, arterials, nSub))]
+  ctx.layoutCores = onTime ? [...ctx.cores, ...natural.slice(nSub)] : ctx.cores
   arterials.push(...linkSubcenters(ctx, arterials))
   // 城市形制：规划区（里坊、营寨城……）与干道在规划区里改走规划的大街
   ctx.plan = setupPlan(ctx)
@@ -239,8 +268,30 @@ function borderPoint(ctx: Ctx, a: number): P {
   return [c[0] + dx * t, c[1] + dy * t]
 }
 
-/** 由中心通往地图边缘的干道：沿地形寻路，后修的路尽量并入已有的路 */
+/**
+ * 干道只取决于地形、画幅、城心、条数与布局：成长动画、拖人口时逐帧生成，这些一般不变，
+ * 记下最近几次的结果直接取用（寻路是生成里最慢的几步之一）。取出的是副本，调用方可以随意改
+ */
+const arterialMemo = new Map<string, { roads: P[][]; gridAngle: number }>()
 function routeArterials(ctx: Ctx): P[][] {
+  const { p } = ctx
+  const key = JSON.stringify([
+    terrainKey(p), p.river, p.coast, p.hills, p.relief, p.coastDir, p.riverDir, p.hillDir,
+    p.regularity, p.radial, ctx.MW, ctx.MH, ctx.center, ctx.cfg.roads,
+  ])
+  let hit = arterialMemo.get(key)
+  if (!hit) {
+    const roads = routeArterialsRaw(ctx)
+    hit = { roads, gridAngle: ctx.gridAngle }
+    if (arterialMemo.size >= 8) arterialMemo.delete(arterialMemo.keys().next().value!)
+    arterialMemo.set(key, hit)
+  }
+  ctx.gridAngle = hit.gridAngle
+  return hit.roads.map((l) => l.map((q) => [q[0], q[1]] as P))
+}
+
+/** 由中心通往地图边缘的干道：沿地形寻路，后修的路尽量并入已有的路 */
+function routeArterialsRaw(ctx: Ctx): P[][] {
   const { T, cfg, MW, MH } = ctx
   // 干道方向是固定的 8 个槽位（由种子定），按"先对穿、再十字、再斜向"的顺序启用：
   // 聚落长大时已有的干道不变，只是多开几条
@@ -336,6 +387,8 @@ function straighten(line: P[], r: number): P[] {
 
 /** 第 k 个副中心大约在城市长到 SUB_BIRTH × k 人时出现（features.ts 里副中心的自动数量按同样的人口算） */
 const SUB_BIRTH = 16000
+/** 自动出现的副中心最多几个（features.ts 里 subcenter 的 auto 上限） */
+const MAX_SUB = 4
 
 /** 一代城墙：修建时的人口、规划能容纳的人口、（现在的）材质 */
 interface WallStage {
@@ -384,8 +437,17 @@ function innerFor(p: SettlementParams, pop: number) {
 /** 人口为 pop 时的城区半径估计 */
 const rinFor = (p: SettlementParams, pop: number) => Math.sqrt((innerFor(p, pop) * 0.87 * PATCH * PATCH) / Math.PI)
 
-/** 第 k 个副中心出现时的人口（与 growInner 里副中心开始生长的时刻一致） */
-const subBirth = (p: SettlementParams, k: number, n: number) => Math.min(SUB_BIRTH * (k + 1), (p.population * (k + 1)) / (n + 1))
+/**
+ * 第 k 个副中心出现时的人口（与 growInner 里副中心开始生长的时刻一致）：按 SUB_BIRTH 一个个出现，
+ * 与现在的人口无关（城市长大时早先的副中心不会提前或推迟出现）；手动要的比按人口该有的多时，
+ * 多出的几个在最后一个按时出现的之后、到现在之间均匀排开
+ */
+function subBirth(p: SettlementParams, k: number, n: number) {
+  const due = Math.min(n, Math.floor(p.population / SUB_BIRTH))
+  if (k < due) return SUB_BIRTH * (k + 1)
+  const base = SUB_BIRTH * due
+  return base + ((p.population - base) * (k - due + 1)) / (n - due + 1)
+}
 
 /**
  * 副中心选址，按"出生时"定：第 k 个副中心在城市长到 subBirth 人时出现，离城心多远、自己多大
@@ -394,13 +456,13 @@ const subBirth = (p: SettlementParams, k: number, n: number) => Math.min(SUB_BIR
  * 距离随 spread：0 时约 0.7 ~ 1.0 个城区半径（与主城粘连成一片），1 时 1.5 ~ 2 个（隔着田野的卫星城）。
  * 每个副中心的方格朝向取所在干道的走向，各片城区的街网于是各有方向。
  */
-function pickSubcenters(ctx: Ctx, arterials: P[][], n: number): Core[] {
+function pickSubcenters(ctx: Ctx, arterials: P[][], n: number, birth = (k: number) => subBirth(ctx.p, k, n)): Core[] {
   const { T, cfg, center: c, p } = ctx
   const fold = (a: number) => a - Math.round(a / (Math.PI / 2)) * (Math.PI / 2)
   const s = p.spread * p.spread
   const out: (Core & { a: number })[] = []
   for (let k = 0; k < n; k++) {
-    const Rb = rinFor(p, subBirth(p, k, n))
+    const Rb = rinFor(p, birth(k))
     const R = Rb * (0.55 - 0.1 * p.spread)
     const d0 = Rb * (0.7 + 0.8 * s)
     const d1 = Rb * (1.0 + 1.0 * s)
@@ -482,19 +544,28 @@ interface Growth {
   margin: number
   /** 各片区的"年龄"：加入时的名义累计容量 ÷ 现在的规划容量，0 是老城 */
   ages: Map<number, number>
+  /**
+   * 各片区加入城区时的人口：按与现在人口无关的名义密度（城镇的平均户数 / 公顷）累计生长顺序，
+   * 同一块地在任何规模下都算出同一个值。街巷宽、片区功能都按它回放城市的历史
+   */
+  joinPop: Map<number, number>
+  /** 各片区加入城区时的街巷宽（米）：老城的巷子窄、后来辟的街区宽，城市长大时已有的街坊不跟着拓宽 */
+  lanes: Map<number, number>
 }
 
 function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[][]): Growth {
   const { T, cfg } = ctx
   const typical = cfg.patch * cfg.patch * 0.87
   const dist = layoutDist(ctx, arterials)
+  // 已经出现的核心数：副中心出现之前，城区不朝它那边提前长（否则同一段早年的城区随现在有没有副中心而变）
+  let born = 1
   const cost = (i: number) => {
     const q = patches[i].site
     // 规划区是建城时的底子：先于有机的外城加入，片区再大也不算"稀疏"
-    if (patches[i].planned || patches[i].palace !== undefined) return dist(q) * 0.3 * (1 + T.slopeAt(q) * 5)
+    if (patches[i].planned || patches[i].palace !== undefined) return dist(q, born) * 0.3 * (1 + T.slopeAt(q) * 5)
     // 过大的片区（稀疏处的 Voronoi 单元）不适合作城区
     const big = Math.max(1, area(patches[i].poly) / typical)
-    return dist(q) * (1 + T.slopeAt(q) * 5) * (0.85 + hashAt(ctx, q, 'grow.cost') * 0.3) * big
+    return dist(q, born) * (1 + T.slopeAt(q) * 5) * (0.85 + hashAt(ctx, q, 'grow.cost') * 0.3) * big
   }
   // 主中心与各副中心是种子（它们是前 1 + k 个片区）
   const seeds = ctx.cores.map((_, i) => i)
@@ -510,31 +581,27 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
   }
   // 按容量生长：累计"陆地面积 × 每公顷户数"，够住下目标户数（留一点余量）就停；
   // 片区数只作上限（地形逼仄时不无限长下去）
-  const perHa = housesPerHa(ctx.p)
   // 城区长到住得下现在的人口；有城墙时长到城墙规划的容量（墙内先是稀疏的）
-  // 余量：小城镇片区少、占用率的软边缘占比大，要多留；大城市留一点就够（余量多了外围会长出一大圈空着的疏档片区）
-  const margin = !ctx.env.big ? 1.35 : ctx.p.population < 8000 ? 1.3 : 1.06
+  const model = capacityModel(ctx, patches, arterials, ctx.p.population)
+  const margin = model.margin
   // 撒祠、村社要拆的几户也留出地方（见 tiers.ts 的 tierReserve）
   const need = Math.max(ctx.houseBudget, plannedPop / perHousehold(ctx.p.culture)) * margin * tierReserve(ctx.p.culture)
-  // 密度档在片区加入时就定了（看那时城区多大、离干道多近），容量按档计
-  // 城镇按民居片区盖满的实测容量，扣掉约四分之一不住人的片区（广场、寺庙、公园……）；村落按平均
-  const townlike = ctx.p.size === 'town' || ctx.p.size === 'city'
-  // 特殊片区（广场、市集、寺庙、墓地、城堡……）各占一整块、几乎不住人：先算作没有容量。小城镇里它们占的比例很大
-  let special = townlike ? ctx.cores.length + FEATURES.filter((f) => f.form === 'ward' && !LIVED.has(f.id)).reduce((s, f) => s + (ctx.counts[f.id] ?? 0), 0) : 0
-  // 片区的"年龄"按名义容量（特殊片区也当作一块中档民居）累计，0 是老城、1 是现在城区的边缘
-  const perPatch = townlike ? (typical * fullPerHa(ctx.p.culture, 'common', 'mid') * RESIDENTIAL) / 10000 : 0
-  const hh = Math.max(1, (ctx.p.population / perHousehold(ctx.p.culture)) * margin + special * perPatch)
-  let nominal = 0
   const ages = new Map<number, number>()
+  // 历史上各时刻（与现在的人口无关的一串固定人口）要的城区也都要圈进来：城市变密以后同样的人住得下更少的地，
+  // 但已经辟成城区的地不会退回田野——城区是历代城区的并集，只扩不缩
+  const history: { model: ReturnType<typeof capacityModel>; need: number; cap: number }[] = []
+  for (let x = HISTORY_FROM; x < ctx.p.population; x *= HISTORY_STEP) {
+    const m = capacityModel(ctx, patches, arterials, x)
+    history.push({ model: m, need: (x / perHousehold(ctx.p.culture)) * m.margin * tierReserve(ctx.p.culture), cap: 0 })
+  }
   const capacity = (i: number) => {
-    ages.set(i, nominal / hh)
-    const d = (patches[i].density ??= densityAt(ctx, patches[i].site, nominal / hh, arterials))
-    const c = (area(patches[i].poly) * patches[i].land * (townlike ? fullPerHa(ctx.p.culture, 'common', d) * RESIDENTIAL : perHa)) / 10000
-    nominal += c
-    if (special > 0) {
-      special--
-      return 0
+    const { c, age, d, s } = model.add(i)
+    ages.set(i, age)
+    if (patches[i].density === undefined) {
+      patches[i].density = d
+      patches[i].score = s
     }
+    for (const h of history) h.cap += h.model.add(i).c
     return c
   }
   let cap = 0
@@ -555,10 +622,13 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
   let n = 1
   for (;;) {
     while (births.length && cap >= births[0].at) {
+      born++
+      // 新核心出现：前沿上的片区按新的远近重排
+      for (const e of front) e[0] = cost(e[1])
       seed(births.shift()!.i)
       n++
     }
-    if (!(cap < need && n < cfg.inner * (ctx.env.big ? 4 : 8) && front.length)) break
+    if (!((cap < need || history.some((h) => h.cap < h.need)) && n < cfg.inner * (ctx.env.big ? 4 : 8) && front.length)) break
     front.sort((a, b) => a[0] - b[0])
     const [, j] = front.shift()!
     patches[j].inner = true
@@ -571,8 +641,89 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
   for (const b of births) seed(b.i)
   // 填洞：四周全是城区的片区也并进来
   for (const pa of patches) if (!pa.inner && pa.land >= 0.5 && pa.nb.length && pa.nb.every((j) => patches[j].inner)) pa.inner = true
-  return { order, cum, margin, ages }
+  const joinPop = new Map<number, number>()
+  const lanes = new Map<number, number>()
+  const perHaRef = housesPerHa({ ...ctx.p, population: POP_OF_SIZE.town })
+  let acc = 0
+  for (const i of order) {
+    joinPop.set(i, (acc * perHousehold(ctx.p.culture)) / 1.3)
+    acc += (area(patches[i].poly) * patches[i].land * perHaRef) / 10000
+  }
+  // 四周都加入以后就成了洞、被并进城区：加入的时刻取"轮到它"与"成了洞"里早的那个
+  //（否则城小时它是按邻居算的洞，城长大、生长顺序轮到它时又按自己排在后面算，前后对不上）
+  patches.forEach((pa, i) => {
+    if (pa.land < 0.5 || !pa.nb.length || !pa.nb.every((j) => joinPop.has(j))) return
+    const hole = Math.max(...pa.nb.map((j) => joinPop.get(j)!))
+    if (hole < (joinPop.get(i) ?? Infinity)) joinPop.set(i, hole)
+  })
+  for (const [i, at] of joinPop) lanes.set(i, Math.min(cfg.lane, scaleOf(at).cfg.lane))
+  return { order, cum, margin, ages, joinPop, lanes }
 }
+
+/**
+ * 城区生长的余量：小城镇片区少、占用率的软边缘占比大，要多留；大城市留一点就够（余量多了外围会长出一大圈空着的疏档片区）。
+ * 在 6000 ~ 16000 人之间按对数人口连续收窄：一刀切的话，跨过分界时要的城区突然变小，外围的片区整片消失
+ */
+function growMargin(pop: number) {
+  const t = (a: number, b: number) => Math.min(1, Math.max(0, Math.log(pop / a) / Math.log(b / a)))
+  return 1.35 - 0.05 * t(1500, 6000) - 0.24 * t(6000, 16000)
+}
+
+/**
+ * 人口为 pop 时各片区能住的户数，按生长顺序依次对片区调用 add：
+ * - 密度档看那时的城区多大、片区多老（年龄 = 加入时的名义累计容量 ÷ 那时的规划容量，0 是老城）、离干道多近；
+ * - 城镇按民居片区盖满的实测容量，村落按平均；
+ * - 特殊片区（广场、市集、寺庙、墓地、城堡……）各占一整块、几乎不住人：最早加入的那几块算作没有容量。
+ * 现在的城区用现在的人口；历代城墙用修墙时的人口——同一道墙圈住的片区才不随城市后来长大而变。
+ */
+function capacityModel(ctx: Ctx, patches: Patch[], arterials: P[][], pop: number) {
+  const { p, cfg } = ctx
+  const now = pop === p.population
+  const at: SettlementParams = now ? p : { ...p, population: pop }
+  const margin = growMargin(pop)
+  // 那时的城区半径：各片区是街坊还是农家按它定（与盖房时同一个判定，见 wardTown）
+  const Rin = rinFor(p, pop)
+  const counts = now ? ctx.counts : resolveCounts(at, featureEnv(at, wallStages(at).length > 0))
+  // 那时已经出现的核心（主中心与副中心）
+  const cores = 1 + ctx.cores.slice(1).filter((_, k) => subBirth(p, k, ctx.cores.length - 1) <= pop).length
+  let special = cores + FEATURES.filter((f) => f.form === 'ward' && !LIVED.has(f.id)).reduce((s, f) => s + (counts[f.id] ?? 0), 0)
+  // 名义容量把特殊片区也当作一块中档民居
+  const perPatch = (cfg.patch * cfg.patch * 0.87 * fullPerHa(p.culture, 'common', 'mid') * RESIDENTIAL) / 10000
+  const hh = Math.max(1, (pop / perHousehold(p.culture)) * margin + special * perPatch)
+  let nominal = 0
+  return {
+    margin,
+    add(i: number): { c: number; age: number; d: Density; s: number } {
+      const age = nominal / hh
+      const { d, s } = densityAt(ctx, patches[i].site, age, arterials, pop)
+      // 街坊按民居片区盖满的实测容量，农家按零散农家的
+      const t = wardTown(ctx, patches[i].site, pop, Rin)
+      const c = (area(patches[i].poly) * patches[i].land * mixRate(farmPerHa(p.culture), wardRate(p.culture, 'common', pop, s) * RESIDENTIAL, t)) / 10000
+      nominal += c
+      if (special > 0) {
+        special--
+        return { c: 0, age, d, s }
+      }
+      return { c, age, d, s }
+    },
+  }
+}
+
+/**
+ * 这块城区片区在人口为 pop 时成了几分街坊（0 是零散的农家，>0 按街坊切地块）：片区的位置哈希低于这里的街坊占比
+ * （见 scale.ts 的 townShare）就开始成街坊，占比再高出 TOWN_RAMP 时住满。占比随人口只升不降，一块地一旦成了街坊就一直是，
+ * 住户从农家的几户一点点添到街坊的户数；村 → 镇 → 城没有分界上的整体改盖
+ */
+function wardTown(ctx: Ctx, q: P, pop: number, Rin: number) {
+  return Math.min(1, Math.max(0, (townShare(pop, centerDist(ctx, q) / Math.max(1, Rin)) - hashAt(ctx, q, 'ward.town')) / TOWN_RAMP))
+}
+const TOWN_RAMP = 0.25
+/** 片区每公顷住多少户：农家与街坊按成街坊的程度 t 混合（t 为 0 是农家） */
+const mixRate = (farm: number, town: number, t: number) => (t > 0 ? farm + (town - farm) * t : farm)
+
+/** 城区历史的取样：从 HISTORY_FROM 人起每长 HISTORY_STEP 倍取一个时刻（固定的一串人口，各规模下取的是同一批） */
+const HISTORY_FROM = 60
+const HISTORY_STEP = 1.4
 
 /** 住人片区（民居、商人、工匠……）的容量折扣：街角的水井、小广场、零星空地 */
 const RESIDENTIAL = 0.95
@@ -580,10 +731,18 @@ const RESIDENTIAL = 0.95
 const LIVED = new Set<FeatureId>(['merchant', 'craft', 'slum'])
 
 /** 片区的密度档：年龄、离对外干道多近、平滑噪声（见 scale.ts 的 densityOf） */
-function densityAt(ctx: Ctx, q: P, age: number, arterials: P[][]): Density {
-  let gap = Infinity
-  for (const r of arterials) gap = Math.min(gap, polylineDist(q, r))
-  return densityOf(ctx.p.population, age, Math.exp(-gap / (ctx.cfg.patch * 0.8)), smoothNoise(ctx, q, 240, 'density'))
+function densityAt(ctx: Ctx, q: P, age: number, arterials: P[][], pop = ctx.p.population): { d: Density; s: number } {
+  // 离干道多近与位置噪声只看位置：记下来，按历代人口重估密度时不必重算
+  const key = `density:${q[0]},${q[1]}`
+  let f = ctx.memo.get(key) as [number, number] | undefined
+  if (!f) {
+    let gap = Infinity
+    for (const r of arterials) gap = Math.min(gap, polylineDist(q, r))
+    f = [Math.exp(-gap / (ctx.cfg.patch * 0.8)), smoothNoise(ctx, q, 240, 'density')]
+    ctx.memo.set(key, f)
+  }
+  const s = densityScore(age, f[0], f[1])
+  return { d: densityTier(pop, s), s }
 }
 
 /**
@@ -596,7 +755,11 @@ function settleDensity(ctx: Ctx, patches: Patch[], g: Growth, arterials: P[][]) 
       pa.density = 'low'
       return
     }
-    pa.density ??= densityAt(ctx, pa.site, Math.max(0, ...pa.nb.map((j) => g.ages.get(j) ?? 0)), arterials)
+    if (pa.density === undefined) {
+      const { d, s } = densityAt(ctx, pa.site, Math.max(0, ...pa.nb.map((j) => g.ages.get(j) ?? 0)), arterials)
+      pa.density = d
+      pa.score = s
+    }
     if (pa.type === 'noble') pa.density = 'low'
     else if (pa.type === 'slum') pa.density = 'high'
     else if (pa.type === 'market' && pa.density === 'low') pa.density = 'mid'
@@ -610,15 +773,18 @@ function settleDensity(ctx: Ctx, patches: Patch[], g: Growth, arterials: P[][]) 
 function layoutDist(ctx: Ctx, arterials: P[][]) {
   const sq = squareness(ctx.p)
   const frames = ctx.cores.map((c) => ({ f: gridFrame(c), k: c.k }))
-  // 沿对外干道长：离干道越近越"近"，城区沿大路伸出触角（大城的轮廓是星形而不是圆）
-  const pull = ctx.env.big ? 0.5 : 0.25
+  // 沿对外干道长：离干道越近越"近"，城区沿大路伸出触角（大城的轮廓是星形而不是圆，村子是沿路的街村）。
+  // 与规模无关：生长的先后在村 → 镇的分界上不重排
+  const pull = 0.5
   const reach = ctx.cfg.patch * 2.2
-  // 大片的起伏（城越大越明显）：轮廓有凸有凹，不是一个圆
-  const wob = ctx.env.big ? 0.35 + 0.35 * Math.min(1, Math.log2(Math.max(1, ctx.p.population / 8000)) / 3) : 0.25
+  // 大片的起伏（越往外越明显，大城的外围起伏大）：轮廓有凸有凹，不是一个圆。
+  // 按距离而不按人口放大：同一块地的远近在任何规模下都一样，城区生长的先后才不随现在的人口重排
+  const r8 = rinFor(ctx.p, 8000)
+  const wobAt = (d: number) => 0.35 + 0.35 * Math.min(1, Math.max(0, Math.log2(Math.max(1, d / r8)) / 1.5))
   const shape = ctx.plan ? planShape(ctx.plan.z) : null
-  return (q: P) => {
+  return (q: P, cores = frames.length) => {
     let d = Infinity
-    frames.forEach(({ f, k }, i) => {
+    frames.slice(0, cores).forEach(({ f, k }, i) => {
       // 有规划区时主城心按规划区的形状量远近（轮廓上处处等远）：城区顺着规划区由内往外住满，外城也随之展开
       if (i === 0 && shape) {
         d = Math.min(d, shape(q) * k)
@@ -630,7 +796,7 @@ function layoutDist(ctx: Ctx, arterials: P[][]) {
     })
     let gap = Infinity
     for (const r of arterials) gap = Math.min(gap, polylineDist(q, r))
-    return d * (1 - pull * Math.exp(-gap / reach)) * (1 + (smoothNoise(ctx, q, 260, 'layout.shape') - 0.5) * wob)
+    return d * (1 - pull * Math.exp(-gap / reach)) * (1 + (smoothNoise(ctx, q, 260, 'layout.shape') - 0.5) * wobAt(d))
   }
 }
 
@@ -685,11 +851,14 @@ function smoothNoise(ctx: Ctx, q: P, scale: number, tag: string) {
  * - 城门外的城郊（关厢）：城墙里住得越满越多，越靠近城门越密；没有城墙时和城内一样按距离渐变；
  * - 特殊片区、田间照常盖。
  */
-function occupancy(ctx: Ctx, patches: Patch[], stages: WallStage[]): { fill: number[]; d: number[] } {
+function occupancy(ctx: Ctx, patches: Patch[], stages: WallStage[], growth: Growth): { fill: number[]; quota: number[]; d: number[] } {
   const perHa = housesPerHa(ctx.p)
-  // 城内片区按功能与密度档的实测容量；城郊按平均
-  const townlike = ctx.p.size === 'town' || ctx.p.size === 'city'
-  const cap = (pa: Patch) => (area(pa.poly) * pa.land * (townlike && pa.inner && pa.type ? fullPerHa(ctx.p.culture, pa.type, pa.density ?? 'mid') : perHa)) / 10000
+  // 城内的街坊按功能与密度档的实测容量，零散农家按农家的；城郊按平均
+  const Rin = rinFor(ctx.p, ctx.p.population)
+  const cap = (pa: Patch) => {
+    const rate = !pa.inner || !pa.type ? perHa : mixRate(farmPerHa(ctx.p.culture), wardRate(ctx.p.culture, pa.type, ctx.p.population, pa.score ?? 0), wardTown(ctx, pa.site, ctx.p.population, Rin))
+    return (area(pa.poly) * pa.land * rate) / 10000
+  }
   const PLAIN = new Set<WardType | undefined>(['common', 'merchant', 'craft', 'slum', 'noble'])
   const W = ctx.cfg.patch * 1.5
   // 按布局的距离（方格布局下等距线是方的），再叠一层平滑噪声和逐块扰动：外围有进有出，不是完美的同心渐变
@@ -705,44 +874,65 @@ function occupancy(ctx: Ctx, patches: Patch[], stages: WallStage[]): { fill: num
   const outgrown = !last || ctx.p.population > last.cap * 1.5 || !gates.length
   const subFill = (pa: Patch) => faubourg * Math.exp(-Math.min(...gates.map((g) => dist(g, pa.site))) / 220)
   const byDist = (i: number, r: number) => 1 - sm01(r - W, r + W, d[i])
+  // 城内按片区加入城区时的人口（与现在的人口无关，见 Growth.joinPop）：早加入的住满，最近加入的住得稀，
+  // 软过渡落在最新的一圈上。城市长大时每块片区的占用率只升不降——已有的房子不会挪到别的片区去
+  // 城墙圈进来、生长还没轮到的空地算作还没加入（空着），轮到时再按它自己的加入时刻住人
+  const jp = patches.map((_, i) => growth.joinPop.get(i) ?? Infinity)
+  const byJoin = (i: number, s: number) => 1 - sm01(s * 0.7, s * 1.3, jp[i])
+  // 城郊（城市长出城墙以后）按距离：以已经住上人的城区的外沿为界
+  const inner = patches.map((_, i) => i).filter((i) => patches[i].inner && PLAIN.has(patches[i].type))
+  const edge = (s: number) => {
+    const ds = inner.filter((i) => jp[i] <= s).map((i) => d[i]).sort((a, b) => a - b)
+    return ds.length ? ds[Math.floor((ds.length - 1) * 0.9)] : 0
+  }
   // 估算按盖满的实测值，部分占用的片区实际盖得少一些：目标留足余量（盖房由内往外，预算用完截掉的是最外围）
   // 撒祠、村社、堂区教堂要拆掉几户（见 tiers.ts），多留出这一点
   const target = ctx.houseBudget * 1.2 * tierReserve(ctx.p.culture)
-  const expect = (r: number) => {
+  const expect = (s: number) => {
+    const r = edge(s)
     let sum = 0
     patches.forEach((pa, i) => {
-      if (pa.inner && PLAIN.has(pa.type)) sum += cap(pa) * byDist(i, r)
+      if (pa.inner && PLAIN.has(pa.type)) sum += cap(pa) * byJoin(i, s)
       else if (pa.type === 'suburb') sum += cap(pa) * 0.6 * (outgrown ? byDist(i, r) : subFill(pa))
     })
     return sum
   }
   let lo = 0
-  let hi = Math.max(...d) + W * 2
+  let hi = Math.max(1, ...jp.filter(Number.isFinite)) * 2
   for (let it = 0; it < 30; it++) {
     const mid = (lo + hi) / 2
     if (expect(mid) < target) lo = mid
     else hi = mid
   }
-  const r = hi
+  const s = hi
+  const r = edge(s)
   const fill = patches.map((pa, i) => {
-    if (pa.inner && PLAIN.has(pa.type)) return byDist(i, r)
+    if (pa.inner && PLAIN.has(pa.type)) return byJoin(i, s)
     if (pa.type === 'suburb') return outgrown ? byDist(i, r) : subFill(pa)
     return 1
   })
-  return { fill, d }
+  // 各片区的名额：估算里它该住的户数（容量 × 占用率，合起来正好是上面的目标）；别的片区不限，由全城的预算管
+  const quota = patches.map((pa, i) => ((pa.inner && PLAIN.has(pa.type)) || pa.type === 'suburb' ? Math.max(1, Math.round(cap(pa) * fill[i] * (pa.type === 'suburb' ? 0.6 : 1) * QUOTA_SLACK)) : Infinity))
+  return { fill, quota, d }
 }
+/** 名额的余量：盖不满名额的片区（地块被路、水切掉）空出来的户数，让别的片区多盖一点补上，全城才凑得够人口 */
+const QUOTA_SLACK = 1.5
 const sm01 = (a: number, b: number, x: number) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
   return t * t * (3 - 2 * t)
 }
 
 /** 人口为 pop 时的城区（生长顺序的前缀，再填上四周都是城区的洞） */
-function innerAt(ctx: Ctx, patches: Patch[], g: Growth, pop: number): boolean[] {
-  const need = (pop / perHousehold(ctx.p.culture)) * g.margin
+function innerAt(ctx: Ctx, patches: Patch[], g: Growth, pop: number, arterials: P[][]): boolean[] {
+  // 容量按那时的人口算（密度、特殊片区都是那时的）：现在的城市更密，但当年的城区还是那么大
+  const model = capacityModel(ctx, patches, arterials, pop)
+  const need = (pop / perHousehold(ctx.p.culture)) * model.margin
   const set = patches.map(() => false)
+  let cap = 0
   for (let k = 0; k < g.order.length; k++) {
     set[g.order[k]] = true
-    if (g.cum[k] >= need) break
+    cap += model.add(g.order[k]).c
+    if (cap >= need) break
   }
   patches.forEach((pa, i) => {
     if (!set[i] && pa.land >= 0.5 && pa.nb.length && pa.nb.every((j) => set[j])) set[i] = true
@@ -848,7 +1038,7 @@ function wallRemnant(ctx: Ctx, loop: P[], keep: number, stage: number, within: (
 }
 
 /** 把一组片区栅格化、减去海面，追踪外轮廓，简化后向规整形状变形；只要里面有核心的轮廓（每片城区一道） */
-function wallLoops(ctx: Ctx, patches: Patch[], set: boolean[]): P[][] {
+function wallLoops(ctx: Ctx, patches: Patch[], set: boolean[], pop: number): P[][] {
   const { MW, MH, T } = ctx
   // 只用来估大致外形（城墙最后贴着片区边界走），8 米一格足够
   const rc = 8
@@ -884,7 +1074,8 @@ function wallLoops(ctx: Ctx, patches: Patch[], set: boolean[]): P[][] {
     const target = morphWall(ctx, smoothLoop(simp), inside[0], inside.length > 1)
     // 城墙贴着街走：取中心落在目标外廓里的片区，它们合起来的外边界（片区之间的公共边就是街）作为城墙
     const along = patchOutline(patches, target, inside.map((c) => c.c))
-    loops.push(cleanLoop(along ?? target, ctx.p.size === 'city' ? 14 : 10))
+    // 墙段的长短按修墙时的规模（不按现在的）：同一道墙在城市长大以后还是原来的样子
+    loops.push(cleanLoop(along ?? target, scaleOf(pop).size === 'city' ? 14 : 10))
   }
   return loops
 }
@@ -997,7 +1188,7 @@ function smoothLoop(loop: P[]): P[] {
  * - 更早的拆掉，原址是一圈环城大道；紧挨着的那一代留几段残墙，再早的只剩路（木栅被取代后直接成路）。
  */
 function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStage[], arterials: P[][]) {
-  const sets = stages.map((st) => innerAt(ctx, patches, growth, st.cap))
+  const sets = stages.map((st) => innerAt(ctx, patches, growth, st.cap, arterials))
   const size = (set: boolean[]) => set.filter(Boolean).length
   // 形制自带的城墙（里坊的方形外郭……）：按规划一次筑成，只有这一道
   const planned = stages.length ? ctx.plan?.def.wall?.(ctx, ctx.plan.z) : null
@@ -1011,7 +1202,7 @@ function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStag
   }
   // 城区没怎么长（地形逼仄）：和下一道几乎重合的旧墙不画
   const drawn = (k: number) => k === stages.length - 1 || size(sets[k]) < size(sets[k + 1]) * 0.85
-  const loopsBy = planned ? [] : stages.map((_, k) => (drawn(k) ? wallLoops(ctx, patches, sets[k]) : []))
+  const loopsBy = planned ? [] : stages.map((st, k) => (drawn(k) ? wallLoops(ctx, patches, sets[k], st.pop) : []))
   // 旧墙（内城墙、残墙与环城路）只留在新墙里面的部分：跑到新墙外面、或贴着新墙的那段，修新墙时已经拆掉或并进了新墙
   const outerLoops = (loopsBy[stages.length - 1] ?? []).map((L) => [...L, L[0]])
   const within = (q: P) => outerLoops.some((L) => pointInPoly(q, L) && polylineDist(q, L) > 15)
@@ -1069,7 +1260,7 @@ function setupPlan(ctx: Ctx): Ctx['plan'] {
   const def = PLANS[id]
   if (!def) return undefined
   const s = ctx.p.planStrength!
-  const R = rinFor(ctx.p, Math.max(1500, ctx.p.population * s)) * (def.scale ?? 1)
+  const R = rinFor(ctx.p, Math.max(1500, planPopOf(ctx.p) * s)) * (def.scale ?? 1)
   const angle = def.angle?.(ctx) ?? ctx.cores[0].angle
   ctx.cores[0].angle = angle
   ctx.gridAngle = angle - Math.round(angle / (Math.PI / 2)) * (Math.PI / 2)
@@ -1084,6 +1275,7 @@ function setupPlan(ctx: Ctx): Ctx['plan'] {
   }
   // 落进规划区的副中心会打乱规划的街坊：规划区里只有一个中心
   ctx.cores = ctx.cores.filter((c, i) => i === 0 || !contains(c.c))
+  ctx.layoutCores = ctx.layoutCores?.filter((c, i) => i === 0 || !contains(c.c))
   return { def, z: { ...base, poly, contains } }
 }
 
@@ -1215,9 +1407,9 @@ function assignWards(ctx: Ctx, patches: Patch[], growth: Growth) {
   // 城内片区交给通用选址（城心是第 0 个候选）
   const idx = patches.map((_, i) => i).filter((i) => patches[i].inner)
   const pos = new Map(idx.map((i, k) => [i, k]))
-  // 生长历史：每块地加入时的累计户数（填洞、城墙圈进来的，按它相邻片区里最晚加入的算）
-  const joinedAt = new Map(growth.order.map((i, k) => [i, growth.cum[k]]))
-  const when = (i: number) => joinedAt.get(i) ?? Math.max(0, ...patches[i].nb.map((j) => joinedAt.get(j) ?? 0))
+  // 生长历史：每块地加入城区时的人口（洞按四周都加入的时刻，见 Growth.joinPop）；
+  // 城墙圈进来、生长还没轮到的空地算作还没加入，不放要素
+  const when = (i: number) => growth.joinPop.get(i) ?? Infinity
   const lots: Lot[] = idx.map((i) => ({
     poly: patches[i].poly,
     site: patches[i].site,
@@ -1227,11 +1419,12 @@ function assignWards(ctx: Ctx, patches: Patch[], growth: Growth) {
     type: patches[i].type,
   }))
   // 累计户数 → 那时的人口
-  zoneLots(ctx, lots, pos.get(0) ?? -1, (cum) => (cum / growth.margin) * perHousehold(ctx.p.culture))
+  zoneLots(ctx, lots, pos.get(0) ?? -1, (pop) => pop)
   lots.forEach((l, k) => {
     patches[idx[k]].type = l.type
     if (l.palace !== undefined) patches[idx[k]].palace = idx[l.palace]
     if (l.grand) patches[idx[k]].grand = true
+    patches[idx[k]].foundPop = l.foundPop
   })
   // 城外
   const veg = vegetation(ctx)
@@ -1262,7 +1455,7 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   // 都城的宫城（没有形制时；形制有自己的宫城、城堡）：布局之初就在城心旁划出一块，不布街巷
   const pz = p.capital && !plan && p.size !== 'hamlet' && p.size !== 'village' ? palaceZone(ctx, arterials) : null
   const reserved = (q: P) => !!plan?.z.contains(q) || !!pz?.keepOut(q)
-  const streets = (p.size === 'hamlet' ? [] : ctx.cores.flatMap((c, i) => [...latticeStreets(ctx, c, i), ...radialStreets(ctx, c, i)])).filter((l) => !l.some(reserved))
+  const streets = (p.size === 'hamlet' ? [] : (ctx.layoutCores ?? ctx.cores).flatMap((c, i) => [...latticeStreets(ctx, c, i), ...radialStreets(ctx, c, i)])).filter((l) => !l.some(reserved))
   // 片区沿干道成对布点（路落在片区边界上）只用最早的两条干道：任何规模都有这两条。
   // 人口多了才开的干道不再改动片区剖分，直接穿过已有的街坊（像后来新修的路），老城的片区才不会整片重排
   // 规划区：形制给的固定站点切出方正的街坊，区里不再随机布点（落水的、与核心重合的站点丢掉）
@@ -1332,7 +1525,7 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   const small = isVillage(p.size)
   const baseRng = ctx.rng
   // 占用率：城内按离核心的距离渐变（软边界），城门外的关厢随城墙里住满的程度出现（见 occupancy）
-  const { fill, d: layoutD } = occupancy(ctx, patches, stages)
+  const { fill, quota, d: layoutD } = occupancy(ctx, patches, stages, growth)
   // 村巷等知道哪些地会有人家以后再修：只通往占用率够的片区，不修通往空地的巷子
   if (isVillage(p.size)) {
     const old = new Set(ctx.out.roads)
@@ -1354,14 +1547,24 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
     const site = pa.palace === i ? palaceSite(ctx, patches, i, !pa.grand) : null
     if (site) palaces.set(i, site)
   })
-  const wards: Ward[] = patches.map((pa) => ({ poly: pa.poly, type: pa.type ?? 'wild', inner: pa.inner, density: pa.inner && !small ? pa.density : undefined, ...(pa.grand ? { tier: 'grand' as const } : {}) }))
+  const wards: Ward[] = patches.map((pa) => ({ poly: pa.poly, type: pa.type ?? 'wild', inner: pa.inner, density: pa.inner ? pa.density : undefined, ...(pa.grand ? { tier: 'grand' as const } : {}) }))
   ctx.out.wards.push(...wards)
-  // 顺序与占用率用同一套"布局距离"：预算用完时截掉的是布局意义上最外围的，而不是按直线距离截成一个圆
-  const order = patches.map((pa, i) => [layoutD[i] + (pa.inner ? 0 : 1e6), i] as const).sort((a, b) => a[0] - b[0])
+  // 城区按加入城区的先后盖（填洞、城墙圈进来的排在相邻片区里最晚加入的之后）：民居预算用完时截掉的总是最新辟的片区，
+  // 城市长大时多出的预算也只落在新片区上——按远近排的话，新加入却离得近的片区会抢走预算，外围老片区的房子整片消失。
+  // 城外（城郊、田间）按布局距离，与占用率同一套：截掉的是布局意义上最外围的
+  const joined = new Map(growth.order.map((i, k) => [i, k]))
+  const joinRank = (i: number) => joined.get(i) ?? Math.max(0, ...patches[i].nb.map((j) => joined.get(j) ?? 0)) + 0.5
+  const order = patches.map((pa, i) => [pa.inner ? joinRank(i) : 1e6 + layoutD[i], i] as const).sort((a, b) => a[0] - b[0])
+  // 街坊 / 农家按现在人口的城区半径判定（与容量估算同一个，见 capacityModel、occupancy）
+  const townR = rinFor(p, p.population)
   for (const [, i] of order) {
     ctx.rng = wardRng(ctx, patches[i].site)
     ctx.wardFill = fill[i]
-    ctx.wardDensity = small ? 'low' : (patches[i].density ?? 'mid')
+    ctx.wardQuota = quota[i]
+    ctx.wardPop = patches[i].foundPop
+    ctx.wardDensity = patches[i].density ?? 'mid'
+    // 这块是街坊还是零散的农家（村 → 镇连续过渡，见 wardTown）
+    ctx.wardTown = patches[i].inner && wardTown(ctx, patches[i].site, p.population, townR) > 0
     const rng = ctx.rng
     const pa = patches[i]
     const ward = wards[i]
@@ -1369,16 +1572,18 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
     if (type === 'water') continue
     // 整块在画面外（布点时多铺的一圈）：不盖东西
     if (pa.poly.every((v) => v[0] < 0 || v[1] < 0 || v[0] > ctx.MW || v[1] > ctx.MH) && !pa.inner) continue
-    const lane = pa.inner ? cfg.lane / 2 + rng.next() * 0.8 : 2
-    // 村落的片区边界大多不是路：只有真修了路的边才让出路面，其余只留一道细缝（田埂、篱笆）
-    // 并成一片的农田之间也只是一道田埂
+    // 街巷宽按片区加入城区时（填洞、城墙圈进来的按相邻片区里最宽的）
+    const laneW = growth.lanes.get(i) ?? Math.max(0, ...pa.nb.map((j) => growth.lanes.get(j) ?? 0))
+    const lane = pa.inner ? (laneW || cfg.lane) / 2 + rng.next() * 0.8 : 2
+    // 街坊四周都是街巷；零散农家、城外的田地与城郊，片区边界大多不是路：只有真修了路的边才让出路面，
+    // 其余只留一道细缝（田埂、篱笆）。并成一片的农田之间也只是一道田埂
     const group = fields.get(i)
     const insets = pa.poly.map((v, k) => {
       const d = lane * (0.8 + rng.next() * 0.4)
       const w = pa.poly[(k + 1) % pa.poly.length]
       const mid: P = [(v[0] + w[0]) / 2, (v[1] + w[1]) / 2]
       const mate = group?.seams.some(([a, b]) => segDist(mid, a, b).d < 0.5)
-      if (!small && !mate) return d
+      if (ctx.wardTown && !mate) return d
       return ctx.corridors.hits(mid, 0.5) ? d : mate ? 0 : 0.6
     })
     let block = insetConvex(pa.poly, insets)
@@ -1459,6 +1664,9 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   }
   ctx.tier = 'standard'
   ctx.rng = baseRng
+  ctx.wardPop = undefined
+  ctx.wardTown = true
+  ctx.wardQuota = Infinity
   ctx.wardFill = 1
   ctx.wardDensity = 'mid'
   // 城堡、宫城、卫城的门在各自盖好时就接上了路（见 walls.ts 的 connectGates）
@@ -1475,7 +1683,7 @@ function palaceZone(ctx: Ctx, arterials: P[][]): { sites: P[]; keepOut: (q: P) =
   const { T } = ctx
   const south = CULTURE_INFO[ctx.p.culture].palaceSouth
   // 至少横两格、纵三格标准片区（约六块），大城随人口再大
-  const side0 = Math.min(340, Math.max(ctx.cfg.patch * 2.1, Math.sqrt(ctx.p.population) * 1.6))
+  const side0 = Math.min(340, Math.max(ctx.cfg.patch * 2.1, Math.sqrt(planPopOf(ctx.p)) * 1.6))
   // 朝向：东方坐北朝南（横向是东西）；西式、别的正面朝城心（进深沿着离开城心的方向，楼后是纵深的园林）
   const axes = (dir: number): [P, P] => {
     const a = south ? 0 : dir + Math.PI / 2
@@ -1755,23 +1963,29 @@ function palaceSite(ctx: Ctx, patches: Patch[], seed: number, royal = true): Pol
 
 /**
  * 城外相邻的两三块农田并成一片（一户人家、一个庄园的地）：片区之间不留田间道，垄向与用地按整片来定，
- * 田野不再是一格格一样大的 Voronoi 块。按位置哈希挑，城长大时已有的分组不变。
+ * 田野不再是一格格一样大的 Voronoi 块。
+ * 分组只看片区网格与位置哈希、不看现在哪些是农田：城长大、占掉其中一块时，同片剩下的几块还是原来那一片
+ * （用地、色调、垄向都不变），相邻的分组也不会跟着重排。ok 只决定哪些块现在按这片来种。
  */
 function farmGroups(ctx: Ctx, patches: Patch[], ok: (i: number) => boolean) {
   const out = new Map<number, FarmGroup>()
+  const taken = new Set<number>()
   const order = patches.map((pa, i) => [hashAt(ctx, pa.site, 'farm.group'), i] as const).sort((a, b) => a[0] - b[0])
+  const land = (i: number) => patches[i].land >= 0.35
   for (const [h, i] of order) {
-    if (out.has(i) || !ok(i)) continue
+    if (taken.has(i) || !land(i)) continue
     // 三成单独一块，其余两到三块一片
     const want = h < 0.3 ? 1 : h < 0.75 ? 2 : 3
     const members = [i]
     for (let k = 0; k < members.length && members.length < want; k++)
       for (const j of patches[members[k]].nb) {
-        if (members.length >= want || out.has(j) || members.includes(j) || !ok(j)) continue
+        if (members.length >= want || taken.has(j) || members.includes(j) || !land(j)) continue
         const e = sharedEdge(patches[members[k]], patches[j])
         if (e && dist(e[0], e[1]) > 20) members.push(j)
       }
-    if (members.length < 2) continue
+    for (const j of members) taken.add(j)
+    const live = members.filter(ok)
+    if (members.length < 2 || !live.length) continue
     let ax = 0
     let ay = 0
     let at = 0
@@ -1783,11 +1997,11 @@ function farmGroups(ctx: Ctx, patches: Patch[], ok: (i: number) => boolean) {
       at += a
     }
     const g: FarmGroup = { c: [ax / at, ay / at], seams: [] }
-    for (const a of members) for (const b of members) if (a < b) {
+    for (const a of live) for (const b of live) if (a < b) {
       const e = sharedEdge(patches[a], patches[b])
       if (e) g.seams.push(e)
     }
-    for (const j of members) out.set(j, g)
+    for (const j of live) out.set(j, g)
   }
   return out
 }
@@ -1802,13 +2016,15 @@ function pickVillages(ctx: Ctx, patches: Patch[]): { centers: Set<number>; membe
   const members = new Set<number>()
   if (!ctx.env.big) return { centers: out, members }
   const gapCity = ctx.Rin + 350
+  // 候选与彼此的间隔只看地形、道路与位置哈希（与人口无关）：城长大、吞掉离得近的村子时，
+  // 空出来的地方不会冒出新村子，别处的村子也不会跟着挪。挑定之后，再只留现在还在城外田野里的
   const cands = patches
     .map((pa, i) => ({ pa, i, key: hashAt(ctx, pa.site, 'village.pick') }))
     .filter(({ pa }) => {
       const q = pa.site
-      if (pa.type !== 'farm' || pa.inner || pa.land < 0.85) return false
+      if (pa.land < 0.85) return false
       if (q[0] < 60 || q[1] < 60 || q[0] > ctx.MW - 60 || q[1] > ctx.MH - 60) return false
-      if (centerDist(ctx, q) < gapCity || ctx.T.slopeAt(q) > 0.12) return false
+      if (ctx.T.slopeAt(q) > 0.12) return false
       if (ctx.plan?.z.contains(q)) return false
       return ctx.corridors.gap(q) < spacing(ctx, q) * 0.8
     })
@@ -1817,8 +2033,9 @@ function pickVillages(ctx: Ctx, patches: Patch[]): { centers: Set<number>; membe
   const flat = (j: number) => patches[j].type === 'farm' && !patches[j].inner && patches[j].land >= 0.85 && ctx.T.slopeAt(patches[j].site) < 0.12
   for (const { pa, i } of cands) {
     if (made.some((m) => dist(m, pa.site) < 720)) continue
-    out.add(i)
     made.push(pa.site)
+    if (pa.type !== 'farm' || pa.inner || centerDist(ctx, pa.site) < gapCity) continue
+    out.add(i)
     // 村舍铺到周围几块平缓的地上（一个村子二三十户）
     for (const j of pa.nb) if (!out.has(j) && flat(j) && dist(patches[j].site, pa.site) < 180) members.add(j)
   }

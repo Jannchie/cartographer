@@ -74,6 +74,13 @@ export interface SettlementParams {
   nameJa?: string
   /** 继承自世界地图的环境（影响植被与农田） */
   climate?: SettlementClimate
+  /** 画幅至少这么大（米，取整到 20）：成长动画的各帧共用一个画幅，城在原地长大。不存档、不进地址 */
+  minExtent?: [number, number]
+  /**
+   * 规划按多少人口定（缺省为现在的人口）：规划区、宫城的大小，形制里的集市、墓地数量。
+   * 成长动画传最终的人口——规划城是一开始就按全城划好、再慢慢住满的，各帧的规划不随人口伸缩。不存档、不进地址
+   */
+  planPop?: number
 }
 
 export interface SettlementClimate {

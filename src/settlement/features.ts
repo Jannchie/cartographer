@@ -1,8 +1,8 @@
 import { CULTURE_INFO, eastAsian } from './culture'
-import { emitArea, centerDist, clipWater, isFree, placeable, whereOf, mark, type Ctx } from './ctx'
+import { emitArea, clipWater, isFree, placeable, whereOf, mark, type Ctx } from './ctx'
 import { area, centroid, circlePoly, dist, insetConvex, obb, rect, type P, type Poly } from './geom'
 import { amphitheater, arenaAt, hospitalAt, pulpitAt, schoolAt, stageAt, tavernAt, wineryAt } from './civic'
-import { isVillage, scaleOf, townShare } from './scale'
+import { isVillage, scaleOf } from './scale'
 import type { BuildingKind, Culture, Landmark, SettlementParams, SettlementSize, Ward, WardType } from './types'
 import {
   addBuilding,
@@ -168,8 +168,7 @@ export interface FeatureDef {
 
 const round = (x: number) => Math.max(0, Math.round(x))
 /** 村子越大、越靠村心，越多片区盖成连排的街坊（向城镇过渡）；其余是零散的农家。城镇以上都是街坊 */
-export const townlike = (ctx: Ctx, block: Poly) =>
-  !isVillage(ctx.p.size) || ctx.rng.next() < townShare(ctx.p.population, centerDist(ctx, centroid(block)) / Math.max(1, ctx.Rin))
+export const townlike = (ctx: Ctx) => ctx.wardTown
 
 /** 功效对数量的倍率 */
 const fnMul = (e: FeatureEnv, m: Partial<Record<CityFunction, number>>) => m[e.fn] ?? 1
@@ -187,8 +186,8 @@ export const FEATURES: FeatureDef[] = [
     max: 0,
     auto: () => 0,
     build(ctx, _w, block) {
-      if (!townlike(ctx, block)) urban(ctx, block, 'village', [])
-      else urban(ctx, block, isVillage(ctx.p.size) ? 'suburb' : 'common')
+      if (!townlike(ctx)) urban(ctx, block, 'village', [])
+      else urban(ctx, block, 'common')
     },
   },
   {
