@@ -674,7 +674,8 @@ function roads(R: Painter, st: Settlement, th: SettleTheme) {
     }
     return [...g].sort((a, b) => b[0] - a[0])
   }
-  const round = { cap: 'round', join: 'round' } as const
+  // 端头是方的（平头，多出半个路宽，接到别的路上不露缝）；拐角是圆的
+  const round = { cap: 'square', join: 'round' } as const
   for (const [w, lines] of byWidth(['highway'])) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, ...round })
   for (const [w, lines] of byWidth(['lane', 'main', 'street'])) R.lines(lines, { color: th.street, alpha: 1, width: w * S, ...round })
   for (const [w, lines] of byWidth(['path'])) R.lines(lines, { color: th.plaza, alpha: 1, width: Math.max(1, w * S), ...round })
