@@ -658,23 +658,12 @@ function treeChunk(R: Painter, trees: Settlement['trees'], withShadow: boolean) 
 
 // —————————————————————— 道路与城区 ——————————————————————
 
-/** 两个 #rrggbb 颜色按 t 混合（t = 0 是 a）；不是这种写法的原样返回 a */
-function mixHex(a: string, b: string, t: number) {
-  if (!/^#[0-9a-f]{6}$/i.test(a) || !/^#[0-9a-f]{6}$/i.test(b)) return a
-  const ch = (c: string, i: number) => parseInt(c.slice(1 + i * 2, 3 + i * 2), 16)
-  return '#' + [0, 1, 2].map((i) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t).toString(16).padStart(2, '0')).join('')
-}
-
 /**
- * 各种路一起画：路面连成一张路网（城外的路在下，城内的街道、小径在上），与街坊之间的缝（街）接得上。
- * 填色的画法路不描边（街坊之间的缝也没有边线，描了边的路进城时总有一道接口）；
- * 线描的画法（路面与地面同色）路靠边线画出来：边线与街坊的轮廓同一种线，路边与街坊边连成一条。
- * 边线全压在路面下，是不透明的（线色掺进地面色）：不同宽的路在路口不会叠出深色
+ * 各种路一起画，不描边：路面比四周的地面亮，靠这个显出来。城外的巷子与城内的街道同色，
+ * 与街坊之间的缝（街）连成一张路网；只有官道用路的颜色（测绘图里是黄的）。官道在下，街巷、小径在上
  */
 function roads(R: Painter, st: Settlement, th: SettleTheme) {
   const S = R.S
-  const casing = th.road.casing
-  // 同宽的路合成一条路径一起描：半透明的路边线、小径在路口不会叠出深色的接缝
   const byWidth = (kinds: Road['kind'][]) => {
     const g = new Map<number, P[][]>()
     for (const r of st.roads) {
@@ -685,20 +674,12 @@ function roads(R: Painter, st: Settlement, th: SettleTheme) {
     }
     return [...g].sort((a, b) => b[0] - a[0])
   }
-  const outer = byWidth(['highway', 'lane'])
-  const inner = byWidth(['main', 'street'])
   const round = { cap: 'round', join: 'round' } as const
-  if (casing && th.road.fill === th.ground) {
-    const line = th.blockStroke ?? { color: casing, alpha: 0.6, width: 0.5 }
-    const edge = { color: mixHex(line.color, th.ground, 1 - line.alpha), alpha: 1 }
-    for (const [w, lines] of [...outer, ...inner].sort((a, b) => b[0] - a[0])) R.lines(lines, { ...edge, width: w * S + 2 * line.width, ...round })
-  }
-  for (const [w, lines] of outer) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, ...round })
-  // 城内主街与街道压在街区上，保证连续；田间、公园的小径
-  for (const [w, lines] of inner) R.lines(lines, { color: th.street, alpha: 1, width: w * S, ...round })
+  for (const [w, lines] of byWidth(['highway'])) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, ...round })
+  for (const [w, lines] of byWidth(['lane', 'main', 'street'])) R.lines(lines, { color: th.street, alpha: 1, width: w * S, ...round })
   for (const [w, lines] of byWidth(['path'])) R.lines(lines, { color: th.plaza, alpha: 1, width: Math.max(1, w * S), ...round })
   for (const r of st.roads.filter((r) => r.kind === 'stair')) {
-    R.lines([r.line], { color: casing ?? th.ink, alpha: 0.8, width: (r.width + 1) * S, cap: 'round', join: 'round' })
+    R.lines([r.line], { color: th.road.casing ?? th.ink, alpha: 0.8, width: (r.width + 1) * S, cap: 'round', join: 'round' })
     R.lines([r.line], { color: th.road.fill, alpha: 1, width: r.width * S, cap: 'round', join: 'round' })
     // 台阶横纹
     const L = polylineLength(r.line)
