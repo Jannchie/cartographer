@@ -243,6 +243,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   labels(ctx, riverName, seaName)
   if (ctx.history) {
     stampLabels(ctx)
+    joinRoadEnds(ctx)
     clearRoadTrees(ctx)
   }
 
@@ -1771,6 +1772,7 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   // 各片区按形态时间线盖、按人口调度（见 historyWards）；水面、画面外多铺的一圈城外片区不盖
   const walk = order.map(([, i]) => i).filter((i) => wards[i].type !== 'water' && !(patches[i].poly.every((v) => v[0] < 0 || v[1] < 0 || v[0] > ctx.MW || v[1] > ctx.MH) && !patches[i].inner))
   const opened = historyWards(ctx, S, walk, arterials)
+  joinRoadEnds(ctx)
   // 路等沿线的地真有人住了（片区开张）才修
   stampRoads(ctx, patches, (i) => opened.get(i) ?? Infinity)
   ctx.tier = 'standard'
@@ -1898,6 +1900,71 @@ function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Pol
  * - 街巷：沿路的地大多并进城区时（取中位数）。
  * 沿路的地按最近的片区站点算（Voronoi：落在谁的片区里就离谁的站点最近，片区边上的巷子取两边早的那块）
  */
+/**
+ * 路的端头差几米没接上别的路（布路时各自让开了房子、街坊的边、路口）：顺着来的方向延长到最近那条路的中心线上。
+ * 只接 JOIN_GAP 米以内、不往回拐的；延长的一段压到房子、水面或城墙就不接。
+ * 布完片区（按时间切段之前）接一遍，之后加的路（城门街……）在最后再接一遍
+ */
+const JOIN_GAP = 8
+function joinRoadEnds(ctx: Ctx) {
+  const roads = ctx.out.roads.filter((r) => r.kind !== 'stair' && r.line.length > 1)
+  const G = 30
+  const grid = new Map<string, [Road, number][]>()
+  roads.forEach((r) => {
+    for (let i = 1; i < r.line.length; i++) {
+      const a = r.line[i - 1]
+      const b = r.line[i]
+      for (let y = Math.floor((Math.min(a[1], b[1]) - JOIN_GAP - 6) / G); y <= Math.floor((Math.max(a[1], b[1]) + JOIN_GAP + 6) / G); y++)
+        for (let x = Math.floor((Math.min(a[0], b[0]) - JOIN_GAP - 6) / G); x <= Math.floor((Math.max(a[0], b[0]) + JOIN_GAP + 6) / G); x++) {
+          const k = `${x},${y}`
+          let l = grid.get(k)
+          if (!l) grid.set(k, (l = []))
+          l.push([r, i])
+        }
+    }
+  })
+  const clear = (a: P, b: P) => {
+    const n = Math.ceil(dist(a, b))
+    for (let k = 1; k <= n; k++) {
+      const q = lerpP(a, b, k / n)
+      if (ctx.occ.hitsPoint(q, 0) || ctx.T.waterAt(q) < 1 || ctx.corridors.hits(q, 0, ['wall'])) return false
+    }
+    return true
+  }
+  for (const r of roads)
+    for (const head of [true, false]) {
+      const e = head ? r.line[0] : r.line[r.line.length - 1]
+      const prev = head ? r.line[1] : r.line[r.line.length - 2]
+      let touch = false
+      let best: P | null = null
+      let bd = JOIN_GAP
+      for (const [o, i] of grid.get(`${Math.floor(e[0] / G)},${Math.floor(e[1] / G)}`) ?? []) {
+        if (o === r) continue
+        const a = o.line[i - 1]
+        const b = o.line[i]
+        const { d, t } = segDist(e, a, b)
+        if (d < o.width / 2 + 0.3) {
+          touch = true
+          break
+        }
+        if (d - o.width / 2 < bd) {
+          bd = d - o.width / 2
+          best = lerpP(a, b, t)
+        }
+      }
+      if (touch || !best) continue
+      // 不往回拐：延长的方向与路来的方向夹角不到 120°（再大就拐出一个钩）
+      const ux = e[0] - prev[0]
+      const uy = e[1] - prev[1]
+      const vx = best[0] - e[0]
+      const vy = best[1] - e[1]
+      if (ux * vx + uy * vy < -0.5 * Math.hypot(ux, uy) * Math.hypot(vx, vy)) continue
+      if (!clear(e, best)) continue
+      if (head) r.line.unshift(best)
+      else r.line.push(best)
+    }
+}
+
 function stampRoads(ctx: Ctx, patches: Patch[], openAt: (i: number) => number) {
   const h = ctx.history!
   const G = 60
@@ -1971,6 +2038,11 @@ function stampRoads(ctx: Ctx, patches: Patch[], openAt: (i: number) => number) {
   const pieces = (r: Road) => {
     const line = resample(r.line, 10)
     const at = line.map(joinAt)
+    // 两头是路口（常伸进别的路里，见 joinRoadEnds）：跟着这条路本身，不按路口那边的地
+    if (at.length > 2) {
+      at[0] = at[1]
+      at[at.length - 1] = at[at.length - 2]
+    }
     const out: { line: P[]; born: number }[] = []
     for (let k = 0; k + 1 < line.length; k++) {
       const b = Math.max(at[k], at[k + 1])
