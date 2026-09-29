@@ -4,7 +4,7 @@ import { DisplayList, type BBox, type Fill, type Item, type PathItem, type Strok
 import { blur } from '../gen/util'
 import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, type P, type Poly } from './geom'
 import { settleTheme, type SettleStyleId, type SettleTheme } from './themes'
-import type { BuildingKind, Field, MapLabel, Settlement, SettlementSize } from './types'
+import type { BuildingKind, Field, MapLabel, Road, Settlement, SettlementSize } from './types'
 import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type LandUse } from './landuse'
 import { tr } from '../i18n'
 
@@ -81,8 +81,7 @@ export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts
   urbanGround(R, st, th)
   waterLayers(R, st, th)
   wonderGlow(R, st, th)
-  roadsOuter(R, st, th)
-  innerStreets(R, st, th)
+  roads(R, st, th)
   crossingLayers(R, st, th)
   for (const p of st.piers) R.poly(p, { color: th.plaza, alpha: 1 }, { color: th.ink, alpha: 0.8, width: 0.7 })
   boatLayers(R, st, th)
@@ -659,20 +658,43 @@ function treeChunk(R: Painter, trees: Settlement['trees'], withShadow: boolean) 
 
 // —————————————————————— 道路与城区 ——————————————————————
 
-function roadsOuter(R: Painter, st: Settlement, th: SettleTheme) {
+/** 两个 #rrggbb 颜色按 t 混合（t = 0 是 a）；不是这种写法的原样返回 a */
+function mixHex(a: string, b: string, t: number) {
+  if (!/^#[0-9a-f]{6}$/i.test(a) || !/^#[0-9a-f]{6}$/i.test(b)) return a
+  const ch = (c: string, i: number) => parseInt(c.slice(1 + i * 2, 3 + i * 2), 16)
+  return '#' + [0, 1, 2].map((i) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t).toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * 各种路一起画：先是所有路的路边线，再是路面（城外的路在下，城内的街道、小径在上）。
+ * 路边线全压在路面下，各种路用同一种边线（路的等级看宽窄）：不同种类的路交汇时连成一张路网，
+ * 不会一条是粗黑边、一条是淡边。边线是不透明的（边线色掺进地面色），不同宽的路在路口不会叠出深色
+ */
+function roads(R: Painter, st: Settlement, th: SettleTheme) {
   const S = R.S
-  const outer = st.roads.filter((r) => r.kind === 'highway' || r.kind === 'lane')
   const casing = th.road.casing
   // 同宽的路合成一条路径一起描：半透明的路边线、小径在路口不会叠出深色的接缝
-  const byWidth = (rs: typeof st.roads) => {
+  const byWidth = (kinds: Road['kind'][]) => {
     const g = new Map<number, P[][]>()
-    for (const r of rs) (g.get(r.width) ?? g.set(r.width, []).get(r.width)!).push(r.line)
+    for (const r of st.roads) {
+      if (!kinds.includes(r.kind)) continue
+      let l = g.get(r.width)
+      if (!l) g.set(r.width, (l = []))
+      l.push(r.line)
+    }
     return [...g].sort((a, b) => b[0] - a[0])
   }
-  const groups = byWidth(outer)
-  if (casing) for (const [w, lines] of groups) R.lines(lines, { color: casing, alpha: 0.9, width: (w + 1.6) * S, cap: 'round', join: 'round' })
-  for (const [w, lines] of groups) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, cap: 'round', join: 'round' })
-  for (const [w, lines] of byWidth(st.roads.filter((r) => r.kind === 'path'))) R.lines(lines, { color: th.road.fill, alpha: 0.9, width: Math.max(1, w * S), cap: 'round', join: 'round' })
+  const outer = byWidth(['highway', 'lane'])
+  const inner = byWidth(['main', 'street'])
+  const round = { cap: 'round', join: 'round' } as const
+  if (casing) {
+    const edge = { color: mixHex(casing, th.ground, 0.4), alpha: 1 }
+    for (const [w, lines] of [...outer, ...inner].sort((a, b) => b[0] - a[0])) R.lines(lines, { ...edge, width: (w + 1.3) * S, ...round })
+  }
+  for (const [w, lines] of outer) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, ...round })
+  // 城内主街与街道压在街区上，保证连续；田间、公园的小径
+  for (const [w, lines] of inner) R.lines(lines, { color: th.street, alpha: 1, width: w * S, ...round })
+  for (const [w, lines] of byWidth(['path'])) R.lines(lines, { color: th.plaza, alpha: 1, width: Math.max(1, w * S), ...round })
   for (const r of st.roads.filter((r) => r.kind === 'stair')) {
     R.lines([r.line], { color: casing ?? th.ink, alpha: 0.8, width: (r.width + 1) * S, cap: 'round', join: 'round' })
     R.lines([r.line], { color: th.road.fill, alpha: 1, width: r.width * S, cap: 'round', join: 'round' })
@@ -728,16 +750,6 @@ function parkGround(R: Painter, st: Settlement, th: SettleTheme) {
 function parkRocks(R: Painter, st: Settlement, th: SettleTheme) {
   const rocks = (st.parkParts ?? []).filter((q) => q.kind === 'rock')
   if (rocks.length) R.polys(rocks.map((q) => q.poly), { color: th.wall.fill, alpha: 1 }, { color: th.ink, alpha: 0.85, width: 0.5, join: 'round' })
-}
-
-/** 城内主街与街道（压在街区上，保证连续）、公园小径 */
-function innerStreets(R: Painter, st: Settlement, th: SettleTheme) {
-  const S = R.S
-  const main = st.roads.filter((r) => r.kind === 'main' || r.kind === 'street')
-  if (th.road.casing) for (const r of main) R.lines([r.line], { color: th.road.casing, alpha: 0.35, width: (r.width + 1) * S, cap: 'round', join: 'round' })
-  for (const r of main) R.lines([r.line], { color: th.street, alpha: 1, width: r.width * S, cap: 'round', join: 'round' })
-  // 公园小径
-  for (const r of st.roads.filter((r) => r.kind === 'path')) R.lines([r.line], { color: th.plaza, alpha: 1, width: Math.max(1, r.width * S), cap: 'round', join: 'round' })
 }
 
 function crossingLayers(R: Painter, st: Settlement, th: SettleTheme) {
@@ -1423,8 +1435,7 @@ function zoningMap(R: Painter, st: Settlement, th: SettleTheme, opts: SettleOpts
   }
   for (const [c, polys] of byColor) R.polys(polys, R.fillOf(c))
   waterLayers(R, st, th)
-  roadsOuter(R, st, th)
-  innerStreets(R, st, th)
+  roads(R, st, th)
   crossingLayers(R, st, th)
   for (const p of st.piers) R.poly(p, { color: th.plaza, alpha: 1 }, { color: th.ink, alpha: 0.6, width: 0.6 })
   // 房屋与树只留淡影
