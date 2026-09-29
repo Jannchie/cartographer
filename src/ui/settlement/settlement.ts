@@ -3,7 +3,8 @@ import type { World } from '../../gen/types'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { fromWorld } from '../../settlement/fromWorld'
-import { generateSettlement, settlementExtent } from '../../settlement/generate'
+import { generateHistory, generateSettlement, settlementExtent } from '../../settlement/generate'
+import { snapshot } from '../../settlement/history'
 import { pointInPoly, type P } from '../../settlement/geom'
 import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
 import { SETTLE_THEMES, type SettleStyleId } from '../../settlement/themes'
@@ -332,7 +333,18 @@ export function runLive() {
   })
 }
 
-/** 成长动画：人口按对数从几十人长到当前的目标人口；再点一次停止 */
+/** 显示一帧已经算好的地图（成长动画的快照） */
+async function showFrame(s: Settlement) {
+  st = markRaw(s)
+  cache.clear()
+  showInfo(st)
+  await refresh(false, true)
+}
+
+/**
+ * 成长动画：先推演一次这座城从几十人长到目标人口的成长史（见 settlement/history.ts），
+ * 再按对数人口逐帧取快照——每样东西只出现一次、只在被新东西取代时消失，城是真的一路长大的。再点一次停止
+ */
 export async function playGrowth() {
   if (ss.growing) {
     ss.growing = false
@@ -347,9 +359,18 @@ export async function playGrowth() {
   // 规划（规划区、宫城）一开始就按最终的人口划好，各帧只是把它住满
   const ex = pops.map((population) => settlementExtent({ ...toRaw(ss.params), population }))
   const frame = { minExtent: [Math.max(...ex.map((e) => e[0])), Math.max(...ex.map((e) => e[1]))] as [number, number], planPop: target }
+  ss.loading.show = true
+  ss.loading.stage = '推演城市的成长史'
+  await new Promise((r) => setTimeout(r, 30))
+  if (!ss.growing) {
+    ss.loading.show = false
+    return
+  }
+  const hist = markRaw(generateHistory({ ...toRaw(ss.params), ...frame, population: target, counts: { ...toRaw(ss.params.counts) } }))
+  ss.loading.show = false
   for (let k = 0; k <= frames && ss.growing; k++) {
     const t0 = performance.now()
-    await quickRun(pops[k], frame)
+    await showFrame(snapshot(hist, pops[k]))
     // 每帧至少停留 90 毫秒，小聚落算得快时也看得清
     await new Promise((r) => setTimeout(r, Math.max(0, 90 - (performance.now() - t0))))
   }

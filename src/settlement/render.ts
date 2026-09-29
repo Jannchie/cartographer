@@ -615,7 +615,7 @@ function roadsOuter(R: Painter, st: Settlement, th: SettleTheme) {
 }
 
 function urbanGround(R: Painter, st: Settlement, th: SettleTheme) {
-  const inner = st.wards.filter((w) => w.inner && w.type !== 'water')
+  const inner = st.wards.filter((w) => w.inner && !w.rural && w.type !== 'water')
   // 城内的地面先铺成街道色，再铺街区（院落）色：两者之间的缝就是街巷
   R.polys(inner.map((w) => w.poly), { color: th.street, alpha: 1 })
   R.polys(st.blocks, R.fillOf(th.yard), th.blockStroke)

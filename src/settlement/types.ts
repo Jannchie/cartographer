@@ -246,6 +246,8 @@ export interface Ward {
   density?: Density
   /** 地标片区的规模档（合成的大社、同心城……是 grand） */
   tier?: Tier
+  /** 零散农家的片区（成长史里村子的外围）：农家散在田间，地面还是田野，不铺城区的地面 */
+  rural?: boolean
 }
 
 export interface Field {

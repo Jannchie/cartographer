@@ -6,6 +6,7 @@ import { bboxOf, convexOverlap, dist, insetConvex, LineIndex, pointAt, pointInPo
 import type { Building, SettlementParams, WardType } from './types'
 import { addBuilding, inside } from './wards'
 import { checkpoint, clearYards, demolish, removable, rollback } from './undo'
+import { outMark, stamp } from './history'
 
 /** 城内的一块候选片区 */
 export interface Lot {
@@ -265,6 +266,8 @@ export function placeLandmarks(ctx: Ctx) {
       if (!blocking.every((poly) => byPoly.has(poly) && removable(byPoly.get(poly)!))) continue
       // 拆了却盖不成就撤回（不留空洞）；拆掉的住户退回民居预算
       const cp = checkpoint(ctx)
+      // 成长史：第 k 座在自动数量长到 k + 1 时出现，腾地方拆掉的人家那时才拆
+      const hm = ctx.history ? outMark(ctx) : null
       const gone = new Set(blocking)
       demolish(ctx, (b) => gone.has(b.poly))
       const before = checkpoint(ctx)
@@ -277,6 +280,7 @@ export function placeLandmarks(ctx: Ctx) {
       // 拆掉的人家留下的院墙、菜园、树也清走（地标自己刚加的院墙、院子留着）
       clearYards(ctx, fp, { to: before })
       mark(ctx, c.at, spec.mark)
+      if (hm) stamp(ctx, hm, ctx.history!.countPop(def.id, made.length))
       made.push(c.at)
     }
   }
