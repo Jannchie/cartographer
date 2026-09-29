@@ -274,10 +274,18 @@ export async function run() {
   await refresh(true)
 }
 
-async function listFor(s: Settlement, id: SettleStyleId) {
+/** wait：最多等字体多久（毫秒）；成长动画、拖动这类逐帧刷新只等一下，免得每帧都卡在下载字体上 */
+async function listFor(s: Settlement, id: SettleStyleId, wait = 2500) {
   let l = cache.get(id)
   if (l) return l
-  await ensureSettleFonts(s, id, lang)
+  const fonts = await ensureSettleFonts(s, id, lang, wait)
+  // 字体没等到就先用回退字体画；到齐以后这幅图作废重画（还在看这张图、这种风格时）
+  if (!fonts.ready)
+    void fonts.later.then(() => {
+      if (st !== s) return
+      cache.delete(id)
+      if (ss.style === id) void refresh(false, true)
+    })
   const measurer = document.createElement('canvas').getContext('2d')!
   l = buildSettlementVector(s, id, { ...toRaw(ss.opts), hidden: [...toRaw(ss.opts.hidden)], lang }, measurer)
   cache.set(id, l)
@@ -293,7 +301,7 @@ async function refresh(fit = false, quiet = false) {
     ss.loading.stage = t('绘制{style}', { style: t(SETTLE_THEMES.find((th) => th.id === ss.style)!.name) })
     await new Promise((r) => setTimeout(r, 20))
   }
-  const list = await listFor(s, ss.style)
+  const list = await listFor(s, ss.style, quiet ? 300 : 2500)
   if (id !== job) return
   ss.loading.show = false
   if (!viewer) viewer = markRaw(new AtlasViewer(host))
@@ -504,7 +512,7 @@ function probeAt(clientX: number, clientY: number) {
 const fileBase = () => `${(st?.name ?? 'settlement').toLowerCase()}-${ss.params.seed}-${ss.style}${ss.opts.view === 'zoning' ? '-zoning' : ''}`
 export async function exportPng() {
   if (!st) return
-  const list = await listFor(st, ss.style)
+  const list = await listFor(st, ss.style, 60000)
   const c = document.createElement('canvas')
   c.width = list.width * 2
   c.height = list.height * 2
@@ -513,7 +521,7 @@ export async function exportPng() {
 }
 export async function exportSvg() {
   if (!st) return
-  const list = await listFor(st, ss.style)
+  const list = await listFor(st, ss.style, 60000)
   download(new Blob([list.toSVG()], { type: 'image/svg+xml' }), `${fileBase()}.svg`)
 }
 

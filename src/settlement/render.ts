@@ -1632,7 +1632,11 @@ function probeCard(list: DisplayList, th: SettleTheme, measurer: CanvasRendering
 export const settleBackdrop = (style: SettleStyleId) => settleTheme(style).ground
 
 /** 字体加载：中文按实际用到的字取子集 */
-export async function ensureSettleFonts(st: Settlement, style: SettleStyleId, lg: Lang = 'zh') {
+/**
+ * 等这幅图要用的字体（只下载图上出现的字）。最多等 wait 毫秒：中日文字体按字切成上百个子集，
+ * 大城的地名多、网络慢时要下很久，超时就先用回退字体画，返回 false；later 在字体全部到齐（或失败）时兑现，调用方据此重画
+ */
+export async function ensureSettleFonts(st: Settlement, style: SettleStyleId, lg: Lang = 'zh', wait = 2500): Promise<{ ready: boolean; later: Promise<unknown> }> {
   const th = settleTheme(style)
   const text = [st.nameZh, st.name, st.nameJa, ...st.labels.map((l) => l.text[lg] + (l.sub?.[lg] ?? '')), SIZE_NAME[lg][st.params.size], CAPITAL_NAME[lg], POP_TEXT[lg]('0123456789,'), tr('区划', lg), ...LAND_USES.map((d) => tr(d.name, lg))].join('')
   const fams = new Set<string>()
@@ -1640,9 +1644,8 @@ export async function ensureSettleFonts(st: Settlement, style: SettleStyleId, lg
   if (eastAsian(st.params.culture) || th.seal) fams.add('"Ma Shan Zheng"')
   const loads: Promise<unknown>[] = []
   for (const fam of fams) for (const w of ['400', '600', 'italic 400']) loads.push(document.fonts.load(`${w} 20px ${fam}`, text))
-  try {
-    await Promise.all(loads)
-  } catch {
-    // 字体加载失败回退系统字体
-  }
+  // 字体加载失败回退系统字体
+  const later = Promise.all(loads).catch(() => undefined)
+  const ready = await Promise.race([later.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), wait))])
+  return { ready, later }
 }
