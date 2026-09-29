@@ -59,6 +59,8 @@ export interface SettlementParams {
   farms: boolean
   /** 农田范围 0 ~ 1：0 只在城边一圈，1 铺得很远 */
   farmland: number
+  /** 城墙的曲折度 0 ~ 1：0 是一圈平顺的墙，1 贴着片区之间的街曲曲折折地走 */
+  wallBend: number
   /** 海所在方向、河流来向、山所在方向（弧度）；NaN 表示随机 */
   coastDir: number
   riverDir: number
@@ -113,6 +115,7 @@ export const DEFAULT_SETTLEMENT: SettlementParams = {
   relief: 0.4,
   farms: true,
   farmland: 0.4,
+  wallBend: 0.3,
   coastDir: NaN,
   riverDir: NaN,
   hillDir: NaN,

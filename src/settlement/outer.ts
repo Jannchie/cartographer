@@ -624,7 +624,7 @@ export function wild(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>) 
   const slope = T.slopeAt(c)
   const dens = veg.trees * (0.0006 + 0.004 * cluster * cluster + slope * 0.01)
   const g = clipWater(ctx, insetConvex(block, 3), 3)
-  if (g) scatterTrees(ctx, g, dens, 3, 6.5)
+  if (g) scatterTrees(ctx, g, dens, 3, 6.5, 'tree.wild')
   void rng
 }
 

@@ -71,6 +71,11 @@ export interface HistoryState {
   sources: { line: P[]; born: number }[]
   /** 第 k 个（从 0 数）某种地标出现时的人口（按各人口下的自动数量） */
   countPop: (id: string, k: number) => number
+  /**
+   * 只要最后那一刻的地图（单次生成）：城外整片的形态（田野、荒地、城外的村子）先不盖，
+   * 调度完只盖到最后还在的那些——它们不住人，盖不盖不影响别的片区怎么长
+   */
+  lazy?: boolean
 }
 
 /** 输出数组的一个记号：之后追加的、删掉的（stamp 按它给生卒） */
@@ -131,7 +136,7 @@ export function piece(key: OutKey, item: object, units = 0): Piece {
 const SOLID = new Set<OutKey>(['buildings', 'plazas', 'piers'])
 const boxHit = (a: BBox, b: BBox) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 /** 两样东西压在一起（新房压住旧房、院墙、树） */
-function overlaps(a: Piece, b: Piece) {
+export function overlaps(a: Piece, b: Piece) {
   // 树只被实心的东西压掉（房子、铺装、码头）：院墙、园地圈着的院子里本来就有树，
   // 树位又钉在世界网格上（见 wards.ts 的 scatterTrees），新旧两套里同一处的是同一棵树
   if (b.key === 'trees' && !SOLID.has(a.key)) return false
@@ -209,39 +214,50 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
     aliveOf(patch).delete(x)
     supply -= x.units
   }
+  /**
+   * 形态开张：换下这块片区原来的东西、铺上新的底。整片的形态开始时就开张；民居形态等第一户入住时才开张——
+   * 加入了城区却还没人来住的地仍是原来的田野，不会先铺出一片空街坊
+   */
+  const opened = new Set<Form>()
+  const open = (f: Form, t: number) => {
+    if (opened.has(f)) return
+    opened.add(f)
+    const own = aliveOf(f.patch)
+    if (f.rural && !f.whole) {
+      // 零散的农家：田地、树留着，只有原来那块地（片区底）换成这一个
+      for (const x of [...own]) if (x.key === 'wards' || x.key === 'blocks') kill(x, t, f.patch)
+    } else if (f.whole || !f.rebuild) {
+      // 整片建成或从田野辟成民居：原来的一切清掉
+      for (const x of [...own]) kill(x, t, f.patch)
+    } else {
+      // 从农家翻建成街坊：散在田间的田地一次清掉
+      for (const x of [...own]) if (x.key === 'fields') kill(x, t, f.patch)
+      // 翻建：旧的街坊底去掉，落在新街坊之外（新的巷子里）的旧东西拆掉
+      const blocks = f.base.filter((x) => x.key === 'blocks' && x.poly).map((x) => x.poly!)
+      for (const x of [...own]) {
+        if (x.key === 'blocks' || x.key === 'wards') kill(x, t, f.patch)
+        else if (blocks.length) {
+          const c: P = x.p ?? [(x.box[0] + x.box[2]) / 2, (x.box[1] + x.box[3]) / 2]
+          if (!blocks.some((b) => pointInPoly(c, b))) kill(x, t, f.patch)
+        }
+      }
+    }
+    for (const x of f.base) bear(x, t, f.patch)
+  }
   // 等着入住的户：按最早可以入住的时刻排，到时移进"可以入住"，再按先后入住
   const waiting: Group[] = []
   let ready: Group[] = []
   const step = o.step ?? 1.03
   for (let t = o.from; ; t = Math.min(o.until, t * step)) {
-    // 1. 开始的形态
+    // 1. 开始的形态：整片的当下建成；民居形态等第一户入住时才开张（见 open）
     while (fi < pending.length && pending[fi].start <= t) {
       const f = pending[fi++]
-      const own = aliveOf(f.patch)
       // 同一片区之前的形态不再有新户入住
       for (const g of byPatch.get(f.patch)!) if (g !== f && g.start <= f.start) g.closed = true
-      if (f.rural && !f.whole) {
-        // 零散的农家：田地、树留着，只有原来那块地（片区底）换成这一个
-        for (const x of [...own]) if (x.key === 'wards' || x.key === 'blocks') kill(x, t, f.patch)
-      } else if (f.whole || !f.rebuild) {
-        // 整片建成或从田野辟成民居：原来的一切清掉
-        for (const x of [...own]) kill(x, t, f.patch)
-      } else {
-        // 从农家翻建成街坊：散在田间的田地一次清掉
-        for (const x of [...own]) if (x.key === 'fields') kill(x, t, f.patch)
-        // 翻建：旧的街坊底去掉，落在新街坊之外（新的巷子里）的旧东西拆掉
-        const blocks = f.base.filter((x) => x.key === 'blocks' && x.poly).map((x) => x.poly!)
-        for (const x of [...own]) {
-          if (x.key === 'blocks' || x.key === 'wards') kill(x, t, f.patch)
-          else if (blocks.length) {
-            const c: P = x.p ?? [(x.box[0] + x.box[2]) / 2, (x.box[1] + x.box[3]) / 2]
-            if (!blocks.some((b) => pointInPoly(c, b))) kill(x, t, f.patch)
-          }
-        }
-      }
-      for (const x of f.base) bear(x, t, f.patch)
-      if (f.whole) for (const g of f.groups) for (const x of g.pieces) bear(x, t, f.patch)
-      else for (const g of f.groups) waiting.push(g)
+      if (f.whole) {
+        open(f, t)
+        for (const g of f.groups) for (const x of g.pieces) bear(x, t, f.patch)
+      } else for (const g of f.groups) waiting.push(g)
     }
     // 2. 住户补足
     const due = waiting.filter((g) => g.avail <= t && !g.form.closed)
@@ -261,6 +277,7 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
       while (queue.length) {
         const g = queue.pop()!
         const f = g.form
+        open(f, t)
         const own = aliveOf(f.patch)
         for (const x of [...own]) {
           if (formOf.get(x) === f) continue

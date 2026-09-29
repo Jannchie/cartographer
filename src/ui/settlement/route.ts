@@ -24,7 +24,7 @@ const DEF = DEFAULT_SETTLEMENT as unknown as Record<string, unknown>
 /** 数值保留到四位小数（气候两位）：写进地址的值与生成用的值完全一致，刷新得到同一座聚落 */
 export function roundParams(p: SettlementParams) {
   const r = (v: number, d = 4) => (Number.isFinite(v) ? +v.toFixed(d) : v)
-  for (const k of ['population', 'regularity', 'radial', 'spread', 'relief', 'farmland', 'coastDir', 'riverDir', 'hillDir'] as const) p[k] = r(p[k])
+  for (const k of ['population', 'regularity', 'radial', 'spread', 'relief', 'farmland', 'wallBend', 'coastDir', 'riverDir', 'hillDir'] as const) p[k] = r(p[k])
   if (p.planStrength !== undefined) p.planStrength = r(p.planStrength)
   if (p.climate) p.climate = { temp: r(p.climate.temp, 2), rain: r(p.climate.rain, 2), biome: p.climate.biome }
 }

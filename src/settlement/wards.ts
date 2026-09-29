@@ -597,11 +597,11 @@ function farmstead(ctx: Ctx, lot: Lot) {
 }
 
 /**
- * 在区域里按密度（棵 / 平方米）撒树。树位钉在世界坐标的一张 6 米网格上：每格一个候选点，
+ * 在区域里按密度（棵 / 平方米）撒树（grid：用哪一张网格，野地的林子与院里、田边的树各用一张，砍了林子开出的地上种的树不在原处）。树位钉在世界坐标的一张 6 米网格上：每格一个候选点，
  * 位置、树冠大小与"门槛"都按格子的位置取哈希，格子的门槛低于这里的密度才种。
  * 于是同一棵树在任何规模下都在同一个地方：片区的边界挪一点只增减边上的几棵，密度升高只多种、不挪动已有的。
  */
-export function scatterTrees(ctx: Ctx, poly: Poly, density: number, r0: number, r1: number) {
+export function scatterTrees(ctx: Ctx, poly: Poly, density: number, r0: number, r1: number, grid = 'tree') {
   if (poly.length < 3 || density <= 0) return
   const s = TREE_CELL
   const p0 = density * s * s
@@ -611,10 +611,10 @@ export function scatterTrees(ctx: Ctx, poly: Poly, density: number, r0: number, 
   for (let j = Math.floor((y0 - oy) / s); j <= Math.floor((y1 - oy) / s); j++)
     for (let i = Math.floor((x0 - ox) / s); i <= Math.floor((x1 - ox) / s); i++) {
       const cell: P = [ox + i * s, oy + j * s]
-      if (hashAt(ctx, cell, 'tree.gate') >= p0) continue
-      const p: P = [cell[0] + hashAt(ctx, cell, 'tree.x') * s, cell[1] + hashAt(ctx, cell, 'tree.y') * s]
+      if (hashAt(ctx, cell, `${grid}.gate`) >= p0) continue
+      const p: P = [cell[0] + hashAt(ctx, cell, `${grid}.x`) * s, cell[1] + hashAt(ctx, cell, `${grid}.y`) * s]
       if (!pointInPoly(p, poly)) continue
-      plantTree(ctx, p, r0 + hashAt(ctx, cell, 'tree.r') * (r1 - r0))
+      plantTree(ctx, p, r0 + hashAt(ctx, cell, `${grid}.r`) * (r1 - r0))
     }
 }
 /** 撒树的网格（米）：最密的撒法（约 0.02 棵 / 平方米）每格也不到一棵 */

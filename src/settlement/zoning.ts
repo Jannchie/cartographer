@@ -280,7 +280,8 @@ export function placeLandmarks(ctx: Ctx) {
       // 拆掉的人家留下的院墙、菜园、树也清走（地标自己刚加的院墙、院子留着）
       clearYards(ctx, fp, { to: before })
       mark(ctx, c.at, spec.mark)
-      if (hm) stamp(ctx, hm, ctx.history!.countPop(def.id, made.length))
+      // 数量够了、所在的片区也有人住了才盖（不在那时还是田野的外围先冒出一座）
+      if (hm) stamp(ctx, hm, Math.max(ctx.history!.countPop(def.id, made.length), ctx.history!.life.get(ward)?.born ?? 0))
       made.push(c.at)
     }
   }

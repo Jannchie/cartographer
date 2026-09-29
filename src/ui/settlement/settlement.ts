@@ -3,8 +3,8 @@ import type { World } from '../../gen/types'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { fromWorld } from '../../settlement/fromWorld'
-import { generateHistory, generateSettlement, settlementExtent } from '../../settlement/generate'
-import { snapshot } from '../../settlement/history'
+import { generateHistory } from '../../settlement/generate'
+import { snapshot, type SettlementHistory } from '../../settlement/history'
 import { pointInPoly, type P } from '../../settlement/geom'
 import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
 import { SETTLE_THEMES, type SettleStyleId } from '../../settlement/themes'
@@ -109,6 +109,11 @@ export function setRandom(k: 'mode' | 'terrain', v: string) {
 }
 
 let st: Settlement | null = null
+/**
+ * 这座城的成长史（见 settlement/history.ts）：显示的地图是它在当前人口时的快照。
+ * 成长动画、把人口往小拖都直接从它取；换了别的参数（run）重新推演
+ */
+let hist: SettlementHistory | null = null
 const cache = new Map<string, DisplayList>()
 let viewer: AtlasViewer | null = null
 let host: HTMLElement | null = null
@@ -254,7 +259,8 @@ export async function run() {
   await new Promise((r) => setTimeout(r, 30))
   if (id !== job) return
   try {
-    st = markRaw(generateSettlement({ ...toRaw(p), counts: { ...toRaw(p.counts) } }))
+    hist = markRaw(generateHistory({ ...toRaw(p), counts: { ...toRaw(p.counts) } }))
+    st = markRaw(snapshot(hist, p.population))
   } catch (err) {
     console.error(err)
     ss.loading.stage = '生成失败：' + (err instanceof Error ? err.message : String(err))
@@ -303,11 +309,10 @@ async function refresh(fit = false, quiet = false) {
  * 生成并显示一帧，不显示加载遮罩（拖动人口、成长动画用）。
  * 同一个种子的聚落是连续长大的（见 generate.ts），所以逐帧换人口看起来就是在长。
  */
-async function quickRun(population = ss.params.population, frame?: Pick<SettlementParams, 'minExtent' | 'planPop'>) {
-  st = markRaw(generateSettlement({ ...toRaw(ss.params), population, ...frame, counts: { ...toRaw(ss.params.counts) } }))
-  cache.clear()
-  showInfo(st)
-  await refresh(false, true)
+async function quickRun(population = ss.params.population) {
+  // 比算好的成长史小：就是这座城当年的样子，直接取快照；比它大才重新推演
+  if (!hist || population > hist.until) hist = markRaw(generateHistory({ ...toRaw(ss.params), population, counts: { ...toRaw(ss.params.counts) } }))
+  await showFrame(snapshot(hist, population))
 }
 
 /** 拖动时实时重算：正在算就只记下"还要再算"，算完接着算最新的值，不排队 */
@@ -355,22 +360,22 @@ export async function playGrowth() {
   const from = Math.min(30, target)
   const frames = 48
   const pops = Array.from({ length: frames + 1 }, (_, k) => Math.round(Math.exp(Math.log(from) + ((Math.log(target) - Math.log(from)) * k) / frames)))
-  // 各帧共用一个画幅（取各帧里最大的）：城在原地长大，视图不跟着每帧的地图大小缩放；
-  // 规划（规划区、宫城）一开始就按最终的人口划好，各帧只是把它住满
-  const ex = pops.map((population) => settlementExtent({ ...toRaw(ss.params), population }))
-  const frame = { minExtent: [Math.max(...ex.map((e) => e[0])), Math.max(...ex.map((e) => e[1]))] as [number, number], planPop: target }
-  ss.loading.show = true
-  ss.loading.stage = '推演城市的成长史'
-  await new Promise((r) => setTimeout(r, 30))
-  if (!ss.growing) {
+  // 现在显示的地图就是这座城成长史的最后一刻：还没算过（或拖小过人口）才推演一次
+  if (!hist || hist.until !== target) {
+    ss.loading.show = true
+    ss.loading.stage = '推演城市的成长史'
+    await new Promise((r) => setTimeout(r, 30))
+    if (!ss.growing) {
+      ss.loading.show = false
+      return
+    }
+    hist = markRaw(generateHistory({ ...toRaw(ss.params), population: target, counts: { ...toRaw(ss.params.counts) } }))
     ss.loading.show = false
-    return
   }
-  const hist = markRaw(generateHistory({ ...toRaw(ss.params), ...frame, population: target, counts: { ...toRaw(ss.params.counts) } }))
-  ss.loading.show = false
+  const h = hist
   for (let k = 0; k <= frames && ss.growing; k++) {
     const t0 = performance.now()
-    await showFrame(snapshot(hist, pops[k]))
+    await showFrame(snapshot(h, pops[k]))
     // 每帧至少停留 90 毫秒，小聚落算得快时也看得清
     await new Promise((r) => setTimeout(r, Math.max(0, 90 - (performance.now() - t0))))
   }

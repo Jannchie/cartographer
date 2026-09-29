@@ -35,16 +35,16 @@ import { STYLES } from './styles'
 import { CULTURE_INFO, eastAsian, planFits } from './culture'
 import { ruralExtras } from './rural'
 import { tierReserve, wardExtras } from './tiers'
-import { checkpoint, demolish, drop, rollback, type Checkpoint } from './undo'
+import { checkpoint, demolish, drop, rollback } from './undo'
 import { sacredSites } from './sacred'
 import { PLANS } from './plans'
 import type { PlanLot, PlanZone } from './plans/types'
 import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
-import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
+import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
-import { groupForm, outMark, piece, schedule, stamp, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
+import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
 
 /**
  * 规模与画幅：规模档位由人口推出，结构参数按人口连续插值；地图范围按要住下的人口铺开。
@@ -98,20 +98,29 @@ function scaled(input: SettlementParams) {
 /** 这组参数生成的地图范围（米） */
 export const settlementExtent = (input: SettlementParams) => scaled(input).extent
 
+/**
+ * 一座人口为 input.population 的聚落：就是它成长史的最后一刻（与成长动画的最后一帧是同一座城）。
+ * 只要最后一刻，城外早已开垦、并进城区的田野不必盖出来（见 HistoryState.lazy）
+ */
 export function generateSettlement(input: SettlementParams): Settlement {
-  return build(input, false).st
+  const t0 = performance.now()
+  const st = snapshot(generateHistory(input, { lazy: true }), input.population ?? POP_OF_SIZE[input.size])
+  st.stats.ms = performance.now() - t0
+  return st
 }
 
 /**
  * 一座城长到 input.population 人的成长史（见 history.ts）：每样东西带着生卒，任一人口时的地图用 snapshot 取。
  * 成长动画只生成一次，逐帧取快照
  */
-export function generateHistory(input: SettlementParams): SettlementHistory {
-  const { st, history } = build(input, true)
+export function generateHistory(input: SettlementParams, o: { lazy?: boolean } = {}): SettlementHistory {
+  const { st, history } = build(input, o.lazy)
   const h = history!
   // 最终状态之外、只在历史上出现过的东西并进来（快照按生卒挑）
   const all = { ...st } as Settlement
-  for (const { key, item } of h.past) (all as any)[key] = [...((all as any)[key] as object[]), item]
+  const past = new Map<string, object[]>()
+  for (const { key, item } of h.past) (past.get(key) ?? past.set(key, []).get(key)!).push(item)
+  for (const [key, items] of past) (all as any)[key] = [...((all as any)[key] as object[]), ...items]
   // 从没出现过的（出生前就被拆掉的）不要
   for (const k of Object.keys(all) as (keyof Settlement)[]) {
     const a = all[k]
@@ -124,7 +133,7 @@ export function generateHistory(input: SettlementParams): SettlementHistory {
   return { st: all, life: h.life, until: st.params.population }
 }
 
-function build(input: SettlementParams, withHistory: boolean): { st: Settlement; history?: HistoryState } {
+function build(input: SettlementParams, lazy = false): { st: Settlement; history?: HistoryState } {
   const t0 = performance.now()
   const { p, cfg, households, extent: own } = scaled(input)
   // 画幅至少是 minExtent（成长动画各帧用同一个画幅，城在原地长大）
@@ -189,7 +198,7 @@ function build(input: SettlementParams, withHistory: boolean): { st: Settlement;
     },
   }
   ctx.Rin = Math.sqrt((cfg.inner * 0.87 * cfg.patch * cfg.patch) / Math.PI)
-  if (withHistory) ctx.history = { life: new Map(), past: [], sources: [], countPop: countPopper(p, p.walls !== 'none') }
+  ctx.history = { life: new Map(), past: [], sources: [], countPop: countPopper(p, p.walls !== 'none'), lazy }
   ctx.center = pickCenter(ctx)
   const arterials = routeArterials(ctx)
 
@@ -762,32 +771,20 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
   for (const pa of patches) if (!pa.inner && pa.land >= 0.5 && pa.nb.length && pa.nb.every((j) => patches[j].inner)) pa.inner = true
   const joinPop = new Map<number, number>()
   const lanes = new Map<number, number>()
-  const perHaRef = housesPerHa({ ...ctx.p, population: POP_OF_SIZE.town })
-  let acc = 0
-  for (const i of order) {
-    joinPop.set(i, (acc * perHousehold(ctx.p.culture)) / 1.3)
-    acc += (area(patches[i].poly) * patches[i].land * perHaRef) / 10000
-  }
-  // 四周都加入以后就成了洞、被并进城区：加入的时刻取"轮到它"与"成了洞"里早的那个
-  //（否则城小时它是按邻居算的洞，城长大、生长顺序轮到它时又按自己排在后面算，前后对不上）
-  patches.forEach((pa, i) => {
-    if (pa.land < 0.5 || !pa.nb.length || !pa.nb.every((j) => joinPop.has(j))) return
-    const hole = Math.max(...pa.nb.map((j) => joinPop.get(j)!))
-    if (hole < (joinPop.get(i) ?? Infinity)) joinPop.set(i, hole)
-  })
-  // 成长史：各片区加入的时刻按"那时的人口要多少片区"（按那时的密度：村子时候是零散的农家，一块地住不了几户）。
+  // 各片区加入的时刻按"那时的人口要多少片区"（按那时的密度：村子时候是零散的农家，一块地住不了几户）。
   // 第 k 块在够住下 x 人要的片区数 L 数到它时加入，两个取样之间按对数插值；副中心在它出现的时刻
-  if (ctx.history) {
-    joinPop.clear()
+  {
     order.forEach((i, k) => {
       const j = history.findIndex((h) => (h.L ?? Infinity) >= k + 1)
-      if (j < 0) return
+      // 取样里没有哪个时刻要到这么多片区（生长到了地形的尽头）：到现在也还没加入
+      if (j < 0 || history[j].L === undefined) return
       const h = history[j]
       const prev = history[j - 1]
       const t = !prev ? (h.x * (k + 1)) / h.L! : prev.x * Math.pow(h.x / prev.x, (k + 1 - prev.L!) / Math.max(1, h.L! - prev.L!))
       joinPop.set(i, t)
     })
     ctx.cores.forEach((_, k) => joinPop.set(seeds[k], k ? subBirth(ctx.p, k - 1, seeds.length - 1) : 0))
+    // 四周都加入以后就成了洞、被并进城区：加入的时刻取"轮到它"与"成了洞"里早的那个
     patches.forEach((pa, i) => {
       if (pa.land < 0.5 || !pa.nb.length || !pa.nb.every((j) => joinPop.has(j))) return
       const hole = Math.max(...pa.nb.map((j) => joinPop.get(j)!))
@@ -1010,81 +1007,16 @@ function smoothNoise(ctx: Ctx, q: P, scale: number, tag: string) {
 }
 
 /**
- * 各片区的占用率（0 ~ 1，每块宅地按位置哈希决定盖不盖，所以占用率升高只会多盖、已有的房子不动）：
- * - 城内：离核心近的高、远的低，中间是约三个片区宽的软过渡；过渡带的位置 r 取到"预计户数 ≈ 目标户数"；
- * - 城门外的城郊（关厢）：城墙里住得越满越多，越靠近城门越密；没有城墙时和城内一样按距离渐变；
- * - 特殊片区、田间照常盖。
+ * 各片区按布局的远近（方格布局下等距线是方的），再叠一层平滑噪声和逐块扰动：外围有进有出，不是完美的同心渐变。
+ * 城外的片区按它由近到远盖
  */
-function occupancy(ctx: Ctx, patches: Patch[], stages: WallStage[], growth: Growth): { fill: number[]; quota: number[]; d: number[] } {
-  const perHa = housesPerHa(ctx.p)
-  // 城内的街坊按功能与密度档的实测容量，零散农家按农家的；城郊按平均
-  const Rin = rinFor(ctx.p, ctx.p.population)
-  const cap = (pa: Patch) => {
-    const rate = !pa.inner || !pa.type ? perHa : mixRate(farmPerHa(ctx.p.culture), wardRate(ctx.p.culture, pa.type, ctx.p.population, pa.score ?? 0), wardTown(ctx, pa.site, ctx.p.population, Rin))
-    return (area(pa.poly) * pa.land * rate) / 10000
-  }
-  const PLAIN = new Set<WardType | undefined>(['common', 'merchant', 'craft', 'slum', 'noble'])
-  const W = ctx.cfg.patch * 1.5
-  // 按布局的距离（方格布局下等距线是方的），再叠一层平滑噪声和逐块扰动：外围有进有出，不是完美的同心渐变
+function layoutDistances(ctx: Ctx, patches: Patch[]): number[] {
   const ld = layoutDist(ctx, ctx.out.roads.filter((r) => r.kind === 'main' || r.kind === 'highway').map((r) => r.line))
   // 城越大，边缘的起伏越大
   const wob = ctx.env.big ? 0.5 + 0.3 * Math.min(1, Math.log2(Math.max(1, ctx.p.population / 8000)) / 3) : 0.5
-  const d = patches.map((pa) => ld(pa.site) * (1 + (smoothNoise(ctx, pa.site, 220, 'occupancy') - 0.5) * wob) + (hashAt(ctx, pa.site, 'occupancy.jitter') - 0.5) * ctx.cfg.patch)
-  const gates = ctx.cityWalls.flatMap((w) => w.gates.map((g) => g.p))
-  const last = stages.at(-1)
-  // 关厢：城墙里快住满时开始在城门外出现，人口越过城墙的容量越多
-  const faubourg = last ? sm01(0.8, 1.5, ctx.p.population / last.cap) : 0
-  // 城市已经远远长出最外那道墙：城郊与墙外城区一样按距离渐变；刚溢出时，城郊的房子聚在城门口
-  const outgrown = !last || ctx.p.population > last.cap * 1.5 || !gates.length
-  const subFill = (pa: Patch) => faubourg * Math.exp(-Math.min(...gates.map((g) => dist(g, pa.site))) / 220)
-  const byDist = (i: number, r: number) => 1 - sm01(r - W, r + W, d[i])
-  // 城内按片区加入城区时的人口（与现在的人口无关，见 Growth.joinPop）：早加入的住满，最近加入的住得稀，
-  // 软过渡落在最新的一圈上。城市长大时每块片区的占用率只升不降——已有的房子不会挪到别的片区去
-  // 城墙圈进来、生长还没轮到的空地算作还没加入（空着），轮到时再按它自己的加入时刻住人
-  const jp = patches.map((_, i) => growth.joinPop.get(i) ?? Infinity)
-  const byJoin = (i: number, s: number) => 1 - sm01(s * 0.7, s * 1.3, jp[i])
-  // 城郊（城市长出城墙以后）按距离：以已经住上人的城区的外沿为界
-  const inner = patches.map((_, i) => i).filter((i) => patches[i].inner && PLAIN.has(patches[i].type))
-  const edge = (s: number) => {
-    const ds = inner.filter((i) => jp[i] <= s).map((i) => d[i]).sort((a, b) => a - b)
-    return ds.length ? ds[Math.floor((ds.length - 1) * 0.9)] : 0
-  }
-  // 估算按盖满的实测值，部分占用的片区实际盖得少一些：目标留足余量（盖房由内往外，预算用完截掉的是最外围）
-  // 撒祠、村社、堂区教堂要拆掉几户（见 tiers.ts），多留出这一点
-  const target = ctx.houseBudget * 1.2 * tierReserve(ctx.p.culture)
-  const expect = (s: number) => {
-    const r = edge(s)
-    let sum = 0
-    patches.forEach((pa, i) => {
-      if (pa.inner && PLAIN.has(pa.type)) sum += cap(pa) * byJoin(i, s)
-      else if (pa.type === 'suburb') sum += cap(pa) * 0.6 * (outgrown ? byDist(i, r) : subFill(pa))
-    })
-    return sum
-  }
-  let lo = 0
-  let hi = Math.max(1, ...jp.filter(Number.isFinite)) * 2
-  for (let it = 0; it < 30; it++) {
-    const mid = (lo + hi) / 2
-    if (expect(mid) < target) lo = mid
-    else hi = mid
-  }
-  const s = hi
-  const r = edge(s)
-  const fill = patches.map((pa, i) => {
-    if (pa.inner && PLAIN.has(pa.type)) return byJoin(i, s)
-    if (pa.type === 'suburb') return outgrown ? byDist(i, r) : subFill(pa)
-    return 1
-  })
-  // 各片区的名额：估算里它该住的户数（容量 × 占用率，合起来正好是上面的目标）；别的片区不限，由全城的预算管
-  const quota = patches.map((pa, i) => ((pa.inner && PLAIN.has(pa.type)) || pa.type === 'suburb' ? Math.max(1, Math.round(cap(pa) * fill[i] * (pa.type === 'suburb' ? 0.6 : 1) * QUOTA_SLACK)) : Infinity))
-  return { fill, quota, d }
+  return patches.map((pa) => ld(pa.site) * (1 + (smoothNoise(ctx, pa.site, 220, 'occupancy') - 0.5) * wob) + (hashAt(ctx, pa.site, 'occupancy.jitter') - 0.5) * ctx.cfg.patch)
 }
-/** 名额的余量：盖不满名额的片区（地块被路、水切掉）空出来的户数，让别的片区多盖一点补上，全城才凑得够人口 */
-const QUOTA_SLACK = 1.5
-const sm01 = (a: number, b: number, x: number) => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
-  return t * t * (3 - 2 * t)
-}
+
 
 /** 人口为 pop 时的城区（生长顺序的前缀，再填上四周都是城区的洞） */
 function innerAt(ctx: Ctx, patches: Patch[], g: Growth, pop: number, arterials: P[][]): boolean[] {
@@ -1240,12 +1172,14 @@ function wallLoops(ctx: Ctx, patches: Patch[], set: boolean[], pop: number): P[]
     if (simp.length < 3) continue
     const inside = ctx.cores.filter((c) => pointInPoly(c.c, simp))
     if (!inside.length) continue
-    // 先把片区轮廓的锯齿磨成圆润的外廓；规整时再向矩形（方格）或圆形（放射）收拢；最后整理成一段段直墙
+    // 先把片区轮廓的锯齿磨成圆润的外廓；规整时再向矩形（方格）或圆形（放射）收拢；最后整理成一段段直墙。
+    // 曲折度（wallBend）：0 是这圈平顺的外廓，1 贴着片区之间的街走（中心落在外廓里的片区合起来的外边界），中间按各方向的远近插值
     const target = morphWall(ctx, smoothLoop(simp), inside[0], inside.length > 1)
-    // 城墙贴着街走：取中心落在目标外廓里的片区，它们合起来的外边界（片区之间的公共边就是街）作为城墙
-    const along = patchOutline(patches, target, inside.map((c) => c.c))
+    const bend = ctx.p.wallBend ?? DEFAULT_SETTLEMENT.wallBend
+    const along = bend > 0 ? patchOutline(patches, target, inside.map((c) => c.c)) : null
+    const loop = along ? (bend >= 1 ? along : bendLoop(target, along, bend)) : target
     // 墙段的长短按修墙时的规模（不按现在的）：同一道墙在城市长大以后还是原来的样子
-    loops.push(cleanLoop(along ?? target, scaleOf(pop).size === 'city' ? 14 : 10))
+    loops.push(cleanLoop(loop, scaleOf(pop).size === 'city' ? 14 : 10))
   }
   return loops
 }
@@ -1300,6 +1234,33 @@ function outlines(polys: Poly[]): P[][] {
     if (loop.length >= 3) loops.push(loop)
   }
   return loops
+}
+
+/**
+ * 两圈轮廓之间：从 a 的形心往外看，各方向取两圈最远交点的半径按 t 插值（0 是 a，1 是 b）。
+ * 方向取得密（2 度一个），b 的折角大体保留
+ */
+function bendLoop(a: P[], b: P[], t: number): P[] {
+  const c = centroid(a)
+  const N = 180
+  const far = (loop: P[], d: P) => {
+    let r = 0
+    for (let i = 0; i < loop.length; i++) {
+      const hit = segIntersect(c, [c[0] + d[0] * 1e5, c[1] + d[1] * 1e5], loop[i], loop[(i + 1) % loop.length])
+      if (hit && hit.u >= 0 && hit.u <= 1 && hit.t >= 0) r = Math.max(r, hit.t * 1e5)
+    }
+    return r
+  }
+  const out: P[] = []
+  for (let k = 0; k < N; k++) {
+    const ang = (k / N) * Math.PI * 2
+    const d: P = [Math.cos(ang), Math.sin(ang)]
+    const ra = far(a, d)
+    const rb = far(b, d) || ra
+    const r = ra + (rb - ra) * t
+    out.push([c[0] + d[0] * r, c[1] + d[1] * r])
+  }
+  return simplifyLoop(out, 1.5)
 }
 
 /**
@@ -1716,20 +1677,14 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   const veg = vegetation(ctx)
   const small = isVillage(p.size)
   const baseRng = ctx.rng
-  // 占用率：城内按离核心的距离渐变（软边界），城门外的关厢随城墙里住满的程度出现（见 occupancy）
-  const { fill, quota, d: layoutD } = occupancy(ctx, patches, stages, growth)
-  // 村巷等知道哪些地会有人家以后再修：只通往占用率够的片区，不修通往空地的巷子。
-  // 成长史里通往加入城区时还是零散农家的片区（城长大以后这些巷子还在）
+  const layoutD = layoutDistances(ctx, patches)
+  // 村巷：通往加入城区时还是零散农家的片区（城长大以后这些巷子还在；什么时候修见 stampRoads）
   const joinedR = joinedRadius(patches, growth)
-  const lanesFor = ctx.history
-    ? (i: number) => {
-        const J = growth.joinPop.get(i)
-        return J !== undefined && patches[i].inner && wardTown(ctx, patches[i].site, J, joinedR(J)) === 0
-      }
-    : isVillage(p.size)
-      ? (i: number) => fill[i] > 0.25
-      : null
-  if (lanesFor) {
+  const lanesFor = (i: number) => {
+    const J = growth.joinPop.get(i)
+    return J !== undefined && patches[i].inner && wardTown(ctx, patches[i].site, J, joinedR(J)) === 0
+  }
+  {
     const old = new Set(ctx.out.roads)
     villageLanes(ctx, patches, arterials, lanesFor)
     // 新修的巷子也并进路网（与干道重叠的段落去掉），只给新增的段登记走廊
@@ -1738,7 +1693,6 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   }
   // 路网定了（最后一次整理之后）再架桥
   crossings(ctx)
-  if (ctx.history) stampRoads(ctx, patches, growth)
   // 先把城内（墙内）的片区由近到远盖满，再盖城郊与田间：民居预算用完时，
   // 少掉的是城外零散的房子，而不是墙根下留出一圈空地
   // 城外的村庄（农户聚居在村里，每天出村种田）
@@ -1751,31 +1705,18 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
     if (site) palaces.set(i, site)
   })
   const wards: Ward[] = patches.map((pa) => ({ poly: pa.poly, type: pa.type ?? 'wild', inner: pa.inner, density: pa.inner ? pa.density : undefined, ...(pa.grand ? { tier: 'grand' as const } : {}) }))
-  if (!ctx.history) ctx.out.wards.push(...wards)
   // 城区按加入城区的先后盖（填洞、城墙圈进来的排在相邻片区里最晚加入的之后）：民居预算用完时截掉的总是最新辟的片区，
   // 城市长大时多出的预算也只落在新片区上——按远近排的话，新加入却离得近的片区会抢走预算，外围老片区的房子整片消失。
   // 城外（城郊、田间）按布局距离，与占用率同一套：截掉的是布局意义上最外围的
   const joined = new Map(growth.order.map((i, k) => [i, k]))
   const joinRank = (i: number) => joined.get(i) ?? Math.max(0, ...patches[i].nb.map((j) => joined.get(j) ?? 0)) + 0.5
   const order = patches.map((pa, i) => [pa.inner ? joinRank(i) : 1e6 + layoutD[i], i] as const).sort((a, b) => a[0] - b[0])
-  // 街坊 / 农家按现在人口的城区半径判定（与容量估算同一个，见 capacityModel、occupancy）
-  const townR = rinFor(p, p.population)
-  const S: WardStage = { patches, wards, growth, fields, villages, palaces, veg, small, fill, quota }
-  // 成长史：各片区按形态时间线盖、按人口调度（见 historyWards）
-  if (ctx.history) historyWards(ctx, S, order.map(([, i]) => i).filter((i) => wards[i].type !== 'water' && !(patches[i].poly.every((v) => v[0] < 0 || v[1] < 0 || v[0] > ctx.MW || v[1] > ctx.MH) && !patches[i].inner)), arterials)
-  else for (const [, i] of order) {
-    const pa = patches[i]
-    const ward = wards[i]
-    if (ward.type === 'water') continue
-    // 整块在画面外（布点时多铺的一圈）：不盖东西
-    if (pa.poly.every((v) => v[0] < 0 || v[1] < 0 || v[0] > ctx.MW || v[1] > ctx.MH) && !pa.inner) continue
-    wardSetup(ctx, S, i, p.population, townR)
-    const block = wardBlock(ctx, S, i)
-    if (!block) continue
-    // 片区开盖前的检查点：盖完一户也没住上的片区整个撤回；small / micro 只动这之后本片区自己盖的东西
-    const cp = checkpoint(ctx)
-    buildWardForm(ctx, S, i, ward, block, cp)
-  }
+  const S: WardStage = { patches, wards, growth, fields, villages, palaces, veg, small }
+  // 各片区按形态时间线盖、按人口调度（见 historyWards）；水面、画面外多铺的一圈城外片区不盖
+  const walk = order.map(([, i]) => i).filter((i) => wards[i].type !== 'water' && !(patches[i].poly.every((v) => v[0] < 0 || v[1] < 0 || v[0] > ctx.MW || v[1] > ctx.MH) && !patches[i].inner))
+  const opened = historyWards(ctx, S, walk, arterials)
+  // 路等沿线的地真有人住了（片区开张）才修
+  stampRoads(ctx, patches, (i) => opened.get(i) ?? Infinity)
   ctx.tier = 'standard'
   ctx.rng = baseRng
   ctx.wardPop = undefined
@@ -1801,20 +1742,6 @@ interface WardStage {
   veg: ReturnType<typeof vegetation>
   /** 村落级（档位） */
   small: boolean
-  fill: number[]
-  quota: number[]
-}
-
-/** 开盖一块片区前设好 ctx：随机数流、占用率、名额、密度档、街坊 / 农家（pop、Rin 是盖的那一刻的人口与城区半径） */
-function wardSetup(ctx: Ctx, S: WardStage, i: number, pop: number, Rin: number) {
-  const pa = S.patches[i]
-  ctx.rng = wardRng(ctx, pa.site)
-  ctx.wardFill = S.fill[i]
-  ctx.wardQuota = S.quota[i]
-  ctx.wardPop = pa.foundPop
-  ctx.wardDensity = pa.density ?? 'mid'
-  // 这块是街坊还是零散的农家（村 → 镇连续过渡，见 wardTown）
-  ctx.wardTown = pa.inner && wardTown(ctx, pa.site, pop, Rin) > 0
 }
 
 /** 片区去掉四周街巷、田埂以后的可盖范围（按 ctx.wardTown：街坊四周都是街巷） */
@@ -1840,10 +1767,10 @@ function wardBlock(ctx: Ctx, S: WardStage, i: number): Poly | null {
 }
 
 /**
- * 按片区的类型盖一块片区（ctx 已由 wardSetup 设好）。cp 是开盖前的检查点：给了就照单次生成的做法，
- * 盖完撒路边的祠、神龛（wardExtras），一户也没盖上的民居片区撤回成农田；成长的历史里不给（这两件另按时间安排）
+ * 按片区的类型盖一块片区（ctx 的随机数流、密度档、街坊 / 农家等已由调用方设好，见 historyWards 的 buildForm）。
+ * 路边的祠、神龛（wardExtras）另按时间安排
  */
-function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Poly, cp?: Checkpoint) {
+function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Poly) {
   const { p } = ctx
   const plan = ctx.plan
   const pa = S.patches[i]
@@ -1880,8 +1807,6 @@ function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Pol
       break
     case 'suburb': {
       if (!styled()) urban(ctx, block, 'suburb', [], 26)
-      // 城郊沿路的人家之间也有路边的祠、十字架、塔楼民居
-      if (cp) wardExtras(ctx, ward, block, cp)
       break
     }
     case 'farm':
@@ -1893,7 +1818,6 @@ function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Pol
           ward.name ??= ctx.namer.town('village', false, false)
         } else {
           urban(ctx, block, 'village', [])
-          if (cp) wardExtras(ctx, ward, block, cp)
         }
         ctx.uncounted = false
       } else farm(ctx, block, S.veg, S.fields.get(i))
@@ -1901,23 +1825,12 @@ function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Pol
     case 'wild':
       wild(ctx, block, S.veg)
       break
-    default: {
-      const nb = ctx.out.buildings.length
+    default:
       // 文明有自己的盖法先用它；否则商贸城的城心是摊位更多的大市场
       if (!styled()) {
         if (i === 0 && type === 'market') plaza(ctx, ward, block, 2.5)
         else (FEATURE[type as FeatureId] ?? FEATURE.common).build!(ctx, ward, block, ctx.env)
       }
-      if (!cp) break
-      // 规划进城区、却一户也没盖上的外围民居 / 工匠 / 商人片区（预算先在里面用完了；村里沿路的人家没排到这块）：还是菜园、农田，不算城区
-      if ((type === 'common' || type === 'craft' || type === 'merchant') && pa.inner && !ctx.out.buildings.slice(nb).some((b) => b.kind === 'house' || b.kind === 'large')) {
-        rollback(ctx, cp)
-        ward.inner = false
-        ward.type = 'farm'
-        ward.density = undefined
-        farm(ctx, block, S.veg)
-      } else wardExtras(ctx, ward, block, cp)
-    }
   }
   if (royal) ctx.uncounted = false
 }
@@ -1929,7 +1842,7 @@ function buildWardForm(ctx: Ctx, S: WardStage, i: number, ward: Ward, block: Pol
  * - 街巷：沿路的地大多并进城区时（取中位数）。
  * 沿路的地按最近的片区站点算（Voronoi：落在谁的片区里就离谁的站点最近，片区边上的巷子取两边早的那块）
  */
-function stampRoads(ctx: Ctx, patches: Patch[], growth: Growth) {
+function stampRoads(ctx: Ctx, patches: Patch[], openAt: (i: number) => number) {
   const h = ctx.history!
   const G = 60
   const grid = new Map<string, number[]>()
@@ -1959,7 +1872,7 @@ function stampRoads(ctx: Ctx, patches: Patch[], growth: Growth) {
               sd = d
             }
           }
-    const jp = (i: number) => (i >= 0 && patches[i].inner ? (growth.joinPop.get(i) ?? Infinity) : Infinity)
+    const jp = (i: number) => (i >= 0 ? openAt(i) : Infinity)
     // 片区边上（到两个站点差不多远）：两边早的那块
     return second >= 0 && sd - bd < 2 ? Math.min(jp(best), jp(second)) : jp(best)
   }
@@ -1970,26 +1883,76 @@ function stampRoads(ctx: Ctx, patches: Patch[], growth: Growth) {
     return b
   }
   const add: Road[] = []
-  for (const r of ctx.out.roads) {
-    if (h.life.has(r)) continue
-    const js = resample(r.line, 12).map(joinAt).filter(Number.isFinite)
-    const src = sourceBorn(r.line)
-    if (r.kind === 'highway') h.life.set(r, { born: Number.isFinite(src) ? src : js.length ? Math.min(...js) : 0, died: Infinity })
-    else if (r.kind === 'main') {
-      const urban = js.length ? Math.min(...js) : Number.isFinite(src) ? src : 0
-      const born = Number.isFinite(src) ? Math.max(src, urban) : urban
-      h.life.set(r, { born, died: Infinity })
-      // 成主街之前是干道开通时就有的大路
-      if (Number.isFinite(src) && src < born) {
-        const road: Road = { line: r.line, width: ctx.cfg.highway, kind: 'highway' }
-        h.life.set(road, { born: src, died: born })
-        add.push(road)
-      }
-    } else {
-      js.sort((a, b) => a - b)
-      h.life.set(r, { born: js.length ? js[Math.floor(js.length / 2)] : Number.isFinite(src) ? src : 0, died: Infinity })
-    }
+  const keep: Road[] = []
+  const P = ctx.p.population
+  // 路宽随那时的规模（村里的巷子窄，城大了大路、主街一档档拓宽）：每档一段，前一档拆了后一档接上。
+  // 房子一直按最宽时的路让开（走廊按现在的路宽登记），拓宽不会切到房子
+  const trade = ctx.p.function === 'trade'
+  const widthAt = (kind: Road['kind'], t: number, w0: number) => {
+    const c = scaleOf(Math.max(30, t)).cfg
+    if (kind === 'highway') return Math.min(w0, Math.round(c.highway * (trade ? 1.25 : 1) * 2) / 2)
+    if (kind === 'main') return ctx.plan?.def.mainWidth ?? Math.min(w0, Math.round(c.main * (trade ? 1.6 : 1) * 2) / 2)
+    if (kind === 'street') return Math.min(w0, c.lane + 1)
+    return Math.min(w0, c.lane)
   }
+  const emit = (r: Road, born: number, died = Infinity) => {
+    const phases: { t: number; w: number }[] = []
+    for (let t = born; t < Math.min(died, P * 1.0001); t = Math.max(t * 1.04, t + 1)) {
+      const w = widthAt(r.kind, t, r.width)
+      if (!phases.length || phases.at(-1)!.w !== w) phases.push({ t, w })
+    }
+    if (!phases.length) phases.push({ t: born, w: r.width })
+    phases.forEach((ph, k) => {
+      const road: Road = k === phases.length - 1 && ph.w === r.width ? r : { ...r, width: ph.w, name: k === phases.length - 1 ? r.name : undefined }
+      const until = phases[k + 1]?.t ?? died
+      h.life.set(road, { born: ph.t, died: until })
+      // 现在（人口 P 时）还在的进最终状态，别的只在历史里
+      if (ph.t <= P && P < until) keep.push(road)
+      else add.push(road)
+    })
+  }
+  // 路按沿线逐段：一段路在它两头的地都并进城区时才修（主街在那之前若是干道，先是大路）
+  const pieces = (r: Road) => {
+    const line = resample(r.line, 10)
+    const at = line.map(joinAt)
+    const out: { line: P[]; born: number }[] = []
+    for (let k = 0; k + 1 < line.length; k++) {
+      const b = Math.max(at[k], at[k + 1])
+      const last = out.at(-1)
+      // 相近的时刻（差不到一成）并成一段
+      if (last && (last.born === b || (Number.isFinite(b) && Number.isFinite(last.born) && Math.max(b, last.born) / Math.min(b, last.born) < 1.1))) {
+        last.line.push(line[k + 1])
+        last.born = Math.max(last.born, b)
+      } else out.push({ line: [line[k], line[k + 1]], born: b })
+    }
+    return out
+  }
+  for (const r of ctx.out.roads) {
+    if (h.life.has(r)) {
+      keep.push(r)
+      continue
+    }
+    const src = sourceBorn(r.line)
+    if (r.kind === 'highway') {
+      const js = resample(r.line, 12).map(joinAt).filter(Number.isFinite)
+      emit(r, Number.isFinite(src) ? src : js.length ? Math.min(...js) : 0)
+      continue
+    }
+    if (r.kind !== 'main' && r.kind !== 'street' && r.kind !== 'lane') {
+      h.life.set(r, { born: Number.isFinite(src) ? src : 0, died: Infinity })
+      keep.push(r)
+      continue
+    }
+    pieces(r).forEach((pc, k) => {
+      const born = r.kind === 'main' && Number.isFinite(src) ? Math.max(src, pc.born) : pc.born
+      // 还没修的段（沿线的地到现在也没并进城区）不要
+      if (!Number.isFinite(born)) return
+      emit({ ...r, line: pc.line, name: k === 0 ? r.name : undefined }, born)
+      // 成主街之前是干道开通时就有的大路
+      if (r.kind === 'main' && Number.isFinite(src) && src < born) emit({ line: pc.line, width: ctx.cfg.highway, kind: 'highway' }, src, born)
+    })
+  }
+  ctx.out.roads = keep
   for (const r of add) h.past.push({ key: 'roads', item: r })
   // 桥、渡口：随它压着的路
   for (const c of ctx.out.crossings) {
@@ -2034,7 +1997,7 @@ const JOIN_SPREAD = 0.5
  * 3. 调度（见 history.ts 的 schedule）定各样东西的生卒；最终状态（现在人口时还在的）写回 ctx.out，
  *    别的记进 ctx.history.past。路边的祠、神龛按片区住到七成的时刻撒
  */
-function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) {
+function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]): Map<number, number> {
   const { p } = ctx
   const h = ctx.history!
   const P = p.population
@@ -2055,9 +2018,13 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) 
   }
   const byType = (type: WardType, d: Density): Density => (type === 'noble' ? 'low' : type === 'slum' ? 'high' : type === 'market' && d === 'low' ? 'mid' : d)
   // 城外的地：种得了田就是田，否则是荒地（与 assignWards 同一条规则，按现在的城区半径）
-  const farmable = (pa: Patch) => {
+  // 农田随城区向外开垦：离城心在"城区半径 × 系数"以内的地才种（与 assignWards 同一条规则，半径取那时的城区）。
+  // 小村时只有村边一圈田，城大了田才铺得远；开垦之前是荒地
+  const farmStart = (pa: Patch): number | undefined => {
+    if (!p.farms || !S.veg.farm || ctx.T.slopeAt(pa.site) >= 0.2) return undefined
     const d = centerDist(ctx, pa.site)
-    return p.farms && S.veg.farm && ctx.T.slopeAt(pa.site) < 0.2 && d < ctx.Rin * (1.3 + (S.small ? 4.5 : 3.2) * p.farmland) * (0.8 + hashAt(ctx, pa.site, 'ward.farm') * 0.5)
+    const k = 0.8 + hashAt(ctx, pa.site, 'ward.farm') * 0.5
+    return grid.find((t) => d < joinedR(t) * (1.3 + (isVillage(scaleOf(t).size) ? 4.5 : 3.2) * p.farmland) * k)
   }
   const nCores = ctx.cores.length
   const joinedR = joinedRadius(S.patches, S.growth)
@@ -2065,18 +2032,23 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) 
   const specsOf = (i: number): FormSpec[] => {
     const pa = S.patches[i]
     const T = S.wards[i].type
-    const pre: FormSpec = { start: 0, type: farmable(pa) ? 'farm' : 'wild', inner: false, whole: true, rebuild: false, town: false, tier: 'low' }
     const J = pa.inner ? S.growth.joinPop.get(i) : undefined
+    // 加入城区（或现在）之前：先是荒地，开垦以后是田
+    const wildSpec: FormSpec = { start: 0, type: 'wild', inner: false, whole: true, rebuild: false, town: false, tier: 'low' }
+    const tf = farmStart(pa)
+    const preOf = (until: number): FormSpec[] => (tf !== undefined && tf < until ? [wildSpec, { ...wildSpec, start: tf, type: 'farm' }] : [wildSpec])
     if (J === undefined) {
       // 城外，或城墙圈进来、生长还没轮到的空地
       if (T === 'suburb') {
         const d = centerDist(ctx, pa.site)
         const ts = grid.find((t) => t >= 1500 && d < rinFor(p, t) * 2.1) ?? P
-        return [pre, { start: ts, type: 'suburb', inner: false, whole: false, rebuild: false, town: false, tier: 'low' }]
+        return [...preOf(ts), { start: ts, type: 'suburb', inner: false, whole: false, rebuild: false, town: false, tier: 'low' }]
       }
-      return [pa.inner ? pre : { ...pre, type: T }]
+      // 城外的田：开垦之前是荒地（村子、荒地从头就是那样）
+      if (!pa.inner && T === 'farm' && !S.villages.centers.has(i) && !S.villages.members.has(i)) return tf !== undefined && tf > 0 ? [wildSpec, { ...wildSpec, start: tf, type: 'farm' }] : [{ ...wildSpec, type: 'farm' }]
+      return pa.inner ? preOf(P) : [{ ...wildSpec, type: T }]
     }
-    const out: FormSpec[] = i < nCores ? [] : [pre]
+    const out: FormSpec[] = i < nCores ? [] : preOf(J)
     const F = foundOf(i, J)
     const lived = LIVED_TYPES.has(T)
     const end = lived ? P : F
@@ -2097,6 +2069,10 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) 
     if (!lived) out.push({ start: Math.max(F, J), type: T, inner: true, whole: true, rebuild: false, town: true, tier: byType(T, densAt(i, Math.max(F, J))) })
     return out
   }
+  // 田野、荒地只让开一开始就有的东西（干道与河）：将来的城墙、街巷那时还没有，不预先留出一道缝
+  const early = new Corridors()
+  for (const src of h.sources) early.add(src.line, ctx.cfg.highway / 2 + 1.5, 'road')
+  if (ctx.T.river) early.add(ctx.T.river.line, 0, 'river')
   // 按设定盖一套：规模取开始那一刻的（城外的田野、荒地按现在的）
   const p0 = ctx.p
   const Rin0 = ctx.Rin
@@ -2120,6 +2096,8 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) 
     const rural = sp.inner && !sp.whole && !sp.town
     const ward: Ward = { poly: pa.poly, type: sp.type, inner: sp.inner, density: sp.inner ? sp.tier : undefined, ...(rural ? { rural } : {}), ...(pa.grand && sp.type === S.wards[i].type ? { tier: 'grand' as const } : {}) }
     const pieces: Piece[] = [piece('wards', ward)]
+    const late = ctx.corridors
+    if (!sp.inner && (sp.type === 'farm' || sp.type === 'wild')) ctx.corridors = early
     const block = wardBlock(ctx, S, i)
     if (block) {
       const cp = checkpoint(ctx)
@@ -2128,6 +2106,7 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) 
       for (const [k, n] of cp.len) if (!(rural && k === 'blocks')) for (const item of (ctx.out[k] as object[]).slice(n)) pieces.push(piece(k, item, k === 'buildings' ? ((item as Building).units ?? 0) : 0))
       rollback(ctx, cp)
     }
+    ctx.corridors = late
     ctx.p = p0
     ctx.Rin = Rin0
     S.small = small0
@@ -2154,12 +2133,64 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) 
   }
   const forms: Form[] = []
   const formsOf = new Map<number, Form[]>()
+  // 单次生成：城外整片的形态先放个占位（只有片区本身），调度完只盖最后还在的
+  const later = new Map<Form, FormSpec>()
+  const placeholder = (i: number, sp: FormSpec): Form => {
+    const ward: Ward = { poly: S.patches[i].poly, type: sp.type, inner: false }
+    const w = piece('wards', ward)
+    const f: Form = { patch: i, start: sp.start, whole: true, rebuild: false, pieces: [w], base: [w], groups: [], closed: false }
+    later.set(f, sp)
+    return f
+  }
   for (const i of walk) {
-    const fs = specsOf(i).map((sp) => buildForm(i, sp))
+    const fs = specsOf(i).map((sp) => (h.lazy && sp.whole && !sp.inner ? placeholder(i, sp) : buildForm(i, sp)))
     forms.push(...fs)
     formsOf.set(i, fs)
   }
   const life = schedule(forms, { from: 30, until: P, demand: (t) => t / per })
+  for (const [f, sp] of later) {
+    const l = life.get(f.pieces[0])
+    if (!l || l.died !== Infinity) continue
+    const real = buildForm(f.patch, sp)
+    // 片区本身用占位的那个（调度记的是它），盖的时候定下的名字（城外的村名）抄过来
+    Object.assign(f.pieces[0].item, real.pieces[0].item)
+    // 片区里后来盖的房子压着的树、菜园不要（调度时它们会被拆掉）
+    const homes = formsOf.get(f.patch)!.flatMap((g) => (g === f ? [] : g.pieces)).filter((x) => x.key === 'buildings' && life.get(x)?.died === Infinity)
+    for (const x of real.pieces.slice(1)) {
+      if (homes.some((y) => overlaps(y, x))) continue
+      f.pieces.push(x)
+      life.set(x, { born: l.born, died: Infinity })
+    }
+  }
+  // 城墙修起来时（见 buildWalls 给墙定的生卒），压在墙线、护城河上的田与树那时拆掉
+  const walls = [...ctx.out.walls, ...h.past.filter((x) => x.key === 'walls').map((x) => x.item as Wall)]
+  for (const w of walls) {
+    const wl = h.life.get(w)
+    if (!wl) continue
+    const loop = [...w.loop, w.loop[0]]
+    const reach = w.thickness / 2 + 6 + (w.moat ? w.moat.width + 4 : 0)
+    const [x0, y0, x1, y1] = bboxOf(loop)
+    for (const f of forms) {
+      if (f.pieces[0] && (f.pieces[0].item as Ward).inner) continue
+      for (const x of f.pieces) {
+        if (x.key !== 'fields' && x.key !== 'trees') continue
+        const l = life.get(x)
+        if (!l || !(l.born < wl.born && wl.born < l.died)) continue
+        if (x.box[2] < x0 - reach || x.box[0] > x1 + reach || x.box[3] < y0 - reach || x.box[1] > y1 + reach) continue
+        const pts = x.poly ?? [x.p!]
+        if (pts.some((q) => polylineDist(q, loop) < reach) || (x.poly && loop.some((q) => pointInPoly(q, x.poly!)))) l.died = wl.born
+      }
+    }
+  }
+  // 各片区开张（成了城区、有人住或整片建成）的时刻：第一个城区形态的片区底出生时
+  const opened = new Map<number, number>()
+  for (const i of walk)
+    for (const f of formsOf.get(i)!) {
+      const w = f.pieces[0]
+      const l = life.get(w)
+      if (!l || !(w.item as Ward).inner) continue
+      opened.set(i, Math.min(opened.get(i) ?? Infinity, l.born))
+    }
   // 写回：现在还在的进 ctx.out（按片区，片区之后撒它的祠、神龛），别的进 past
   const alive = (x: Piece) => {
     const l = life.get(x)
@@ -2189,6 +2220,7 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]) 
     wardExtras(ctx, ward, block, cp)
     stamp(ctx, m, homes[Math.floor((homes.length - 1) * 0.7)])
   }
+  return opened
 }
 
 /**

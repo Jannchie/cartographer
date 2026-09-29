@@ -172,6 +172,18 @@ const zoningLegend = computed(() =>
       />
       <Field label="奇幻"><Seg :options="MAGIC" :model-value="p.magic" @update:model-value="(x) => S.setParam('magic', x)" /></Field>
       <Field label="城防"><Seg :options="WALLS" :model-value="p.walls" @update:model-value="(x) => S.setParam('walls', x)" /></Field>
+      <Scale
+        v-if="p.walls !== 'none'"
+        label="城墙曲折"
+        title="城墙走得多曲折：少则一圈平顺的墙，多则贴着城边的街坊曲曲折折地走"
+        :min="0"
+        :max="1"
+        :step="0.05"
+        :fmt="(x) => `${Math.round(x * 100)}%`"
+        :reset="DEFAULT_SETTLEMENT.wallBend"
+        v-model="p.wallBend"
+        @change="S.run()"
+      />
       <Legend :items="envToggles" @toggle="(i) => S.setParam(envKeys[i], !p[envKeys[i]])" />
       <Scale v-if="p.farms" label="农田范围" title="城外农田铺多远：少则城边一圈，多则一直到地图边缘；其余是草地与林地" :min="0" :max="1" :step="0.05" :fmt="(x) => `${Math.round(x * 100)}%`" :reset="DEFAULT_SETTLEMENT.farmland" v-model="p.farmland" @change="S.run()" />
       <Scale label="地形起伏" :min="0" :max="1" :step="0.05" :fmt="(x) => x.toFixed(2)" v-model="p.relief" @change="S.run()" />
