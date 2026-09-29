@@ -245,9 +245,10 @@ export class DisplayList {
     return s
   }
 
-  path(space: 'page' | 'map', d: string, o: Omit<PathItem, 'k' | 'd' | 'bbox' | 'opacity'> & { opacity?: number }) {
+  /** bbox：调用方已知的路径包围盒（大批树冠、房屋拼成的长路径省掉逐字解析）；不给就从 d 里解析 */
+  path(space: 'page' | 'map', d: string, o: Omit<PathItem, 'k' | 'd' | 'bbox' | 'opacity'> & { opacity?: number }, bbox?: BBox) {
     if (!d) return
-    const bb = transformBBox(pathBBox(d), o.m)
+    const bb = transformBBox(bbox ?? pathBBox(d), o.m)
     const item: PathItem = { k: 'path', d, opacity: 1, ...o, bbox: expand(bb, (o.stroke?.width ?? 0) * 2 + 1) }
     this.segment(space).items.push(item)
     return item

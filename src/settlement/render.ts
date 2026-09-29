@@ -1,6 +1,6 @@
 import { eastAsian } from './culture'
 import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
-import { DisplayList, type Fill, type Stroke } from '../render/atlas/svg/displayList'
+import { DisplayList, type Fill, type Item, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
 import { centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, type P, type Poly } from './geom'
 import { settleTheme, type SettleStyleId, type SettleTheme } from './themes'
@@ -297,7 +297,46 @@ function coarseTerrain(t: Settlement['terrain'], maxW: number) {
   return { ...t, W, H, cell: t.cell * s, height, water }
 }
 
+/**
+ * 只取决于地形网格的图层（晕渲、等高线、水面）：成长动画、拖人口时逐帧重画，地形一般不变。
+ * 按网格内容、画幅与画法记下上次生成的绘制项，下一帧直接放进来，不再追踪等值线、拼路径。
+ * 绘制项不会被改写，几张地图共用同一批没有问题
+ */
+const layerMemo = new Map<string, Item[]>()
+function memoLayer(R: Painter, key: string, draw: () => void) {
+  const seg = R.list.segment('map')
+  const hit = layerMemo.get(key)
+  if (hit) {
+    seg.items.push(...hit)
+    return
+  }
+  const n0 = seg.items.length
+  draw()
+  // 只在全写进了同一段时记下（这几层都只写地图段）
+  if (R.list.segments.at(-1) !== seg) return
+  if (layerMemo.size >= 8) layerMemo.delete(layerMemo.keys().next().value!)
+  layerMemo.set(key, seg.items.slice(n0))
+}
+/** 地形网格的内容指纹（高程、水距逐位哈希） */
+const terrainPrints = new WeakMap<Settlement['terrain'], string>()
+function terrainPrint(t: Settlement['terrain']) {
+  let v = terrainPrints.get(t)
+  if (v) return v
+  let h = 2166136261
+  for (const a of [t.height, t.water]) {
+    const u = new Uint32Array(a.buffer, a.byteOffset, a.length)
+    for (let k = 0; k < u.length; k++) h = Math.imul(h ^ u[k], 16777619)
+  }
+  v = `${t.W}x${t.H}@${t.cell}#${(h >>> 0).toString(36)}`
+  terrainPrints.set(t, v)
+  return v
+}
+const layerKey = (tag: string, R: Painter, st: Settlement, th: SettleTheme, extra = '') => `${tag}|${terrainPrint(st.terrain)}|${st.width}x${st.height}|${R.S}|${JSON.stringify(th)}|${extra}`
+
 function terrainLayers(R: Painter, st: Settlement, th: SettleTheme, opts: SettleOpts) {
+  memoLayer(R, layerKey('terrain', R, st, th, String(!!opts.contours)), () => drawTerrain(R, st, th, opts))
+}
+function drawTerrain(R: Painter, st: Settlement, th: SettleTheme, opts: SettleOpts) {
   const { W, H, cell, height, water } = coarseTerrain(st.terrain, 420)
   // 晕渲（西北光）
   const dark = new Float32Array(W * H)
@@ -343,6 +382,9 @@ function terrainLayers(R: Painter, st: Settlement, th: SettleTheme, opts: Settle
 }
 
 function waterLayers(R: Painter, st: Settlement, th: SettleTheme) {
+  memoLayer(R, layerKey('water', R, st, th), () => drawWater(R, st, th))
+}
+function drawWater(R: Painter, st: Settlement, th: SettleTheme) {
   // 水面比地形晕渲要细一些（窄河也要画得出）
   const { W, H, cell, water } = coarseTerrain(st.terrain, 720)
   const wet = new Float32Array(W * H)
@@ -501,11 +543,28 @@ function treeLayers(R: Painter, st: Settlement, th: SettleTheme) {
   const S = R.S
   // 投影 → 树冠 → 暗面
   const sorted = [...st.trees].map((t) => ({ ...t, r: t.r * TREE_SCALE })).sort((a, b) => a.p[1] - b.p[1])
-  if (th.tree.shadow) R.list.path('map', sorted.map((t) => R.circleD([t.p[0] + t.r * 0.35, t.p[1] + t.r * 0.35], t.r)).join(''), { fill: { color: th.tree.shadow, alpha: 0.25 } })
-  R.list.path('map', sorted.map((t) => R.circleD(t.p, t.r)).join(''), {
-    fill: { color: th.tree.fill, alpha: 1 },
-    stroke: th.tree.stroke ? { color: th.tree.stroke, alpha: 0.8, width: 0.6 } : undefined,
-  })
+  // 包围盒直接由树算出（几万棵树的路径不必再逐字解析）；投影往右下偏，一起罩住
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const t of sorted) {
+    x0 = Math.min(x0, (t.p[0] - t.r) * S)
+    y0 = Math.min(y0, (t.p[1] - t.r) * S)
+    x1 = Math.max(x1, (t.p[0] + t.r * 1.35) * S)
+    y1 = Math.max(y1, (t.p[1] + t.r * 1.35) * S)
+  }
+  const bb: [number, number, number, number] = [x0 - 1, y0 - 1, x1 + 1, y1 + 1]
+  if (th.tree.shadow) R.list.path('map', sorted.map((t) => R.circleD([t.p[0] + t.r * 0.35, t.p[1] + t.r * 0.35], t.r)).join(''), { fill: { color: th.tree.shadow, alpha: 0.25 } }, bb)
+  R.list.path(
+    'map',
+    sorted.map((t) => R.circleD(t.p, t.r)).join(''),
+    {
+      fill: { color: th.tree.fill, alpha: 1 },
+      stroke: th.tree.stroke ? { color: th.tree.stroke, alpha: 0.8, width: 0.6 } : undefined,
+    },
+    bb,
+  )
   // 暗面：右下的月牙
   const d = sorted
     .map((t) => {
@@ -521,7 +580,7 @@ function treeLayers(R: Painter, st: Settlement, th: SettleTheme) {
       return `M${f1(sx)} ${f1(sy)}A${f1(r)} ${f1(r)} 0 0 1 ${f1(ex)} ${f1(ey)}Q${f1(x + r * 0.25)} ${f1(y + r * 0.2)} ${f1(sx)} ${f1(sy)}Z`
     })
     .join('')
-  R.list.path('map', d, { fill: { color: th.tree.dark, alpha: th.tree.darkAlpha ?? 0.55 } })
+  R.list.path('map', d, { fill: { color: th.tree.dark, alpha: th.tree.darkAlpha ?? 0.55 } }, bb)
 }
 
 // —————————————————————— 道路与城区 ——————————————————————
