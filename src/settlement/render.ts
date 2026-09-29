@@ -666,9 +666,10 @@ function mixHex(a: string, b: string, t: number) {
 }
 
 /**
- * 各种路一起画：先是所有路的路边线，再是路面（城外的路在下，城内的街道、小径在上）。
- * 路边线全压在路面下，各种路用同一种边线（路的等级看宽窄）：不同种类的路交汇时连成一张路网，
- * 不会一条是粗黑边、一条是淡边。边线是不透明的（边线色掺进地面色），不同宽的路在路口不会叠出深色
+ * 各种路一起画：路面连成一张路网（城外的路在下，城内的街道、小径在上），与街坊之间的缝（街）接得上。
+ * 填色的画法路不描边（街坊之间的缝也没有边线，描了边的路进城时总有一道接口）；
+ * 线描的画法（路面与地面同色）路靠边线画出来：边线与街坊的轮廓同一种线，路边与街坊边连成一条。
+ * 边线全压在路面下，是不透明的（线色掺进地面色）：不同宽的路在路口不会叠出深色
  */
 function roads(R: Painter, st: Settlement, th: SettleTheme) {
   const S = R.S
@@ -687,9 +688,10 @@ function roads(R: Painter, st: Settlement, th: SettleTheme) {
   const outer = byWidth(['highway', 'lane'])
   const inner = byWidth(['main', 'street'])
   const round = { cap: 'round', join: 'round' } as const
-  if (casing) {
-    const edge = { color: mixHex(casing, th.ground, 0.4), alpha: 1 }
-    for (const [w, lines] of [...outer, ...inner].sort((a, b) => b[0] - a[0])) R.lines(lines, { ...edge, width: (w + 1.3) * S, ...round })
+  if (casing && th.road.fill === th.ground) {
+    const line = th.blockStroke ?? { color: casing, alpha: 0.6, width: 0.5 }
+    const edge = { color: mixHex(line.color, th.ground, 1 - line.alpha), alpha: 1 }
+    for (const [w, lines] of [...outer, ...inner].sort((a, b) => b[0] - a[0])) R.lines(lines, { ...edge, width: w * S + 2 * line.width, ...round })
   }
   for (const [w, lines] of outer) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, ...round })
   // 城内主街与街道压在街区上，保证连续；田间、公园的小径
