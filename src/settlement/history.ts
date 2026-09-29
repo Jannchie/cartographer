@@ -195,6 +195,11 @@ export function groupForm(ctx: Ctx, f: Form, avail: (h: number) => number, key: 
  * 返回各样东西的生卒。
  */
 export function schedule(forms: Form[], o: { from: number; until: number; demand: (t: number) => number; step?: number }): Map<Piece, Life> {
+  // 同一批形态可以再调度一遍（成长史先用占位排一遍，见 historyWards）：清掉上一遍留下的标记
+  for (const f of forms) {
+    f.closed = false
+    for (const g of f.groups) g.entered = false
+  }
   const life = new Map<Piece, Life>()
   const alive = new Map<number, Set<Piece>>()
   const aliveOf = (patch: number) => alive.get(patch) ?? alive.set(patch, new Set()).get(patch)!

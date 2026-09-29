@@ -2220,7 +2220,8 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
   }
   const forms: Form[] = []
   const formsOf = new Map<number, Form[]>()
-  // 单次生成：城外整片的形态先放个占位（只有片区本身），调度完只盖最后还在的
+  // 城外整片的形态（田野、荒地、城外的村子）先放个占位（只有片区本身）：大城里有三成形态从来没出现过，
+  // 不必先盖一遍。调度完只盖出现过的（单次生成只要最后还在的）
   const later = new Map<Form, FormSpec>()
   const placeholder = (i: number, sp: FormSpec): Form => {
     const ward: Ward = { poly: S.patches[i].poly, type: sp.type, inner: false }
@@ -2230,13 +2231,25 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
     return f
   }
   for (const i of walk) {
-    const fs = specsOf(i).map((sp) => (h.lazy && sp.whole && !sp.inner ? placeholder(i, sp) : buildForm(i, sp)))
+    const fs = specsOf(i).map((sp) => (sp.whole && !sp.inner ? placeholder(i, sp) : buildForm(i, sp)))
     forms.push(...fs)
     formsOf.set(i, fs)
   }
   // 按人口补足：各户的口数不一（大宅人多、陋屋人少，见 people.ts）
-  const life = schedule(forms, { from: 30, until: P, demand: (t) => t })
-  for (const [f, sp] of later) {
+  const demand = (t: number) => t
+  let life = schedule(forms, { from: 30, until: P, demand })
+  if (!h.lazy) {
+    // 成长史：出现过的占位盖成真的，再整个调度一遍（里面的田、树会被后来进来的农户压掉，要和别的形态一起按时间排）
+    for (const [f, sp] of later) {
+      const l = life.get(f.pieces[0])
+      if (!l || l.born >= l.died) continue
+      const real = buildForm(f.patch, sp)
+      f.pieces = real.pieces
+      f.base = real.base
+      later.delete(f)
+    }
+    life = schedule(forms, { from: 30, until: P, demand })
+  } else for (const [f, sp] of later) {
     const l = life.get(f.pieces[0])
     if (!l || l.died !== Infinity) continue
     const real = buildForm(f.patch, sp)
