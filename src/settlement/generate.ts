@@ -1788,6 +1788,7 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   ctx.wardQuota = Infinity
   ctx.wardFill = 1
   ctx.wardDensity = 'mid'
+  ctx.wardType = 'common'
   // 城堡、宫城、卫城的门在各自盖好时就接上了路（见 walls.ts 的 connectGates）
   if (ctx.plan?.def.avenueTrees !== false) avenueTrees(ctx)
   nameDistricts(ctx)

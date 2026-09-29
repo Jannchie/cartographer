@@ -226,7 +226,7 @@ function settled(ctx: Ctx, z: PlanZone, g: Grid): Set<Ward> {
     return Math.max(Math.abs(u - cu) / (b.u1 - cu), Math.abs(v - cv) / (b.v1 - cv))
   }
   const wards = ctx.out.wards.filter((w) => w.inner && RESIDENTIAL.has(w.type) && reach(w) < 1).sort((p, q) => reach(p) - reach(q))
-  const keep = { rng: ctx.rng, fill: ctx.wardFill, dens: ctx.wardDensity, budget: ctx.houseBudget }
+  const keep = { rng: ctx.rng, fill: ctx.wardFill, dens: ctx.wardDensity, type: ctx.wardType, budget: ctx.houseBudget }
   ctx.houseBudget = Math.round(keep.budget * strength(ctx))
   const rest = keep.budget - ctx.houseBudget
   for (const w of wards) {
@@ -247,6 +247,7 @@ function settled(ctx: Ctx, z: PlanZone, g: Grid): Set<Ward> {
   ctx.rng = keep.rng
   ctx.wardFill = keep.fill
   ctx.wardDensity = keep.dens
+  ctx.wardType = keep.type
   return done
 }
 
