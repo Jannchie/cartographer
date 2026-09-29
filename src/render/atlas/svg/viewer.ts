@@ -172,8 +172,13 @@ export class AtlasViewer {
     const list = this.list
     if (!list) return
     this.baseScale = Math.min(3, 4096 / Math.max(list.width, list.height))
-    this.base.width = Math.round(list.width * this.baseScale)
-    this.base.height = Math.round(list.height * this.baseScale)
+    // 重设宽高会重新分配整块画布（最大 4096 见方，几十兆）：成长动画逐帧换列表时尺寸不变，只清空重画
+    const bw = Math.round(list.width * this.baseScale)
+    const bh = Math.round(list.height * this.baseScale)
+    if (this.base.width !== bw || this.base.height !== bh) {
+      this.base.width = bw
+      this.base.height = bh
+    }
     const ctx = this.base.getContext('2d')!
     ctx.clearRect(0, 0, this.base.width, this.base.height)
     list.render(ctx, this.baseScale, 0, 0, this.chrome ? 'map' : undefined)

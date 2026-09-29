@@ -78,6 +78,9 @@ export class Corridors {
     this.segs.length = n
   }
 
+  /** near 的去重：每段记下最后一次被收进哪一次查询（比每次新建 Set 快得多，走廊查询是生成里最频繁的操作） */
+  private seen: number[] = []
+  private query = 0
   private near(poly: Poly, pad = 0): number[] {
     let x0 = Infinity
     let y0 = Infinity
@@ -89,10 +92,20 @@ export class Corridors {
       x1 = Math.max(x1, p[0] + pad)
       y1 = Math.max(y1, p[1] + pad)
     }
-    const out = new Set<number>()
+    const q = ++this.query
+    const seen = this.seen
+    const out: number[] = []
     for (let y = Math.floor(y0 / this.B); y <= Math.floor(y1 / this.B); y++)
-      for (let x = Math.floor(x0 / this.B); x <= Math.floor(x1 / this.B); x++) for (const id of this.grid.get(y * 4096 + x) ?? []) out.add(id)
-    return [...out]
+      for (let x = Math.floor(x0 / this.B); x <= Math.floor(x1 / this.B); x++) {
+        const l = this.grid.get(y * 4096 + x)
+        if (l)
+          for (const id of l)
+            if (seen[id] !== q) {
+              seen[id] = q
+              out.push(id)
+            }
+      }
+    return out
   }
 
   /**
@@ -355,9 +368,15 @@ export interface Ctx {
  * 抽签的用途名（tag）→ 32 位整数（FNV-1a）。tag 一律用字符串"模块.用途"（如 'medina.gate'），
  * 不同模块各用各的名字，不会像以前的数字 tag 那样撞号；同一个 tag 只在一处用（scratchpad 的查重脚本会查）。
  */
+const tagKeys = new Map<string, number>()
 export function keyOf(tag: string, i = 0) {
-  let h = 0x811c9dc5
-  for (let k = 0; k < tag.length; k++) h = Math.imul(h ^ tag.charCodeAt(k), 0x01000193)
+  // 用途名的哈希记下来（用途名是固定的一批字符串，抽签却是成千上万次）
+  let h = tagKeys.get(tag)
+  if (h === undefined) {
+    h = 0x811c9dc5
+    for (let k = 0; k < tag.length; k++) h = Math.imul(h ^ tag.charCodeAt(k), 0x01000193)
+    tagKeys.set(tag, h)
+  }
   // 序号（同一用途的第 i 次抽签）再搅一遍
   if (i) h = Math.imul(h ^ Math.imul(i, 0x9e3779b1), 0x85ebca77) ^ (h >>> 15)
   return h >>> 0
