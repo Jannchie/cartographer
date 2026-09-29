@@ -153,12 +153,10 @@ export function describeAt(st: Settlement, q: P, ward: Ward | undefined): Descri
   if (b) {
     const rows: [string, string, boolean][] = []
     if (b.floors) rows.push(['层数', String(b.floors), false])
-    if (b.units) {
-      rows.push(['住户', String(b.units), false])
-      // 口数连未成年人、学徒伙计、仆役；各户的营生（多户的楼房列出不同的几种）
-      rows.push(['居住人数', String(Math.round(residentsOf(b, c))), false])
-      for (const trade of new Set((b.households ?? []).map((h) => tradeInfo(c, h.trade)?.name).filter((x): x is string => !!x))) rows.push(['职业', trade, true])
-    }
+    if (b.units) rows.push(['住户', String(b.units), false])
+    // 口数连未成年人、学徒伙计、仆役（寺院的僧众、兵营的驻军是集体户）；各户的营生（多户的楼房列出不同的几种）
+    if (b.households?.length || b.units) rows.push(['居住人数', String(Math.round(residentsOf(b, c))), false])
+    for (const trade of new Set((b.households ?? []).map((h) => tradeInfo(c, h.trade)?.name).filter((x): x is string => !!x))) rows.push(['职业', trade, true])
     rows.push(['占地', ha(area(b.poly)), false])
     return { title: buildingRole(st, b, ward, !!grave), rows }
   }

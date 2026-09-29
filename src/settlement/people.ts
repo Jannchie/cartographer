@@ -1,7 +1,7 @@
 import { hashAt, type Ctx } from './ctx'
 import { area, centroid, type Poly } from './geom'
-import { perHousehold } from './scale'
-import type { Building, Culture, Household, Settlement, WardType } from './types'
+import { perHousehold, scaleOf, urbanT } from './scale'
+import type { Building, BuildingKind, Culture, Household, Settlement, SettlementParams, WardType } from './types'
 import { defineStrings } from '../i18n'
 
 /**
@@ -35,6 +35,8 @@ interface Scheme {
   mix: Partial<Record<WardType | 'rural' | 'estate', Record<string, number>>>
   /** 仆役、雇工归哪一类 */
   servants: string
+  /** 城市的职业构成（各大类占人口的比例，仆役雇工一类是其余）：见 targetShares */
+  profile: Record<string, number>
 }
 
 const T = (group: string, id: string, zh: string, en: string, ja: string): Trade => ({ id, group, name: [zh, en, ja] })
@@ -85,9 +87,12 @@ const CHINESE: Scheme = {
     barracks: { soldier: 3, smith: 0.3 },
     suburb: { farmer: 1.5, gardener: 1, labourer: 0.8, innkeeper: 0.3, carpenter: 0.4 },
     rural: { farmer: 5, gardener: 0.6, carpenter: 0.2, smith: 0.1 },
-    estate: { official: 1.5, scholar: 1, broker: 0.4, trader: 0.4 },
+    // 疏档的大宅院：殷实人家，士绅、富商、牙人、在城里住的地主都有
+    estate: { official: 0.5, scholar: 0.8, trader: 0.8, broker: 0.5, shopkeeper: 0.6, farmer: 0.5 },
   },
   servants: 'yi',
+  // 宋明的府州县城：官吏、士绅连同胥吏约占一成以内，驻军卫所数个百分点，城里也住着不少种城郊田地的农户
+  profile: { shi: 0.04, nong: 0.1, gong: 0.22, shang: 0.2, bing: 0.06, seng: 0.02 },
 }
 
 const JAPANESE: Scheme = {
@@ -133,6 +138,8 @@ const JAPANESE: Scheme = {
     estate: { retainer: 2, wholesaler: 0.5 },
   },
   servants: 'zatsu',
+  // 城下町以外的町（在町、港町、门前町）：武士很少；城下町另按武家地的比例（见 targetShares）
+  profile: { bushi: 0.08, no: 0.06, ko: 0.22, sho: 0.24, shaji: 0.03 },
 }
 
 const WESTERN: Scheme = {
@@ -184,6 +191,9 @@ const WESTERN: Scheme = {
     estate: { lord: 1, knight: 1 },
   },
   servants: 'labour',
+  // 中世纪晚期的城市（纽伦堡 1449 年、佛罗伦萨 1427 年地籍册一类的统计）：手工业者四成上下，
+  // 商人一成多，教士、贵族与城市显贵合计几个百分点，城里种地的"耕作市民"不到一成，其余是雇工、仆役与贫民
+  profile: { clergy: 0.025, nobility: 0.015, merchants: 0.12, crafts: 0.42, peasants: 0.08, soldiers: 0.01 },
 }
 
 const ISLAMIC: Scheme = {
@@ -233,6 +243,8 @@ const ISLAMIC: Scheme = {
     estate: { amir: 1, tajir: 1 },
   },
   servants: 'amma',
+  // 马穆鲁克、奥斯曼时期的开罗、大马士革、阿勒颇：行会工匠三四成，商人一成多，乌理玛与官宦军人合计一成上下
+  profile: { ulama: 0.03, ayan: 0.025, tujjar: 0.12, sunna: 0.38, fallah: 0.07, jund: 0.05 },
 }
 
 const SCHEMES: Record<Culture, Scheme> = { eastern: CHINESE, wa: JAPANESE, western: WESTERN, islamic: ISLAMIC }
@@ -283,15 +295,161 @@ export function householdsOf(ctx: Ctx, poly: Poly, units: number, floors: number
     const cls = sc.groups.find((g) => g.id === sc.trades.find((t) => t.id === trade)!.group)!.cls
     // 东方的大宅：一家人住好几座屋，只有记户的那座算人口，口数按整座宅院（多六成）
     const size = Math.min(4.5, Math.max(0.55, (per / HOME_AREA) ** 0.6)) * EXTRA[cls].k * (ctx.estate ? 1.6 : 1)
-    out.push({ trade, people: Math.max(2, Math.round(base * size * (0.85 + 0.3 * hashAt(ctx, c, 'people.size', u)))) })
+    const people = Math.max(2, Math.round(base * size * (0.85 + 0.3 * hashAt(ctx, c, 'people.size', u))))
+    out.push(MIXED.has(key) ? { trade, people, mixed: true } : { trade, people })
   }
   return out
 }
 
-/** 一栋民居住的人口：记了各户的按各户加总，没记的（旧数据、别处直接摆的）按户数乘每户人数 */
+/** 混住的片区：什么营生的人家都有，全城的职业构成按目标校准时只调这些户 */
+const MIXED = new Set<string>(['common', 'market', 'harbor', 'suburb', 'rural', 'estate'])
+
+/**
+ * 集体户：寺院的僧房、兵营的营房、城堡的厅堂按面积住人（僧众、驻军与官员）。城外村子、宫殿（不算城里人口）不住
+ */
+const INSTITUTION: Partial<Record<WardType, { cls: Group['cls'][]; m2: number }>> = {
+  temple: { cls: ['clergy'], m2: 18 },
+  barracks: { cls: ['arms'], m2: 9 },
+  castle: { cls: ['arms', 'elite'], m2: 14 },
+}
+const INST_KINDS = new Set<BuildingKind>(['hall', 'large', 'civic', 'keep', 'house'])
+export function institutionOf(ctx: Ctx, poly: Poly, kind: BuildingKind, floors: number): Household[] {
+  const inst = INSTITUTION[ctx.wardType]
+  if (!inst || ctx.uncounted || !INST_KINDS.has(kind)) return []
+  const sc = SCHEMES[ctx.p.culture]
+  const trades = sc.trades.filter((t) => inst.cls.includes(sc.groups.find((g) => g.id === t.group)!.cls))
+  if (!trades.length) return []
+  const c = centroid(poly)
+  const trade = trades[Math.floor(hashAt(ctx, c, 'people.inst') * trades.length)].id
+  const people = Math.min(300, Math.round((area(poly) * Math.max(1, floors)) / inst.m2))
+  return people >= 2 ? [{ trade, people, inst: true }] : []
+}
+
+/**
+ * 一栋建筑住的人口：记了各户的（民居、寺院与兵营的集体户）按各户加总；没记的民居（别处直接摆的）按户数乘每户人数，
+ * 别的建筑不住人
+ */
 export function residentsOf(b: Building, culture: Culture) {
   if (b.households) return b.households.reduce((s, h) => s + h.people, 0)
-  return (b.units ?? 1) * perHousehold(culture)
+  return dwelling(b) ? (b.units ?? 1) * perHousehold(culture) : 0
+}
+
+/**
+ * 一座城的职业构成目标（各大类占人口的比例）：村子以农为主，随城镇化（urbanT）连续过渡到这个文明的城市构成；
+ * 都城官宦、驻军多，商贸城商人多，手工业城工匠多，要塞驻军多；和风的城下町约一半是武士（江户时代的金泽、仙台、
+ * 江户本身都在四五成）。仆役雇工一类是其余
+ */
+export function targetShares(p: Pick<SettlementParams, 'culture' | 'population' | 'function' | 'capital' | 'plan'>): Map<string, number> {
+  const sc = SCHEMES[p.culture]
+  const RURAL: Record<Group['cls'], number> = { farm: 0.82, craft: 0.06, trade: 0.02, clergy: 0.01, elite: 0.01, arms: 0, labor: 0 }
+  const u = urbanT(p.population)
+  const out = new Map<string, number>()
+  for (const g of sc.groups) {
+    if (g.id === sc.servants) continue
+    let s = sc.profile[g.id] ?? 0
+    const c = g.cls
+    if (p.capital && c === 'elite') s *= 2.5
+    if (p.capital && c === 'arms') s *= 1.6
+    if (p.function === 'trade' && c === 'trade') s += 0.08
+    if (p.function === 'craft' && c === 'craft') s += 0.08
+    if (p.function === 'fortress' && c === 'arms') s += 0.15
+    if (p.plan === 'jokamachi' && c === 'elite') s = 0.45
+    out.set(g.id, RURAL[c] * (1 - u) + s * u)
+  }
+  // 各类加起来超过九成时按比例收（仆役雇工至少留一成）
+  const sum = [...out.values()].reduce((a, b) => a + b, 0)
+  if (sum > 0.9) for (const [k, v] of out) out.set(k, (v * 0.9) / sum)
+  out.set(sc.servants, 1 - Math.min(0.9, sum))
+  return out
+}
+
+/**
+ * 专门片区住着这一类人口的几成（其余散住在普通民居片区里：小吏、小商贩、散工……）；兵营住驻军的七成（其余在城堡）
+ */
+const DEDICATED: Record<'noble' | 'merchant' | 'craft' | 'slum' | 'barracks', { cls: Group['cls']; live: number }> = {
+  noble: { cls: 'elite', live: 0.7 },
+  merchant: { cls: 'trade', live: 0.5 },
+  craft: { cls: 'craft', live: 0.45 },
+  slum: { cls: 'labor', live: 0.25 },
+  barracks: { cls: 'arms', live: 0.7 },
+}
+/**
+ * 各种专门片区住满时每公顷住多少人（连仆役、学徒；在十座样例城里量出来的，样本少的取整、偏保守）
+ */
+const WARD_DENSITY: Record<Culture, Record<'noble' | 'merchant' | 'craft' | 'slum', number>> = {
+  western: { noble: 100, merchant: 400, craft: 160, slum: 250 },
+  eastern: { noble: 185, merchant: 290, craft: 125, slum: 215 },
+  wa: { noble: 100, merchant: 210, craft: 95, slum: 100 },
+  islamic: { noble: 250, merchant: 500, craft: 250, slum: 350 },
+}
+/**
+ * 按职业构成要几块某种专门片区：这一类的人口 × 住在专门片区的比例 ÷ 一块这种片区住满的人数
+ *（片区面积 × 实测的每公顷人数；兵营按营房约占三成地、每人九平方米）。返回小数，调用方取整
+ */
+export function wardsFor(p: Pick<SettlementParams, 'culture' | 'population' | 'function' | 'capital' | 'plan'>, type: keyof typeof DEDICATED) {
+  const sc = SCHEMES[p.culture]
+  const d = DEDICATED[type]
+  const tg = targetShares(p)
+  let share = 0
+  for (const g of sc.groups) if (g.cls === d.cls) share += tg.get(g.id) ?? 0
+  const patch = scaleOf(p.population).cfg.patch
+  const m2 = patch * patch * 0.87
+  const cap = type === 'barracks' ? (m2 * 0.3) / 9 : (m2 / 10000) * WARD_DENSITY[p.culture][type]
+  return (share * p.population * d.live) / cap
+}
+
+/** 一户在统计里怎么分：家人（连未成年人）与学徒伙计随户主的行当，多出来的人里按大类的比例是仆役 */
+function split(culture: Culture, h: Household) {
+  const sc = SCHEMES[culture]
+  const tr = sc.trades.find((x) => x.id === h.trade)
+  if (!tr) return null
+  const cls = sc.groups.find((g) => g.id === tr.group)!.cls
+  if (h.inst) return { tr, own: h.people, servants: 0 }
+  const family = Math.min(h.people, Math.round(perHousehold(culture)))
+  const servants = Math.round((h.people - family) * EXTRA[cls].servants)
+  return { tr, own: h.people - servants, servants }
+}
+
+/**
+ * 按目标构成校准：片区的块数是整数、各片区里的营生按位置抽，全城加起来与目标总有出入。
+ * 只改混住片区（见 MIXED）里的户：比目标多的大类让出几户，改成比目标少的大类里最常见的行当，直到各类贴近目标。
+ * 专门的片区（贵族、商人、工匠、贫民、寺院、兵营）不动：比例差得多说明片区块数不对，要在片区数量上改（见 features.ts）
+ */
+export function calibrateTrades(buildings: Building[], p: Pick<SettlementParams, 'culture' | 'population' | 'function' | 'capital' | 'plan'>) {
+  const sc = SCHEMES[p.culture]
+  const target = targetShares(p)
+  const have = new Map<string, number>(sc.groups.map((g) => [g.id, 0]))
+  const mixed: Household[] = []
+  let total = 0
+  for (const b of buildings)
+    for (const h of b.households ?? []) {
+      const s = split(p.culture, h)
+      if (!s) continue
+      have.set(s.tr.group, have.get(s.tr.group)! + s.own)
+      have.set(sc.servants, have.get(sc.servants)! + s.servants)
+      total += h.people
+      if (h.mixed) mixed.push(h)
+    }
+  if (!total) return
+  const gap = (g: string) => (target.get(g) ?? 0) * total - have.get(g)!
+  // 每类改成它最常见的行当（普通片区里的比重最大的一种，没有就取这一类的第一种）
+  const typical = new Map<string, string>()
+  for (const g of sc.groups) {
+    const inCommon = Object.entries(sc.mix.common ?? {}).filter(([id]) => sc.trades.find((t) => t.id === id)?.group === g.id)
+    typical.set(g.id, inCommon.sort((a, b) => b[1] - a[1])[0]?.[0] ?? sc.trades.find((t) => t.group === g.id)!.id)
+  }
+  // 按口数与行当定的次序（确定性，与建筑的先后无关）
+  mixed.sort((a, b) => a.people - b.people || (a.trade < b.trade ? -1 : a.trade > b.trade ? 1 : 0))
+  for (const h of mixed) {
+    const s = split(p.culture, h)!
+    if (gap(s.tr.group) > -s.own / 2) continue
+    let to: string | null = null
+    for (const g of sc.groups) if (g.id !== s.tr.group && gap(g.id) > s.own / 2 && (!to || gap(g.id) > gap(to))) to = g.id
+    if (!to) continue
+    h.trade = typical.get(to)!
+    have.set(s.tr.group, have.get(s.tr.group)! - s.own)
+    have.set(to, have.get(to)! + s.own)
+  }
 }
 
 /**
@@ -325,7 +483,6 @@ export interface PeopleStat {
 export function peopleStats(st: Settlement): PeopleStat[] {
   const c = st.params.culture
   const sc = SCHEMES[c]
-  const base = perHousehold(c)
   const groups = new Map<string, PeopleStat>(sc.groups.map((g) => [g.id, { name: g.name[0], households: 0, people: 0, trades: [] }]))
   const trade = (gid: string, name: string) => {
     const g = groups.get(gid)!
@@ -335,18 +492,15 @@ export function peopleStats(st: Settlement): PeopleStat[] {
   }
   const servantName = sc.trades.find((t) => t.group === sc.servants && t.id === 'servant')!.name[0]
   for (const b of st.buildings) {
-    if (!dwelling(b) || !b.households) continue
-    for (const h of b.households) {
-      const tr = sc.trades.find((x) => x.id === h.trade)
-      if (!tr) continue
-      const cls = sc.groups.find((g) => g.id === tr.group)!.cls
-      const family = Math.min(h.people, Math.round(base))
-      const servants = Math.round((h.people - family) * EXTRA[cls].servants)
+    for (const h of b.households ?? []) {
+      const s = split(c, h)
+      if (!s) continue
+      const { tr, servants } = s
       const own = trade(tr.group, tr.name[0])
       own.g.households++
       own.t.households++
-      own.g.people += h.people - servants
-      own.t.people += h.people - servants
+      own.g.people += s.own
+      own.t.people += s.own
       if (servants) {
         const s = trade(sc.servants, servantName)
         s.g.people += servants

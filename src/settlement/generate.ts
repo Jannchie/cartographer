@@ -44,7 +44,7 @@ import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
-import { dwelling, perHome, residentsOf } from './people'
+import { calibrateTrades, perHome, residentsOf } from './people'
 import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
 
 /**
@@ -249,13 +249,15 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     joinRoadEnds(ctx)
     clearRoadTrees(ctx)
   }
+  // 各户的营生按全城的职业构成校准（只改混住片区里的户，见 people.ts）
+  calibrateTrades(ctx.out.buildings, p)
 
   const inner = ctx.out.wards.filter((w) => w.inner)
   const innerArea = inner.reduce((s, w) => s + area(w.poly), 0)
   const dwellings = ctx.out.buildings.filter((b) => b.kind === 'house' || b.kind === 'large')
   const houses = dwellings.length
   const units = dwellings.reduce((s, b) => s + (b.units ?? 1), 0)
-  const people = dwellings.reduce((s, b) => s + residentsOf(b, p.culture), 0)
+  const people = ctx.out.buildings.reduce((s, b) => s + residentsOf(b, p.culture), 0)
   const st: Settlement = {
     params: p,
     name: p.name || town.en,
@@ -2235,7 +2237,7 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
       const cp = checkpoint(ctx)
       buildWardForm(ctx, S, i, ward, block)
       // 零散农家的片区没有街坊底（地面还是田野）
-      for (const [k, n] of cp.len) if (!(rural && k === 'blocks')) for (const item of (ctx.out[k] as object[]).slice(n)) pieces.push(piece(k, item, k === 'buildings' && dwelling(item as Building) ? residentsOf(item as Building, p.culture) : 0))
+      for (const [k, n] of cp.len) if (!(rural && k === 'blocks')) for (const item of (ctx.out[k] as object[]).slice(n)) pieces.push(piece(k, item, k === 'buildings' ? residentsOf(item as Building, p.culture) : 0))
       rollback(ctx, cp)
     }
     ctx.corridors = late

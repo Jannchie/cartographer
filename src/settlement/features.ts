@@ -2,6 +2,7 @@ import { CULTURE_INFO, eastAsian } from './culture'
 import { emitArea, clipWater, isFree, placeable, whereOf, mark, type Ctx } from './ctx'
 import { area, centroid, circlePoly, dist, insetConvex, obb, rect, type P, type Poly } from './geom'
 import { amphitheater, arenaAt, hospitalAt, pulpitAt, schoolAt, stageAt, tavernAt, wineryAt } from './civic'
+import { wardsFor } from './people'
 import { isVillage, scaleOf } from './scale'
 import type { BuildingKind, Culture, Landmark, SettlementParams, SettlementSize, Ward, WardType } from './types'
 import {
@@ -105,6 +106,8 @@ export interface FeatureEnv {
   capital: boolean
   /** 城内片区数 */
   inner: number
+  /** 城市形制（城下町的武家地按武士占的比例） */
+  plan: SettlementParams['plan']
 }
 
 /** 选址时一块候选片区的情况 */
@@ -171,6 +174,8 @@ const round = (x: number) => Math.max(0, Math.round(x))
 export const townlike = (ctx: Ctx) => ctx.wardTown
 
 /** 功效对数量的倍率 */
+/** 按职业构成要几块专门片区（见 people.ts 的 wardsFor） */
+const byPeople = (e: FeatureEnv, type: Parameters<typeof wardsFor>[1]) => round(wardsFor({ culture: e.culture, population: e.pop, function: e.fn, capital: e.capital, plan: e.plan }, type))
 const fnMul = (e: FeatureEnv, m: Partial<Record<CityFunction, number>>) => m[e.fn] ?? 1
 
 export const FEATURES: FeatureDef[] = [
@@ -199,7 +204,7 @@ export const FEATURES: FeatureDef[] = [
     form: 'ward',
     order: 60,
     max: 40,
-    auto: (e) => (e.big ? round(e.inner * 0.16 * fnMul(e, { trade: 1.8, fortress: 0.6, craft: 0.7 })) : 0),
+    auto: (e) => (e.big ? byPeople(e, 'merchant') : 0),
     site: (s) => -s.dc * 2 + s.road * 1.2,
     build: (ctx, _w, block) => urban(ctx, block, 'merchant'),
   },
@@ -212,7 +217,7 @@ export const FEATURES: FeatureDef[] = [
     form: 'ward',
     order: 62,
     max: 40,
-    auto: (e) => (e.big ? round(e.inner * 0.2 * fnMul(e, { craft: 2.2, trade: 0.8, magic: 0.7 })) : 0),
+    auto: (e) => (e.big ? byPeople(e, 'craft') : 0),
     site: (s, e) => (s.water ? 1.5 : 0) * (e.fn === 'craft' ? 2 : 1) + s.dc * 0.6 + s.road * 0.4,
     build: (ctx, _w, block) => urban(ctx, block, 'craft'),
   },
@@ -225,7 +230,7 @@ export const FEATURES: FeatureDef[] = [
     form: 'ward',
     order: 30,
     max: 12,
-    auto: (e) => (e.size === 'city' ? round(Math.min(8, 1 + e.pop / 6000)) : e.size === 'town' ? 1 : 0),
+    auto: (e) => (e.big ? byPeople(e, 'noble') : 0),
     site: (s) => s.high * 1.2 - s.dc * 0.5 + (s.near('castle') < 0.6 ? 1.5 : 0),
     build: (ctx, w, block) => noble(ctx, w, block),
   },
@@ -238,7 +243,7 @@ export const FEATURES: FeatureDef[] = [
     form: 'ward',
     order: 70,
     max: 16,
-    auto: (e) => (e.size === 'city' ? round(Math.min(10, e.pop / 4500) * fnMul(e, { magic: 0.6 })) : 0),
+    auto: (e) => (e.size === 'city' ? byPeople(e, 'slum') : 0),
     site: (s) => (s.wall ? 1.5 : 0) + s.dc - s.high * 0.8,
     build: (ctx, _w, block) => urban(ctx, block, 'slum'),
   },
@@ -418,7 +423,7 @@ export const FEATURES: FeatureDef[] = [
     form: 'ward',
     order: 14,
     max: 10,
-    auto: (e) => (!e.big ? 0 : e.fn === 'fortress' ? round(Math.max(2, e.inner * 0.08)) : e.size === 'city' ? 1 : 0),
+    auto: (e) => (!e.big ? 0 : Math.min(Math.max(2, round(e.inner * 0.1)), byPeople(e, 'barracks'))),
     site: (s) => (s.wall ? 2 : 0) + (s.near('castle') < 0.7 ? 1 : 0) + (s.clear ? 0.5 : -1) - (s.near('barracks') < 0.4 ? 1.5 : 0),
     build: (ctx, w, block) => barracks(ctx, w, block),
   },
@@ -656,6 +661,7 @@ export function featureEnv(p: SettlementParams, walled = p.walls !== 'none'): Fe
     walled: walled && sc.size !== 'hamlet',
     capital: !!p.capital,
     inner: sc.cfg.inner,
+    plan: p.plan,
   }
 }
 

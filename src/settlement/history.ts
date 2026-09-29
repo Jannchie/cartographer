@@ -328,7 +328,7 @@ export function snapshot(h: SettlementHistory, pop: number): Settlement {
     buildings: (out.buildings as Settlement['buildings']).filter((b) => b.kind !== 'shed').length,
     houses: dwellings.length,
     households: units,
-    population: Math.round(dwellings.reduce((s, b) => s + residentsOf(b, st.params.culture), 0) / 10) * 10,
+    population: Math.round((out.buildings as Settlement['buildings']).reduce((s, b) => s + residentsOf(b, st.params.culture), 0) / 10) * 10,
     area: innerArea / 10000,
   }
   // 规模（村、镇、城）随那时的人口

@@ -24,7 +24,7 @@ import { chord, clipConvex,
   type P,
   type Poly,
 } from './geom'
-import { householdsOf } from './people'
+import { householdsOf, institutionOf } from './people'
 import type { Building, BuildingKind, Ward } from './types'
 
 /** 地块细分参数 */
@@ -274,9 +274,10 @@ function storeys(ctx: Ctx, poly: Poly, cap = Infinity): { floors: number; units:
  */
 function record(ctx: Ctx, poly: Poly, kind: BuildingKind, extra?: Partial<Building>) {
   const b = obb(poly)
-  // 民居记下各户的营生与口数（不算城里人口的 units 为 0，没有住户）
-  const households = dwelling(kind) && !extra?.households ? householdsOf(ctx, poly, extra?.units ?? 1, extra?.floors ?? 1) : undefined
-  ctx.out.buildings.push({ poly, kind, tone: hashAt(ctx, b.center, 'building.tone'), ridge: Math.atan2(b.axis[1], b.axis[0]), ...extra, ...(households ? { households } : {}) })
+  // 民居记下各户的营生与口数（不算城里人口的 units 为 0，没有住户）；寺院的僧房、兵营与城堡的厅堂住集体户
+  let households = extra?.households
+  if (!households) households = dwelling(kind) && (extra?.units ?? 1) > 0 ? householdsOf(ctx, poly, extra?.units ?? 1, extra?.floors ?? 1) : institutionOf(ctx, poly, kind, extra?.floors ?? 1)
+  ctx.out.buildings.push({ poly, kind, tone: hashAt(ctx, b.center, 'building.tone'), ridge: Math.atan2(b.axis[1], b.axis[0]), ...extra, ...(households.length ? { households } : {}) })
 }
 
 export function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house', pad = 0, floorCap = Infinity): boolean {

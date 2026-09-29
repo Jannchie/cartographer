@@ -1,3 +1,4 @@
+import { wardsFor } from '../people'
 import { addRoad } from '../roads'
 import { emitArea, hashAt, placeable, type Ctx } from '../ctx'
 import { area, centroid, insetConvex, pointInPoly, splitConvex, type P, type Poly } from '../geom'
@@ -152,13 +153,15 @@ export const lifang: CityPlan = {
     const { wide, rows } = palaceOf(ctx, z)
     // 宫城的矩形就是这几坊：东西到两侧坊间街，北到外郭（留出顺城街），南到横街
     if (wide) ctx.palaceRect = rectOutline(z, -1.5 * BU + STREET_W, 1.5 * BU - STREET_W, (j0 - 0.5) * BV + 14, (j0 + rows - 0.5) * BV - AVENUE_W / 2 - 5)
-    for (const i of wide ? [-1, 0, 1] : [0]) {
+    // 宫城前的官宦宅第：几坊按官宦占人口的比例（见 people.ts 的 wardsFor），从中轴往两侧排
+    let nobles = Math.max(1, Math.round(wardsFor(ctx.p, 'noble')))
+    for (const i of wide ? [0, -1, 1] : [0]) {
       for (let r = 0; r < rows; r++) {
         set(i, j0 + r, 'castle')
         const l = at(i, j0 + r)
         if (l && wide) l.palace = true
       }
-      if (j1 - j0 >= rows + 2) set(i, j0 + rows, 'noble')
+      if (j1 - j0 >= rows + 2 && nobles-- > 0) set(i, j0 + rows, 'noble')
     }
     // 城心那一坊不作广场，照常是坊
     const c = at(0, 0)

@@ -205,6 +205,10 @@ export interface Building {
 export interface Household {
   trade: string
   people: number
+  /** 住在混住的普通片区（民居、市、港、城郊）：按全城的职业构成校准时只调这些户（见 people.ts 的 calibrateTrades） */
+  mixed?: boolean
+  /** 集体户：寺院的僧众、兵营与城堡的驻军，按建筑面积算人数 */
+  inst?: boolean
 }
 
 /** 片区的建筑密度档：疏（新辟的外围、带园子的独院）、中、密（老城、干道两侧的多层连排） */
