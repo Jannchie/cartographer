@@ -42,7 +42,7 @@ import type { PlanLot, PlanZone } from './plans/types'
 import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
-import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
+import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
 
@@ -230,7 +230,10 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   magicExtras(ctx)
   // 名所：千本鸟居、海上鸟居、奥宫、神桥、山寺、山上的修道院、岩上的城……（按地形挑地方，见 sacred.ts）
   sacredSites(ctx)
-  if (hm) stamp(ctx, hm, 0)
+  if (hm) {
+    stamp(ctx, hm, 0)
+    clearFieldsUnder(ctx, ctx.out.buildings.slice(hm.lens.get('buildings')))
+  }
   // 聚落名等桥、渡口定下再取：有桥才叫"某某桥"
   const cross = ctx.out.crossings
   const crossing = cross.some((c) => c.kind === 'bridge') ? 'bridge' : cross.some((c) => c.kind === 'ferry') ? 'ferry' : cross.length ? 'ford' : null
@@ -238,7 +241,10 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   const riverName = T.river ? namer.river() : null
   const seaName = T.coast ? namer.sea() : null
   labels(ctx, riverName, seaName)
-  if (ctx.history) stampLabels(ctx)
+  if (ctx.history) {
+    stampLabels(ctx)
+    clearRoadTrees(ctx)
+  }
 
   const inner = ctx.out.wards.filter((w) => w.inner)
   const innerArea = inner.reduce((s, w) => s + area(w.poly), 0)
@@ -267,6 +273,56 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     },
   }
   return { st, history: ctx.history }
+}
+
+/**
+ * 成长史：城外一开始就有的房子（磨坊、山寺……在片区之后才放）底下，后来开垦的田不铺（田整块不要）
+ */
+function clearFieldsUnder(ctx: Ctx, buildings: Building[]) {
+  const h = ctx.history!
+  const solid = buildings.map((b) => piece('buildings', b))
+  for (const f of [...ctx.out.fields, ...h.past.filter((x) => x.key === 'fields').map((x) => x.item as Field)]) {
+    const fp = piece('fields', f)
+    if (!solid.some((b) => overlaps(b, fp))) continue
+    const l = h.life.get(f)
+    if (l) l.died = l.born
+    else h.life.set(f, { born: 0, died: 0 })
+  }
+}
+
+/**
+ * 成长史：路（每档路宽一段）修起来时，路面上的树那时砍掉。田野、荒地是按那时还没有的街巷铺的（见 historyWards），
+ * 林子会压在后来的路上；田画在路下面，不用管
+ */
+function clearRoadTrees(ctx: Ctx) {
+  const h = ctx.history!
+  const G = 16
+  const trees = [...ctx.out.trees, ...h.past.filter((x) => x.key === 'trees').map((x) => x.item as Tree)]
+  const grid = new Map<string, Tree[]>()
+  for (const t of trees) {
+    const k = `${Math.floor(t.p[0] / G)},${Math.floor(t.p[1] / G)}`
+    let g = grid.get(k)
+    if (!g) grid.set(k, (g = []))
+    g.push(t)
+  }
+  const roads = [...ctx.out.roads, ...h.past.filter((x) => x.key === 'roads').map((x) => x.item as Road)]
+  for (const r of roads) {
+    const rl = h.life.get(r) ?? { born: 0, died: Infinity }
+    const reach = r.width / 2 + 0.5
+    for (let i = 1; i < r.line.length; i++) {
+      const a = r.line[i - 1]
+      const b = r.line[i]
+      for (let y = Math.floor((Math.min(a[1], b[1]) - reach) / G); y <= Math.floor((Math.max(a[1], b[1]) + reach) / G); y++)
+        for (let x = Math.floor((Math.min(a[0], b[0]) - reach) / G); x <= Math.floor((Math.max(a[0], b[0]) + reach) / G); x++)
+          for (const t of grid.get(`${x},${y}`) ?? []) {
+            let l = h.life.get(t)
+            if (l && !(l.born < rl.died && rl.born < l.died)) continue
+            if (polylineDist(t.p, [a, b]) >= reach) continue
+            if (!l) h.life.set(t, (l = { born: 0, died: Infinity }))
+            l.died = Math.max(l.born, rl.born)
+          }
+    }
+  }
 }
 
 /**

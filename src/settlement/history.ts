@@ -228,8 +228,9 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
     opened.add(f)
     const own = aliveOf(f.patch)
     if (f.rural && !f.whole) {
-      // 零散的农家：田地、树留着，只有原来那块地（片区底）换成这一个
-      for (const x of [...own]) if (x.key === 'wards' || x.key === 'blocks') kill(x, t, f.patch)
+      // 零散的农家：田地、树留着，只有原来那块地（片区底）换成这一个；屋旁的菜园、草场压住的旧田换下来
+      const plots = f.base.filter((x) => x.key === 'fields' || x.key === 'enclosures')
+      for (const x of [...own]) if (x.key === 'wards' || x.key === 'blocks' || (x.key === 'fields' && plots.some((y) => overlaps(y, x)))) kill(x, t, f.patch)
     } else if (f.whole || !f.rebuild) {
       // 整片建成或从田野辟成民居：原来的一切清掉
       for (const x of [...own]) kill(x, t, f.patch)
@@ -285,8 +286,6 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
         const own = aliveOf(f.patch)
         for (const x of [...own]) {
           if (formOf.get(x) === f) continue
-          // 零散的农家散在田间：田地不拆（成了街坊时一次清掉）
-          if (f.rural && x.key === 'fields') continue
           if (!g.pieces.some((y) => overlaps(y, x))) continue
           kill(x, t, f.patch)
           if (x.units > 0 || x.key === 'buildings')
