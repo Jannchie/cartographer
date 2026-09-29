@@ -835,8 +835,8 @@ function boatLayers(R: Painter, st: Settlement, th: SettleTheme) {
 
 function enclosureLayers(R: Painter, st: Settlement, th: SettleTheme) {
   if (!st.enclosures.length) return
-  // 院子：比四周略深的地面，院墙是一道淡线
-  R.polys(st.enclosures, { color: th.green.courtyard, alpha: 1 }, { color: th.ink, alpha: 0.3, width: Math.max(0.5, 0.5 * R.S), join: 'round' })
+  // 院子：叠一层淡淡的墨色，不描边（各种画法下都比四周的地面略深；蓝图是略亮）
+  R.polys(st.enclosures, { color: th.ink, alpha: 0.08 })
 }
 
 const KIND_ORDER: Exclude<BuildingKind, 'torii'>[] = ['shed', 'house', 'large', 'hall', 'civic', 'temple', 'pagoda', 'keep', 'tower', 'magic']
