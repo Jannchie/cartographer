@@ -835,7 +835,8 @@ function boatLayers(R: Painter, st: Settlement, th: SettleTheme) {
 
 function enclosureLayers(R: Painter, st: Settlement, th: SettleTheme) {
   if (!st.enclosures.length) return
-  R.polys(st.enclosures, undefined, { color: th.ink, alpha: 0.7, width: Math.max(0.6, 0.7 * R.S), join: 'round' })
+  // 院子：比四周略深的地面，院墙是一道淡线
+  R.polys(st.enclosures, { color: th.green.courtyard, alpha: 1 }, { color: th.ink, alpha: 0.3, width: Math.max(0.5, 0.5 * R.S), join: 'round' })
 }
 
 const KIND_ORDER: Exclude<BuildingKind, 'torii'>[] = ['shed', 'house', 'large', 'hall', 'civic', 'temple', 'pagoda', 'keep', 'tower', 'magic']
