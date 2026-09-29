@@ -39,6 +39,14 @@ export function t(key: string, vars?: Record<string, string | number>): string {
   return s
 }
 
+/** 别的模块登记自己的词条（中文、英文、日文）：职业名这类成套的名字放在定义它们的地方 */
+export function defineStrings(names: [zh: string, en: string, ja: string][]) {
+  for (const [zh, en, ja] of names) {
+    EN[zh] ??= en
+    JA[zh] ??= ja
+  }
+}
+
 /** 按指定语言翻译（不看当前界面语言）：离线渲染、导出指定语言的地图时用 */
 export function tr(key: string, lg: Lang): string {
   return lg === 'zh' ? key : ((lg === 'en' ? EN : JA)[key] ?? key)
@@ -261,6 +269,9 @@ const EN: Record<string, string> = {
   '城区另起的几个中心：各有广场或市集，城区围着它们一起生长、连成一片，彼此有干道相通': 'Secondary centres, each with its own square or market; the town grows around all of them into one fabric, linked by avenues',
   目标人口: 'Target pop.',
   户: 'homes',
+  人: 'people',
+  职业: 'Occupation',
+  '按户主的营生：家人连未成年人随户，学徒、伙计随行当，仆役另算；点开看细分': 'By the head of household: family members, children included, follow the household; apprentices and shop hands follow the trade; servants are counted apart. Open a row for the trades',
   栋: 'buildings',
   住户: 'Households',
   居住人数: 'Residents',
@@ -977,6 +988,9 @@ const JA: Record<string, string> = {
   '城区另起的几个中心：各有广场或市集，城区围着它们一起生长、连成一片，彼此有干道相通': '町のもう一つの中心。それぞれに広場や市場があり、市街はそれらを囲んで一体に育ち、大通りで結ばれる',
   目标人口: '目標人口',
   户: '戸',
+  人: '人',
+  职业: '職業',
+  '按户主的营生：家人连未成年人随户，学徒、伙计随行当，仆役另算；点开看细分': '戸主の生業による：家族は子どもも含めて戸に従い、徒弟・手代は生業に、奉公人は別に数える。行を開くと内訳',
   栋: '棟',
   住户: '世帯',
   居住人数: '居住者数',

@@ -195,8 +195,16 @@ export interface Building {
   floors?: number
   /** 住户数（民居）：多层的楼房一栋住几户 */
   units?: number
+  /** 各户的营生与口数（民居，见 people.ts）；城外村子、宫殿里不算城里人口的没有 */
+  households?: Household[]
   /** 用途（悬停说明的中文键）：祠、鸟居、路边十字架这类由类型推不出的，盖的时候写明 */
   role?: string
+}
+
+/** 一户人家：户主的行当（people.ts 里各文明的行当 id）与口数（连未成年人、学徒、仆役） */
+export interface Household {
+  trade: string
+  people: number
 }
 
 /** 片区的建筑密度档：疏（新辟的外围、带园子的独院）、中、密（老城、干道两侧的多层连排） */

@@ -236,6 +236,7 @@ function settled(ctx: Ctx, z: PlanZone, g: Grid): Set<Ward> {
     ctx.rng = wardRng(ctx, centroid(w.poly))
     ctx.wardFill = 1
     ctx.wardDensity = w.density ?? 'mid'
+    ctx.wardType = w.type
     const nb = ctx.out.buildings.length
     const own = special(ctx, z, g, w, block)
     if (!own) FEATURE[w.type as FeatureId].build!(ctx, w, block, ctx.env)

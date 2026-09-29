@@ -1,7 +1,8 @@
 import type { Ctx } from './ctx'
 import { bboxOf, convexOverlap, pointInPoly, type BBox, type P, type Poly } from './geom'
 import { hashAt } from './ctx'
-import { perHousehold, scaleOf } from './scale'
+import { residentsOf } from './people'
+import { scaleOf } from './scale'
 import type { Settlement } from './types'
 
 /**
@@ -321,14 +322,13 @@ export function snapshot(h: SettlementHistory, pop: number): Settlement {
     out[k] = (st[k] as object[]).filter(at)
   const dwellings = (out.buildings as Settlement['buildings']).filter((b) => b.kind === 'house' || b.kind === 'large')
   const units = dwellings.reduce((s, b) => s + (b.units ?? 1), 0)
-  const per = perHousehold(st.params.culture)
   const innerArea = (out.wards as Settlement['wards']).filter((w) => w.inner).reduce((s, w) => s + Math.abs(signedArea(w.poly)), 0)
   out.stats = {
     ...st.stats,
     buildings: (out.buildings as Settlement['buildings']).filter((b) => b.kind !== 'shed').length,
     houses: dwellings.length,
     households: units,
-    population: Math.round((units * per) / 10) * 10,
+    population: Math.round(dwellings.reduce((s, b) => s + residentsOf(b, st.params.culture), 0) / 10) * 10,
     area: innerArea / 10000,
   }
   // 规模（村、镇、城）随那时的人口

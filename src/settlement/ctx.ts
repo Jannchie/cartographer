@@ -5,7 +5,7 @@ import type { TerrainResult } from './terrain'
 import type { FeatureEnv, FeatureId } from './features'
 import type { CityPlan, PlanZone } from './plans/types'
 import type { CultureStyle } from './culture'
-import type { Density, Landmark, Settlement, SettlementParams, Tier, Wall } from './types'
+import type { Density, Landmark, Settlement, SettlementParams, Tier, Wall, WardType } from './types'
 
 /** 各规模的结构参数 */
 export interface SizeCfg {
@@ -333,6 +333,8 @@ export interface Ctx {
   wardPop?: number
   /** 当前片区的密度档（决定地块大小、层数与形态，见 scale.ts 的 densityOf） */
   wardDensity: Density
+  /** 当前片区的类型（民居住户的营生按它抽，见 people.ts） */
+  wardType: WardType
   /** 正在盖的地标的规模档（见 Tier）：教堂、神社、园林、城堡的盖法据此收放元素池与尺度 */
   tier: Tier
   /** 规划布局的网格朝向（弧度）；院落据此判断坐北朝南 */

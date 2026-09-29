@@ -3,7 +3,7 @@ import { contours, simplify } from '../render/atlas/svg/contour'
 import { dryArea, emitArea, Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, mainCore, squareness, seedRng, wardRng, type Core, mark, type Ctx } from './ctx'
 import { FEATURE, FEATURES, featureEnv, resolveCounts, type FeatureId } from './features'
 import { placeLandmarks, zoneLots, type Lot } from './zoning'
-import { PATCH, POP_OF_SIZE, densityScore, densityTier, farmPerHa, wardRate, isVillage, fullPerHa, housesPerHa, perHousehold, planPopOf, scaleOf, townShare } from './scale'
+import { PATCH, POP_OF_SIZE, densityScore, densityTier, farmPerHa, wardRate, isVillage, fullPerHa, housesPerHa, planPopOf, scaleOf, townShare } from './scale'
 import {
   area,
   centroid,
@@ -44,6 +44,7 @@ import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
+import { dwelling, perHome, residentsOf } from './people'
 import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
 
 /**
@@ -81,9 +82,9 @@ function scaled(input: SettlementParams) {
   // 副中心离得远（卫星城）时地图放大，放得下隔着田野的几座城
   const env0 = featureEnv(p)
   const subN = env0.big ? resolveCounts(p, env0).subcenter : 0
-  // 城区要多大由目标户数定：户数 ÷ 每公顷户数 = 需要的城区面积，折成片区数（片区网格、城区半径、
+  // 城区要多大由目标户数定（人口 ÷ 平均每户口数，见 people.ts 的 perHome）：户数 ÷ 每公顷户数 = 需要的城区面积，折成片区数（片区网格、城区半径、
   // 地图范围都按它铺开）；经验片区数偏少时（大村、规整的东方城）随之放大
-  const households = Math.round(target / perHousehold(p.culture))
+  const households = Math.round(target / perHome(p.culture))
   // 城墙按规划容量修：地图要放得下现在这道墙（它能容纳的人口比现在多）
   const planned = wallStages(p).at(-1)?.cap ?? 0
   const needInner = innerFor(p, Math.max(target, planned))
@@ -169,6 +170,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     wardQuota: Infinity,
     wardTown: true,
     wardDensity: 'mid',
+    wardType: 'common',
     tier: 'standard',
     gridAngle: 0,
     // 要素环境与数量要等知道是否设防后才能定（见下方），这里先占位
@@ -253,6 +255,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   const dwellings = ctx.out.buildings.filter((b) => b.kind === 'house' || b.kind === 'large')
   const houses = dwellings.length
   const units = dwellings.reduce((s, b) => s + (b.units ?? 1), 0)
+  const people = dwellings.reduce((s, b) => s + residentsOf(b, p.culture), 0)
   const st: Settlement = {
     params: p,
     name: p.name || town.en,
@@ -269,7 +272,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
       buildings: ctx.out.buildings.filter((b) => b.kind !== 'shed').length,
       houses,
       households: units,
-      population: Math.round((units * perHousehold(p.culture)) / 10) * 10,
+      population: Math.round(people / 10) * 10,
       area: innerArea / 10000,
       ms: performance.now() - t0,
     },
@@ -600,7 +603,7 @@ function wallStages(p: SettlementParams): WallStage[] {
 
 /** 住下 pop 人需要的城内片区数（户数 ÷ 每公顷户数，折成片区；不少于档位的经验值） */
 function innerFor(p: SettlementParams, pop: number) {
-  const need = Math.round(((pop / perHousehold(p.culture)) / housesPerHa({ ...p, population: pop })) * 10000 / (0.87 * PATCH * PATCH * 0.9))
+  const need = Math.round(((pop / perHome(p.culture)) / housesPerHa({ ...p, population: pop })) * 10000 / (0.87 * PATCH * PATCH * 0.9))
   return Math.max(scaleOf(pop).cfg.inner, need)
 }
 /** 人口为 pop 时的城区半径估计 */
@@ -764,7 +767,7 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
   const model = capacityModel(ctx, patches, arterials, ctx.p.population)
   const margin = model.margin
   // 撒祠、村社要拆的几户也留出地方（见 tiers.ts 的 tierReserve）
-  const need = Math.max(ctx.houseBudget, plannedPop / perHousehold(ctx.p.culture)) * margin * tierReserve(ctx.p.culture)
+  const need = Math.max(ctx.houseBudget, plannedPop / perHome(ctx.p.culture)) * margin * tierReserve(ctx.p.culture)
   const ages = new Map<number, number>()
   // 历史上各时刻（与现在的人口无关的一串固定人口）要的城区也都要圈进来：城市变密以后同样的人住得下更少的地，
   // 但已经辟成城区的地不会退回田野——城区是历代城区的并集，只扩不缩
@@ -775,7 +778,7 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
   xs.push(ctx.p.population)
   for (const x of xs) {
     const m = x === ctx.p.population ? model : capacityModel(ctx, patches, arterials, x)
-    history.push({ x, model: m, need: (x / perHousehold(ctx.p.culture)) * m.margin * tierReserve(ctx.p.culture), cap: 0 })
+    history.push({ x, model: m, need: (x / perHome(ctx.p.culture)) * m.margin * tierReserve(ctx.p.culture), cap: 0 })
   }
   const capacity = (i: number) => {
     const { c, age, d, s } = model.add(i)
@@ -802,7 +805,7 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
   }
   // 主中心先长；第 k 个副中心在城市长到约 SUB_BIRTH × k 人时才另起（与自动数量的规则一致），
   // 早年的城区与城墙里没有它们
-  const per = perHousehold(ctx.p.culture)
+  const per = perHome(ctx.p.culture)
   const births = seeds.slice(1).map((i, k) => ({ i, at: (subBirth(ctx.p, k, seeds.length - 1) / per) * margin }))
   seed(seeds[0])
   let n = 1
@@ -882,7 +885,7 @@ function capacityModel(ctx: Ctx, patches: Patch[], arterials: P[][], pop: number
   let special = cores + FEATURES.filter((f) => f.form === 'ward' && !LIVED.has(f.id)).reduce((s, f) => s + (counts[f.id] ?? 0), 0)
   // 名义容量把特殊片区也当作一块中档民居
   const perPatch = (cfg.patch * cfg.patch * 0.87 * fullPerHa(p.culture, 'common', 'mid') * RESIDENTIAL) / 10000
-  const hh = Math.max(1, (pop / perHousehold(p.culture)) * margin + special * perPatch)
+  const hh = Math.max(1, (pop / perHome(p.culture)) * margin + special * perPatch)
   let nominal = 0
   return {
     margin,
@@ -1086,7 +1089,7 @@ function innerAt(ctx: Ctx, patches: Patch[], g: Growth, pop: number, arterials: 
   xs.push(pop)
   for (const x of xs) {
     const model = capacityModel(ctx, patches, arterials, x)
-    const need = (x / perHousehold(ctx.p.culture)) * model.margin
+    const need = (x / perHome(ctx.p.culture)) * model.margin
     let cap = 0
     let k = 0
     while (k < g.order.length && cap < need) cap += model.add(g.order[k++]).c
@@ -2130,7 +2133,6 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
   const { p } = ctx
   const h = ctx.history!
   const P = p.population
-  const per = perHousehold(p.culture)
   const grid: number[] = []
   for (let t = 30; t < P; t *= 1.08) grid.push(t)
   grid.push(P)
@@ -2221,6 +2223,7 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
     ctx.houseBudget = Infinity
     ctx.wardPop = pa.foundPop
     ctx.wardDensity = sp.tier
+    ctx.wardType = sp.type
     ctx.wardTown = sp.town
     const rural = sp.inner && !sp.whole && !sp.town
     const ward: Ward = { poly: pa.poly, type: sp.type, inner: sp.inner, density: sp.inner ? sp.tier : undefined, ...(rural ? { rural } : {}), ...(pa.grand && sp.type === S.wards[i].type ? { tier: 'grand' as const } : {}) }
@@ -2232,7 +2235,7 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
       const cp = checkpoint(ctx)
       buildWardForm(ctx, S, i, ward, block)
       // 零散农家的片区没有街坊底（地面还是田野）
-      for (const [k, n] of cp.len) if (!(rural && k === 'blocks')) for (const item of (ctx.out[k] as object[]).slice(n)) pieces.push(piece(k, item, k === 'buildings' ? ((item as Building).units ?? 0) : 0))
+      for (const [k, n] of cp.len) if (!(rural && k === 'blocks')) for (const item of (ctx.out[k] as object[]).slice(n)) pieces.push(piece(k, item, k === 'buildings' && dwelling(item as Building) ? residentsOf(item as Building, p.culture) : 0))
       rollback(ctx, cp)
     }
     ctx.corridors = late
@@ -2276,7 +2279,8 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
     forms.push(...fs)
     formsOf.set(i, fs)
   }
-  const life = schedule(forms, { from: 30, until: P, demand: (t) => t / per })
+  // 按人口补足：各户的口数不一（大宅人多、陋屋人少，见 people.ts）
+  const life = schedule(forms, { from: 30, until: P, demand: (t) => t })
   for (const [f, sp] of later) {
     const l = life.get(f.pieces[0])
     if (!l || l.died !== Infinity) continue

@@ -1,5 +1,5 @@
 import { area, bboxOf, dist, pointInPoly, polylineDist, type P, type Poly } from './geom'
-import { perHousehold } from './scale'
+import { residentsOf, tradeInfo } from './people'
 import type { Building, Culture, Field, Settlement, Ward, WardType } from './types'
 
 /**
@@ -155,8 +155,9 @@ export function describeAt(st: Settlement, q: P, ward: Ward | undefined): Descri
     if (b.floors) rows.push(['层数', String(b.floors), false])
     if (b.units) {
       rows.push(['住户', String(b.units), false])
-      // 住户是户数：按这种文明每户几口人折成人数
-      rows.push(['居住人数', `≈ ${Math.round(b.units * perHousehold(c))}`, false])
+      // 口数连未成年人、学徒伙计、仆役；各户的营生（多户的楼房列出不同的几种）
+      rows.push(['居住人数', String(Math.round(residentsOf(b, c))), false])
+      for (const trade of new Set((b.households ?? []).map((h) => tradeInfo(c, h.trade)?.name).filter((x): x is string => !!x))) rows.push(['职业', trade, true])
     }
     rows.push(['占地', ha(area(b.poly)), false])
     return { title: buildingRole(st, b, ward, !!grave), rows }
