@@ -1,8 +1,8 @@
 import { eastAsian } from './culture'
 import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
-import { DisplayList, type Fill, type Item, type Stroke } from '../render/atlas/svg/displayList'
+import { DisplayList, type Fill, type Item, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
-import { centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, type P, type Poly } from './geom'
+import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, type P, type Poly } from './geom'
 import { settleTheme, type SettleStyleId, type SettleTheme } from './themes'
 import type { BuildingKind, MapLabel, Settlement, SettlementSize } from './types'
 import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type LandUse } from './landuse'
@@ -75,7 +75,7 @@ export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts
   }
   R.rect(th.ground)
   terrainLayers(R, st, th, opts)
-  for (const f of st.fields) R.poly(f.poly, { color: pick(th.fields[f.kind], f.tone), alpha: 1 })
+  fieldFills(R, st, th)
   furrows(R, st, th)
   for (const g of st.greens) R.poly(g.poly, { color: th.green[g.kind], alpha: 1 }, g.kind === 'cemetery' ? { color: th.ink, alpha: 0.35, width: 0.5 } : undefined)
   urbanGround(R, st, th)
@@ -481,39 +481,77 @@ function hatchLines(poly: Poly, angle: number, step: number): P[][] {
   return out
 }
 
-function furrows(R: Painter, st: Settlement, th: SettleTheme) {
-  const lines: P[][] = []
-  const bunds: Poly[] = []
-  const vine: P[][] = []
-  const beds: P[][] = []
-  const hay: P[][] = []
+/**
+ * 田块的底色：每块一个绘制项，按田块对象、比例与颜色记下（连解析好的路径一起），成长动画逐帧重画时没变的田直接取用
+ */
+const fieldItems = new WeakMap<object, { key: string; item: PathItem }>()
+function fieldFills(R: Painter, st: Settlement, th: SettleTheme) {
+  const seg = R.list.segment('map')
   for (const f of st.fields) {
-    if (f.kind === 'crop') lines.push(...hatchLines(f.poly, f.angle, 3.4))
-    else if (f.kind === 'vineyard') vine.push(...hatchLines(f.poly, f.angle, 3.2))
-    else if (f.kind === 'paddy') bunds.push(f.poly)
-    else if (f.kind === 'garden') beds.push(...hatchLines(f.poly, f.angle, 1.6))
-    else if (f.kind === 'meadow') hay.push(...hatchLines(f.poly, f.angle, 6))
+    const color = pick(th.fields[f.kind], f.tone)
+    const key = `${R.S}|${color}`
+    let c = fieldItems.get(f)
+    if (!c || c.key !== key) {
+      const d = R.polyD(f.poly)
+      if (!d) continue
+      const [x0, y0, x1, y1] = bboxOf(f.poly)
+      const S = R.S
+      c = { key, item: { k: 'path', d, opacity: 1, fill: R.fillOf(color, 1), bbox: [x0 * S - 1, y0 * S - 1, x1 * S + 1, y1 * S + 1] } }
+      fieldItems.set(f, c)
+    }
+    seg.items.push(c.item)
   }
-  R.lines(lines, { color: th.furrow.color, alpha: th.furrow.alpha, width: 0.4 })
+}
+
+/**
+ * 一块田的某种纹路（垄沟、畦、边界……）的路径，按田块对象与比例记下：成长动画逐帧重画时，没变的田直接取用
+ */
+const fieldPaths = new WeakMap<object, Map<string, string>>()
+function fieldD(R: Painter, f: object, tag: string, make: () => string) {
+  let m = fieldPaths.get(f)
+  if (!m) fieldPaths.set(f, (m = new Map()))
+  const k = `${tag}|${R.S}`
+  let d = m.get(k)
+  if (d === undefined) m.set(k, (d = make()))
+  return d
+}
+
+function furrows(R: Painter, st: Settlement, th: SettleTheme) {
+  const lines: string[] = []
+  const bunds: string[] = []
+  const vine: string[] = []
+  const beds: string[] = []
+  const hay: string[] = []
+  const hatch = (f: Settlement['fields'][number], step: number) => fieldD(R, f, `hatch${step}`, () => hatchLines(f.poly, f.angle, step).map((l) => R.lineD(l)).join(''))
+  const outline = (f: Settlement['fields'][number]) => fieldD(R, f, 'outline', () => R.polyD(f.poly))
+  for (const f of st.fields) {
+    if (f.kind === 'crop') lines.push(hatch(f, 3.4))
+    else if (f.kind === 'vineyard') vine.push(hatch(f, 3.2))
+    else if (f.kind === 'paddy') bunds.push(outline(f))
+    else if (f.kind === 'garden') beds.push(hatch(f, 1.6))
+    else if (f.kind === 'meadow') hay.push(hatch(f, 6))
+  }
+  // 田铺满全图：包围盒就是整张地图，不必逐字解析几兆的路径
+  const all: [number, number, number, number] = [0, 0, R.list.MW, R.list.MH]
+  const draw = (ds: string[], stroke: Stroke) => {
+    const d = ds.join('')
+    if (d) R.list.path('map', d, { stroke }, all)
+  }
+  draw(lines, { color: th.furrow.color, alpha: th.furrow.alpha, width: 0.4 })
   // 菜园：密排的小畦；草甸：稀疏的草丛（虚点线），不设篱笆
-  R.lines(beds, { color: th.furrow.color, alpha: th.furrow.alpha * 1.2, width: 0.35 })
-  R.lines(hay, { color: th.furrow.color, alpha: th.furrow.alpha * 1.4, width: 0.6, cap: 'round', dash: [0.01, 2.4] })
+  draw(beds, { color: th.furrow.color, alpha: th.furrow.alpha * 1.2, width: 0.35 })
+  draw(hay, { color: th.furrow.color, alpha: th.furrow.alpha * 1.4, width: 0.6, cap: 'round', dash: [0.01, 2.4] })
   // 葡萄园：一行行架子（细线）上排着一株株葡萄（圆头短虚线画成的圆点，比逐个画圆省得多）
-  R.lines(vine, { color: th.furrow.color, alpha: th.furrow.alpha * 1.5, width: 0.35 })
-  R.lines(vine, { color: th.tree.dark, alpha: 0.95, width: Math.max(1, 1.35 * R.S), cap: 'round', dash: [0.01, 2.3 * R.S] })
-  R.polys(bunds, undefined, { color: th.furrow.color, alpha: th.furrow.alpha * 1.6, width: 0.7 })
+  draw(vine, { color: th.furrow.color, alpha: th.furrow.alpha * 1.5, width: 0.35 })
+  draw(vine, { color: th.tree.dark, alpha: 0.95, width: Math.max(1, 1.35 * R.S), cap: 'round', dash: [0.01, 2.3 * R.S] })
+  draw(bunds, { color: th.furrow.color, alpha: th.furrow.alpha * 1.6, width: 0.7 })
   // 田块边界；牧场是一圈篱笆（虚线），里面有一两小群羊
-  R.polys(
-    st.fields.filter((f) => f.kind !== 'paddy' && f.kind !== 'pasture' && f.kind !== 'meadow').map((f) => f.poly),
-    undefined,
+  draw(
+    st.fields.filter((f) => f.kind !== 'paddy' && f.kind !== 'pasture' && f.kind !== 'meadow').map(outline),
     { color: th.furrow.color, alpha: th.furrow.alpha * 1.3, width: 0.5 },
   )
   const pastures = st.fields.filter((f) => f.kind === 'pasture')
-  R.polys(
-    pastures.map((f) => f.poly),
-    undefined,
-    { color: th.furrow.color, alpha: th.furrow.alpha * 2, width: 0.7, dash: [2.2, 1.6] },
-  )
+  draw(pastures.map(outline), { color: th.furrow.color, alpha: th.furrow.alpha * 2, width: 0.7, dash: [2.2, 1.6] })
   const sheep: string[] = []
   for (const f of pastures) {
     const a = areaOf(f.poly)
@@ -538,12 +576,60 @@ function furrows(R: Painter, st: Settlement, th: SettleTheme) {
 /** 树冠在图上画多大（相对生成时的半径）：与房子的比例更协调 */
 const TREE_SCALE = 0.7
 
+/**
+ * 树按 TREE_CHUNK 米一块画：每块三条路径（投影、树冠、暗面），带自己的包围盒（放大时画面外的块不画）。
+ * 每块的绘制项按块里是哪几棵树与画法记下（见 treeChunks）：成长动画逐帧重画时，没变的块（多数是城外的林子）
+ * 直接取用，连解析好的路径（Path2D）一起。投影与暗面缩小到树不到一两个像素时不画（见 PathItem.minScale）
+ */
+const TREE_CHUNK = 250
+const treeIds = new WeakMap<object, number>()
+let treeNext = 0
+/** 每块的三层：投影（这种画法没有投影时空着）、树冠、暗面 */
+const treeChunks = new Map<string, (PathItem | undefined)[]>()
 function treeLayers(R: Painter, st: Settlement, th: SettleTheme) {
   if (!st.trees.length) return
   const S = R.S
-  // 投影 → 树冠 → 暗面
-  const sorted = [...st.trees].map((t) => ({ ...t, r: t.r * TREE_SCALE })).sort((a, b) => a.p[1] - b.p[1])
-  // 包围盒直接由树算出（几万棵树的路径不必再逐字解析）；投影往右下偏，一起罩住
+  const byChunk = new Map<string, Settlement['trees']>()
+  for (const t of st.trees) {
+    const k = `${Math.floor(t.p[0] / TREE_CHUNK)},${Math.floor(t.p[1] / TREE_CHUNK)}`
+    ;(byChunk.get(k) ?? byChunk.set(k, []).get(k)!).push(t)
+  }
+  // 树冠半径约 2 米（页面像素）：放大到它有 1.5 像素才画投影、暗面
+  const detail = 1.5 / Math.max(0.01, 2 * TREE_SCALE * S)
+  const look = JSON.stringify(th.tree)
+  const layers: PathItem[][] = [[], [], []]
+  for (const trees of byChunk.values()) {
+    // 块的记号：比例、画法与块里每棵树（按对象）的编号
+    let h = 2166136261
+    for (const t of trees) {
+      let id = treeIds.get(t)
+      if (id === undefined) treeIds.set(t, (id = treeNext++))
+      h = Math.imul(h ^ id, 16777619)
+    }
+    const key = `${S}|${look}|${trees.length}|${h >>> 0}`
+    let items = treeChunks.get(key)
+    if (!items) {
+      const c = treeChunk(R, trees)
+      const item = (d: string, o: Omit<PathItem, 'k' | 'd' | 'bbox' | 'opacity'>): PathItem => ({ k: 'path', d, opacity: 1, ...o, bbox: c.bb })
+      items = [
+        th.tree.shadow ? item(c.shadow, { fill: { color: th.tree.shadow, alpha: 0.25 }, minScale: detail }) : undefined,
+        item(c.crown, { fill: { color: th.tree.fill, alpha: 1 }, stroke: th.tree.stroke ? { color: th.tree.stroke, alpha: 0.8, width: 0.6 } : undefined }),
+        item(c.dark, { fill: { color: th.tree.dark, alpha: th.tree.darkAlpha ?? 0.55 }, minScale: detail }),
+      ]
+      if (treeChunks.size > 20000) treeChunks.clear()
+      treeChunks.set(key, items)
+    }
+    items.forEach((x, k) => x && layers[k].push(x))
+  }
+  // 投影 → 树冠 → 暗面（各块的同一层放在一起，树冠不会被别块的投影压住）
+  const seg = R.list.segment('map')
+  for (const l of layers) seg.items.push(...l)
+}
+
+/** 一块树的三条路径（按南北排，靠南的压在上面）与包围盒（投影往右下偏，一起罩住） */
+function treeChunk(R: Painter, trees: Settlement['trees']) {
+  const S = R.S
+  const sorted = trees.map((t) => ({ ...t, r: t.r * TREE_SCALE })).sort((a, b) => a.p[1] - b.p[1])
   let x0 = Infinity
   let y0 = Infinity
   let x1 = -Infinity
@@ -555,18 +641,10 @@ function treeLayers(R: Painter, st: Settlement, th: SettleTheme) {
     y1 = Math.max(y1, (t.p[1] + t.r * 1.35) * S)
   }
   const bb: [number, number, number, number] = [x0 - 1, y0 - 1, x1 + 1, y1 + 1]
-  if (th.tree.shadow) R.list.path('map', sorted.map((t) => R.circleD([t.p[0] + t.r * 0.35, t.p[1] + t.r * 0.35], t.r)).join(''), { fill: { color: th.tree.shadow, alpha: 0.25 } }, bb)
-  R.list.path(
-    'map',
-    sorted.map((t) => R.circleD(t.p, t.r)).join(''),
-    {
-      fill: { color: th.tree.fill, alpha: 1 },
-      stroke: th.tree.stroke ? { color: th.tree.stroke, alpha: 0.8, width: 0.6 } : undefined,
-    },
-    bb,
-  )
+  const shadow = sorted.map((t) => R.circleD([t.p[0] + t.r * 0.35, t.p[1] + t.r * 0.35], t.r)).join('')
+  const crown = sorted.map((t) => R.circleD(t.p, t.r)).join('')
   // 暗面：右下的月牙
-  const d = sorted
+  const dark = sorted
     .map((t) => {
       const r = t.r * S
       const x = t.p[0] * S
@@ -580,7 +658,7 @@ function treeLayers(R: Painter, st: Settlement, th: SettleTheme) {
       return `M${f1(sx)} ${f1(sy)}A${f1(r)} ${f1(r)} 0 0 1 ${f1(ex)} ${f1(ey)}Q${f1(x + r * 0.25)} ${f1(y + r * 0.2)} ${f1(sx)} ${f1(sy)}Z`
     })
     .join('')
-  R.list.path('map', d, { fill: { color: th.tree.dark, alpha: th.tree.darkAlpha ?? 0.55 } }, bb)
+  return { shadow, crown, dark, bb }
 }
 
 // —————————————————————— 道路与城区 ——————————————————————

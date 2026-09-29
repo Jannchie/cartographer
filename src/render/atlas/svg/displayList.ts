@@ -36,6 +36,8 @@ export interface PathItem {
   opacity: number
   bbox: BBox
   p2d?: Path2D
+  /** 画的倍率小于它时不画（缩小时细得看不见的细节：树的投影、暗面） */
+  minScale?: number
 }
 
 export interface TextItem {
@@ -317,6 +319,7 @@ export class DisplayList {
       for (const it of seg.items) {
         const b = it.bbox
         if (b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) continue
+        if (it.k === 'path' && it.minScale !== undefined && scale < it.minScale) continue
         if (it.k === 'path') this.drawPath(ctx, it)
         else this.drawText(ctx, it)
       }

@@ -95,9 +95,12 @@ export function outMark(ctx: Ctx): Mark {
 export function stamp(ctx: Ctx, m: Mark, born: number, died = Infinity) {
   const h = ctx.history
   if (!h) return
+  // 记号之后删掉的（拆房子腾地方）让后面的项往前挪了：从记号时的长度往前退删掉的个数起看（已经记过的跳过）
+  const gone = new Map<OutKey, number>()
+  for (let i = m.dropped; i < ctx.dropped.length; i++) gone.set(ctx.dropped[i].key, (gone.get(ctx.dropped[i].key) ?? 0) + 1)
   for (const [k, n] of m.lens) {
     const a = ctx.out[k] as object[]
-    for (let i = n; i < a.length; i++) if (!h.life.has(a[i])) h.life.set(a[i], { born, died })
+    for (let i = Math.max(0, n - (gone.get(k) ?? 0)); i < a.length; i++) if (!h.life.has(a[i])) h.life.set(a[i], { born, died })
   }
   for (let i = m.dropped; i < ctx.dropped.length; i++) {
     const d = ctx.dropped[i]
