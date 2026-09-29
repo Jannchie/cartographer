@@ -23,6 +23,7 @@ import { describeAt } from '../../settlement/describe'
 import { terrainKey } from '../../settlement/terrain'
 import { planFits } from '../../settlement/culture'
 import { LAND_USES, landUseOf, landUseStats, type LandUse, type LandUseStat } from '../../settlement/landuse'
+import { peopleStats, type PeopleStat } from '../../settlement/people'
 
 /**
  * 聚落地图模块：参数、风格、导出 + 矢量查看器与悬停探针。
@@ -81,6 +82,8 @@ export const ss = reactive({
   },
   /** 区划各类的面积（图例用） */
   landUse: [] as LandUseStat[],
+  /** 按职业的人口（图签里的职业表） */
+  people: [] as PeopleStat[],
   /** 继承的世界地点（world.labels 的下标，-1 为独立生成） */
   from: -1,
   places: [] as { i: number; label: string }[],
@@ -432,6 +435,7 @@ function fitView() {
 
 function showInfo(s: Settlement) {
   ss.landUse = landUseStats(s)
+  ss.people = peopleStats(s)
   ss.info = {
     title: lang === 'zh' ? s.nameZh : lang === 'ja' ? s.nameJa : s.name,
     sub: `${lang === 'en' ? s.nameZh : s.name} · ${(s.stats.ms / 1000).toFixed(2)} s`,

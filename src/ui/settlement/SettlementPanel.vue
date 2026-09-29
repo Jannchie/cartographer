@@ -82,6 +82,11 @@ const VIEWS = [
   { value: 'map', label: '地图' },
   { value: 'zoning', label: '区划', title: '普通地图，或按用地性质给片区着色的区划图' },
 ] as const
+// 职业表：各大类的人口与占全城的比例（条形），点开列出细分的行当
+const occupations = computed(() => {
+  const total = ss.people.reduce((s, g) => s + g.people, 0) || 1
+  return ss.people.map((g) => ({ ...g, share: g.people / total }))
+})
 // 区划图例：各类的颜色与占城区面积的比例（城郊农田给公顷数），点一项开关它的着色
 const zoningLegend = computed(() =>
   ss.landUse.map((s) => {
@@ -205,6 +210,21 @@ const zoningLegend = computed(() =>
       <dl>
         <div v-for="[k, x] in ss.info.tiles" :key="k"><dt>{{ t(k) }}</dt><dd>{{ x }}</dd></div>
       </dl>
+      <div v-if="occupations.length" class="occupations" :title="t('按户主的营生：家人连未成年人随户，学徒、伙计随行当，仆役另算；点开看细分')">
+        <h4>{{ t('职业') }}</h4>
+        <details v-for="g in occupations" :key="g.name">
+          <summary>
+            <span class="occ-name">{{ t(g.name) }}</span>
+            <i class="occ-bar"><b :style="{ width: `${g.share * 100}%` }"></b></i>
+            <span class="occ-num">{{ g.people.toLocaleString() }} {{ t('人') }}</span>
+          </summary>
+          <ul>
+            <li v-for="x in g.trades" :key="x.name">
+              <span>{{ t(x.name) }}</span><span class="occ-num">{{ x.people.toLocaleString() }} {{ t('人') }}<template v-if="x.households"> · {{ x.households.toLocaleString() }} {{ t('户') }}</template></span>
+            </li>
+          </ul>
+        </details>
+      </div>
     </div>
 
     <Section title="要素">

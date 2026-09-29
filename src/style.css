@@ -1114,6 +1114,71 @@ select.lang:hover {
   white-space: nowrap;
 }
 
+/* 图签里的职业表：大类一行（名字、占比条、人数），点开是细分的行当 */
+.occupations {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+.occupations h4 {
+  margin: 0 0 6px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.occupations summary {
+  display: grid;
+  grid-template-columns: 6.5em 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.occupations summary::-webkit-details-marker {
+  display: none;
+}
+.occupations summary:hover .occ-name {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.occ-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.occ-bar {
+  height: 5px;
+  background: var(--rule);
+}
+.occ-bar b {
+  display: block;
+  height: 100%;
+  background: var(--ink-2);
+}
+.occ-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.occupations ul {
+  margin: 2px 0 6px;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 1px solid var(--rule);
+}
+.occupations li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
 /* ———————————————————— 风格纸样 ———————————————————— */
 .swatches {
   display: grid;
