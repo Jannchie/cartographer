@@ -3,7 +3,7 @@ import type { World } from '../../gen/types'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { fromWorld } from '../../settlement/fromWorld'
-import { generateHistory } from '../../settlement/generate'
+import { computeHistory, Superseded } from './historyWorker'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import { pointInPoly, type P } from '../../settlement/geom'
 import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
@@ -248,9 +248,22 @@ export function randomSeed() {
 }
 
 let job = 0
+/** 推演成长史的序号：参数变了（新的请求）就作废还没用上的旧结果（与重绘的 job 分开，推演时切风格不会丢掉结果） */
+let gen = 0
+/** 在后台推演（见 historyWorker.ts）；被更新的请求取代时返回 null */
+async function historyFor(population: number): Promise<SettlementHistory | null> {
+  const g = ++gen
+  try {
+    const h = await computeHistory({ ...toRaw(ss.params), population, counts: { ...toRaw(ss.params.counts) } })
+    return g === gen ? markRaw(h) : null
+  } catch (err) {
+    if (err instanceof Superseded) return null
+    throw err
+  }
+}
+
 export async function run() {
   ss.growing = false
-  const id = ++job
   const p = ss.params
   p.seed = p.seed.trim() || 'settlement'
   roundParams(p)
@@ -259,10 +272,10 @@ export async function run() {
   syncRoute('settlement')
   ss.loading.show = true
   ss.loading.stage = '规划街巷与街坊'
-  await new Promise((r) => setTimeout(r, 30))
-  if (id !== job) return
   try {
-    hist = markRaw(generateHistory({ ...toRaw(p), counts: { ...toRaw(p.counts) } }))
+    const h = await historyFor(p.population)
+    if (!h) return
+    hist = h
     st = markRaw(snapshot(hist, p.population))
   } catch (err) {
     console.error(err)
@@ -321,9 +334,17 @@ async function refresh(fit = false, quiet = false) {
  * 同一个种子的聚落是连续长大的（见 generate.ts），所以逐帧换人口看起来就是在长。
  */
 async function quickRun(population = ss.params.population) {
-  // 比算好的成长史小：就是这座城当年的样子，直接取快照；比它大才重新推演
-  if (!hist || population > hist.until) hist = markRaw(generateHistory({ ...toRaw(ss.params), population, counts: { ...toRaw(ss.params.counts) } }))
-  await showFrame(snapshot(hist, population))
+  // 比算好的成长史小：就是这座城当年的样子，直接取快照
+  if (hist && population <= hist.until) return showFrame(snapshot(hist, population))
+  // 比它大：在后台重新推演（拖动时新的值取代还没算完的），算好以前画面停在原处，照常能平移缩放
+  ss.loading.show = true
+  ss.loading.stage = '推演城市的成长史'
+  const h = await historyFor(population)
+  if (!h) return
+  hist = h
+  ss.loading.show = false
+  // 推演期间滑块可能又动过：按现在的人口取快照
+  await showFrame(snapshot(hist, Math.min(ss.params.population, hist.until)))
 }
 
 /** 拖动时实时重算：正在算就只记下"还要再算"，算完接着算最新的值，不排队 */
@@ -331,6 +352,11 @@ let liveBusy = false
 let liveAgain = false
 export function runLive() {
   ss.growing = false
+  // 超出算好的成长史要重新推演：交给后台，新的值直接取代旧的（不必等上一个算完）
+  if (!hist || ss.params.population > hist.until) {
+    void quickRun()
+    return
+  }
   if (liveBusy) {
     liveAgain = true
     return
@@ -375,13 +401,13 @@ export async function playGrowth() {
   if (!hist || hist.until !== target) {
     ss.loading.show = true
     ss.loading.stage = '推演城市的成长史'
-    await new Promise((r) => setTimeout(r, 30))
-    if (!ss.growing) {
-      ss.loading.show = false
+    const h = await historyFor(target)
+    ss.loading.show = false
+    if (!h || !ss.growing) {
+      ss.growing = false
       return
     }
-    hist = markRaw(generateHistory({ ...toRaw(ss.params), population: target, counts: { ...toRaw(ss.params.counts) } }))
-    ss.loading.show = false
+    hist = h
   }
   const h = hist
   for (let k = 0; k <= frames && ss.growing; k++) {
