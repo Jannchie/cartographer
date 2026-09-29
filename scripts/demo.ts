@@ -31,7 +31,8 @@ const { DEFAULT_PARAMS } = await import('../src/gen/types')
 const { renderAtlas } = await import('../src/render/atlas/index')
 const { smoothRivers } = await import('../src/render/rivers')
 const { setLang } = await import('../src/i18n')
-const { generateSettlement } = await import('../src/settlement/generate')
+const { generateSettlement, generateHistory } = await import('../src/settlement/generate')
+const { snapshot } = await import('../src/settlement/history')
 const { buildSettlementVector } = await import('../src/settlement/render')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')
 const { bboxOf } = await import('../src/settlement/geom')
@@ -159,18 +160,18 @@ const SKINS = ['parchment', 'color', 'ink', 'blueprint', 'kiriezu', 'nolli', 'fa
 const skinShots = SKINS.map((id, i) => ({ name: TX.skinNames[i], img: settleShot(skinTown, id, skinFrame.c, skinFrame.w, W) }))
 
 console.log('growth…')
-// 同一个种子逐步加人口；镜头以最终城区为准，图幅还小的时候按图幅收（看起来是镜头随城拉远）
+// 同一座城的成长史逐帧取快照（与网页里的成长动画同一套）；镜头随城区长大拉远（只拉远不推近），中心取最终城区
 const GROW = 30
 const growPops = Array.from({ length: GROW }, (_, i) => Math.round(Math.exp(Math.log(300) + ((Math.log(22000) - Math.log(300)) * i) / (GROW - 1))))
-const growBase = { seed: 'grow', culture: 'western', river: true, hills: true }
-const finalSt = settle({ ...growBase, population: growPops[GROW - 1] })
-const finalF = frameCity(finalSt, 1.1)
-const off: P = [finalF.c[0] - finalSt.width / 2, finalF.c[1] - finalSt.height / 2]
-const growShots = growPops.map((pop) => {
-  const st = settle({ ...growBase, population: pop })
-  const w = Math.min(finalF.w, st.width, (st.height * W) / H)
+const growHist = generateHistory({ ...DEFAULT_SETTLEMENT, seed: 'grow', culture: 'western', river: true, hills: true, size: sizeOf(growPops[GROW - 1]), population: growPops[GROW - 1] } as any)
+const growSnaps = growPops.map((pop) => snapshot(growHist, pop))
+const finalF = frameCity(growSnaps[GROW - 1], 1.1)
+let growW = 0
+const growShots = growSnaps.map((st: any) => {
+  growW = Math.max(growW, frameCity(st, 1.4).w)
+  const w = Math.min(growW, finalF.w)
   const h = (w * H) / W
-  const c: P = [Math.min(Math.max(st.width / 2 + off[0], w / 2), st.width - w / 2), Math.min(Math.max(st.height / 2 + off[1], h / 2), st.height - h / 2)]
+  const c: P = [Math.min(Math.max(finalF.c[0], w / 2), st.width - w / 2), Math.min(Math.max(finalF.c[1], h / 2), st.height - h / 2)]
   return { pop: st.stats.population as number, img: settleShot(st, 'parchment', c, w, W) }
 })
 

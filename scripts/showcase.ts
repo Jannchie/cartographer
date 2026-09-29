@@ -11,7 +11,8 @@ const { DEFAULT_PARAMS } = await import('../src/gen/types')
 const { renderAtlas } = await import('../src/render/atlas/index')
 const { smoothRivers } = await import('../src/render/rivers')
 const { setLang } = await import('../src/i18n')
-const { generateSettlement } = await import('../src/settlement/generate')
+const { generateSettlement, generateHistory } = await import('../src/settlement/generate')
+const { snapshot } = await import('../src/settlement/history')
 const { buildSettlementVector } = await import('../src/settlement/render')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')
 const { POP_OF_SIZE } = await import('../src/settlement/scale')
@@ -134,10 +135,11 @@ if (want('zoning')) {
   for (const lg of LANGS) save(draw(st, 'parchment', 1400, undefined, { view: 'zoning', lang: lg }), lg, 'zoning')
 }
 
-// —— 成长：同一个种子，人口从几十到几万（小聚落的图幅本身就小，每张按自己的城区取景） ——
+// —— 成长：同一座城的成长史，人口从几十到几万时的样子（每张按那时的城区取景） ——
 if (want('growth')) {
+  const hist = generateHistory({ ...DEFAULT_SETTLEMENT, seed: 'grow', culture: 'western', river: true, hills: true, size: 'city', population: 24000 } as any)
   for (const pop of [120, 1500, 6000, 24000]) {
-    const st = settle({ seed: 'grow', culture: 'western', river: true, hills: true, population: pop, size: pop < 400 ? 'hamlet' : pop < 3000 ? 'village' : pop < 9000 ? 'town' : 'city' })
+    const st = snapshot(hist, pop)
     const crop = cityCrop(st, 1.5, 0.72)
     for (const lg of LANGS) save(draw(st, 'parchment', 800, crop, { lang: lg }), lg, `growth-${pop}`)
   }
