@@ -95,20 +95,21 @@ export function outMark(ctx: Ctx): Mark {
 export function stamp(ctx: Ctx, m: Mark, born: number, died = Infinity) {
   const h = ctx.history
   if (!h) return
-  // 记号之后删掉的（拆房子腾地方）让后面的项往前挪了：从记号时的长度往前退删掉的个数起看（已经记过的跳过）
-  const gone = new Map<OutKey, number>()
-  for (let i = m.dropped; i < ctx.dropped.length; i++) gone.set(ctx.dropped[i].key, (gone.get(ctx.dropped[i].key) ?? 0) + 1)
-  for (const [k, n] of m.lens) {
-    const a = ctx.out[k] as object[]
-    for (let i = Math.max(0, n - (gone.get(k) ?? 0)); i < a.length; i++) if (!h.life.has(a[i])) h.life.set(a[i], { born, died })
-  }
+  // 记号之后删掉的（拆房子腾地方）删在记号前的部分时，后面的项往前挪一格：按删除的先后重放出新项从哪里起
+  const start = new Map(m.lens)
   for (let i = m.dropped; i < ctx.dropped.length; i++) {
     const d = ctx.dropped[i]
+    const b = start.get(d.key)
+    if (b !== undefined && d.idx < b) start.set(d.key, b - 1)
     const item = d.item as object
     const l = h.life.get(item)
     if (!l) h.life.set(item, { born: 0, died: born })
     else l.died = Math.max(l.born, Math.min(l.died, born))
     h.past.push({ key: d.key, item })
+  }
+  for (const [k, n] of start) {
+    const a = ctx.out[k] as object[]
+    for (let i = n; i < a.length; i++) if (!h.life.has(a[i])) h.life.set(a[i], { born, died })
   }
 }
 

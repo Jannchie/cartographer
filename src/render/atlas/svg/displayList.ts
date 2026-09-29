@@ -249,11 +249,16 @@ export class DisplayList {
 
   /** bbox：调用方已知的路径包围盒（大批树冠、房屋拼成的长路径省掉逐字解析）；不给就从 d 里解析 */
   path(space: 'page' | 'map', d: string, o: Omit<PathItem, 'k' | 'd' | 'bbox' | 'opacity'> & { opacity?: number }, bbox?: BBox) {
+    const item = DisplayList.item(d, o, bbox)
+    if (item) this.segment(space).items.push(item)
+    return item
+  }
+
+  /** 只生成绘制项、不放进列表（调用方记下来跨帧复用，见 path） */
+  static item(d: string, o: Omit<PathItem, 'k' | 'd' | 'bbox' | 'opacity'> & { opacity?: number }, bbox?: BBox): PathItem | undefined {
     if (!d) return
     const bb = transformBBox(bbox ?? pathBBox(d), o.m)
-    const item: PathItem = { k: 'path', d, opacity: 1, ...o, bbox: expand(bb, (o.stroke?.width ?? 0) * 2 + 1) }
-    this.segment(space).items.push(item)
-    return item
+    return { k: 'path', d, opacity: 1, ...o, bbox: expand(bb, (o.stroke?.width ?? 0) * 2 + 1) }
   }
 
   text(space: 'page' | 'map', item: Omit<TextItem, 'k'>) {
@@ -319,9 +324,8 @@ export class DisplayList {
       for (const it of seg.items) {
         const b = it.bbox
         if (b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) continue
-        if (it.k === 'path' && it.minScale !== undefined && scale < it.minScale) continue
-        if (it.k === 'path') this.drawPath(ctx, it)
-        else this.drawText(ctx, it)
+        if (it.k === 'text') this.drawText(ctx, it)
+        else if (scale >= (it.minScale ?? 0)) this.drawPath(ctx, it)
       }
       ctx.restore()
     }
