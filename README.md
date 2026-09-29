@@ -91,7 +91,8 @@ The zoning view colours wards by land use and lists the share of the urban area 
 
 <p align="center"><img src="docs/images/en/zoning.webp" alt="Zoning view" width="80%"></p>
 
-- **Hover details**: detailed information on the feature under the cursor, e.g. "Townhouse · 4 storeys · 3 households", "Field · wheat, rye, oats (three-field rotation)", "Zigzag bridge".
+- **Hover details**: detailed information on the feature under the cursor, e.g. "Townhouse · 4 storeys · 3 households · 19 residents · weaver, baker", "Field · wheat, rye, oats (three-field rotation)", "Zigzag bridge".
+- **Occupations**: population and households are counted by the occupation of the household head, with each class expandable into individual trades. Family members, including children, are counted with their household; apprentices and shop hands are counted under the trade of the head, and servants separately. Household size varies with the floor area of the home and the trade, so that a mansion may hold twenty or thirty people. The classification follows each culture: the four occupations in China, samurai and the three commoner orders in Japan, clergy, nobility, merchants, craftsmen and peasants in Europe, and ulama, officials, merchants, artisans and farmers in Islamic towns.
 - **World synchronisation**: when a town is selected under "World place", its name, size, river direction, coast, hills and climate are synchronised with the corresponding location on the world map.
 - **Randomisation**: either the seed alone is replaced and other settings are retained, or the current terrain is fixed and only the town is regenerated.
 
