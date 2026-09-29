@@ -2763,12 +2763,21 @@ function plantAvenue(ctx: Ctx, r: Road, mains: Road[]) {
   const ring = dist(r.line[0], r.line[r.line.length - 1]) < 20 && L > 200
   if (!ring && hashAt(ctx, r.line[Math.floor(r.line.length / 2)], 'avenue') > 0.6) return
   const off = r.width / 2 + 0.9
+  // 城门、宫门正前方（门内外各 40 米、门中线两侧各 14 米，连门楼两侧）让开：门前不挡树
+  const gates = ctx.out.walls.flatMap((w) => w.gates)
+  const fronting = (q: P) =>
+    gates.some((g) => {
+      const dx = q[0] - g.p[0]
+      const dy = q[1] - g.p[1]
+      const along = dx * Math.cos(g.angle) + dy * Math.sin(g.angle)
+      return Math.abs(along) < 40 && Math.abs(dy * Math.cos(g.angle) - dx * Math.sin(g.angle)) < 14
+    })
   for (let s = 6; s < L - 6; s += 9) {
     const { p, angle } = pointAt(r.line, s)
     const n: P = [-Math.sin(angle), Math.cos(angle)]
     for (const side of [-1, 1]) {
       const q: P = [p[0] + n[0] * off * side, p[1] + n[1] * off * side]
-      if (ctx.T.waterAt(q) < 3 || ctx.occ.hitsPoint(q, 1.6)) continue
+      if (ctx.T.waterAt(q) < 3 || ctx.occ.hitsPoint(q, 1.6) || fronting(q)) continue
       // 路口：离别的路太近就不种
       if (mains.some((o) => o !== r && polylineDist(q, o.line) < o.width / 2 + 2)) continue
       ctx.out.trees.push({ p: q, r: 2.3 + hashAt(ctx, q, 'avenue.tree') * 0.6 })

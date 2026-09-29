@@ -420,8 +420,9 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
   }
   // 沿东西宫墙的值房
   if (C.chance('duty', 0.7)) for (const sd of [-1, 1]) colA(K, D * 0.05, D * 0.95, sd < 0 ? -U : U - W * 0.03, sd < 0 ? -U + W * 0.03 : U, 'shed', 16)
-  // 宫门外的御道两旁的松柏
-  K.trees(D * 0.06, fa - D * 0.01, -W * 0.28, W * 0.28, fore === 'grove' ? 0.004 : 0.0015, 2.5, 3.5)
+  // 广庭里御道两旁的松柏：中间让开宫门（连两侧的门楼、阙楼、午门的两翼）正前方的一条，门前不挡树
+  const clear = W * (gate === 'wumen' ? 0.17 : gate === 'que' ? 0.19 : gate === 'triple' ? 0.16 : 0.075) + 3
+  for (const sd of [-1, 1]) K.trees(D * 0.06, fa - D * 0.01, sd < 0 ? -W * 0.28 : clear, sd < 0 ? -clear : W * 0.28, fore === 'grove' ? 0.004 : 0.0015, 2.5, 3.5)
   C.done(gat(F, D / 2, 0))
   // 宫门接上路
   connectGates(ctx, [wall])
