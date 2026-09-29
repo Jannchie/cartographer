@@ -237,7 +237,8 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   // 聚落名等桥、渡口定下再取：有桥才叫"某某桥"
   const cross = ctx.out.crossings
   const crossing = cross.some((c) => c.kind === 'bridge') ? 'bridge' : cross.some((c) => c.kind === 'ferry') ? 'ferry' : cross.length ? 'ford' : null
-  const town = namer.settlement(p.size, p.coast, p.river, crossing)
+  // 都城按城市取名：人口多少都不叫某某村、某某镇
+  const town = namer.settlement(p.capital ? 'city' : p.size, p.coast, p.river, crossing)
   const riverName = T.river ? namer.river() : null
   const seaName = T.coast ? namer.sea() : null
   labels(ctx, riverName, seaName)

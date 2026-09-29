@@ -26,6 +26,8 @@ const SIZE_NAME: Record<Lang, Record<SettlementSize, string>> = {
   en: { hamlet: 'Hamlet', village: 'Village', town: 'Town', city: 'City' },
   ja: { hamlet: '小村', village: '村', town: '町', city: '都市' },
 }
+/** 都城的标题不论人口都写作都城 */
+const CAPITAL_NAME: Record<Lang, string> = { zh: '都城', en: 'Capital', ja: '都' }
 const POP_TEXT: Record<Lang, (n: string) => string> = { zh: (n) => `约 ${n} 人`, en: (n) => `pop. ${n}`, ja: (n) => `人口 約${n}人` }
 const CJK_SC = ['"Noto Serif SC"', '"Noto Sans SC"', '"Ma Shan Zheng"']
 
@@ -1512,7 +1514,7 @@ function furniture(list: DisplayList, st: Settlement, th: SettleTheme, S: number
   list.text('page', { t: title, x: tx + bw / 2, y: ty + 44, font: zhFont, align: 'middle', baseline: 'central', fill: { color: th.label.color, alpha: 1 }, opacity: 1, bbox: [tx, ty, tx + bw, ty + bh] })
   // 副标题：另一种写法的城名（中文、日文图配原文名；英文图配中文名）· 规模 · 人口
   const other = lg === 'en' ? st.nameZh : st.name
-  const sub = `${other} · ${SIZE_NAME[lg][st.params.size]} · ${POP_TEXT[lg](st.stats.population.toLocaleString(lg === 'zh' ? 'zh-CN' : lg))}`
+  const sub = `${other} · ${st.params.capital ? CAPITAL_NAME[lg] : SIZE_NAME[lg][st.params.size]} · ${POP_TEXT[lg](st.stats.population.toLocaleString(lg === 'zh' ? 'zh-CN' : lg))}`
   list.text('page', { t: sub, x: tx + bw / 2, y: ty + 80, font: `italic 400 14px ${th.font.italic.replace(/^italic /, '')}`, align: 'middle', baseline: 'central', fill: { color: th.label.color, alpha: 0.85 }, opacity: 1, bbox: [tx, ty, tx + bw, ty + bh] })
   // 朱印：标题框右下角压一方竖排的白文印，印文取中文城名的前两个字
   if (th.seal) {
@@ -1632,7 +1634,7 @@ export const settleBackdrop = (style: SettleStyleId) => settleTheme(style).groun
 /** 字体加载：中文按实际用到的字取子集 */
 export async function ensureSettleFonts(st: Settlement, style: SettleStyleId, lg: Lang = 'zh') {
   const th = settleTheme(style)
-  const text = [st.nameZh, st.name, st.nameJa, ...st.labels.map((l) => l.text[lg] + (l.sub?.[lg] ?? '')), SIZE_NAME[lg][st.params.size], POP_TEXT[lg]('0123456789,'), tr('区划', lg), ...LAND_USES.map((d) => tr(d.name, lg))].join('')
+  const text = [st.nameZh, st.name, st.nameJa, ...st.labels.map((l) => l.text[lg] + (l.sub?.[lg] ?? '')), SIZE_NAME[lg][st.params.size], CAPITAL_NAME[lg], POP_TEXT[lg]('0123456789,'), tr('区划', lg), ...LAND_USES.map((d) => tr(d.name, lg))].join('')
   const fams = new Set<string>()
   for (const f of [th.font.title, th.font.label]) for (const x of langFont(f, lg).split(',')) if (x.includes('"')) fams.add(x.trim().replace(/^italic /, ''))
   if (eastAsian(st.params.culture) || th.seal) fams.add('"Ma Shan Zheng"')

@@ -1,7 +1,7 @@
 import type { Ctx } from './ctx'
 import { bboxOf, convexOverlap, pointInPoly, type BBox, type P, type Poly } from './geom'
 import { hashAt } from './ctx'
-import { perHousehold } from './scale'
+import { perHousehold, scaleOf } from './scale'
 import type { Settlement } from './types'
 
 /**
@@ -331,7 +331,8 @@ export function snapshot(h: SettlementHistory, pop: number): Settlement {
     population: Math.round((units * per) / 10) * 10,
     area: innerArea / 10000,
   }
-  out.params = { ...st.params, population: pop }
+  // 规模（村、镇、城）随那时的人口
+  out.params = { ...st.params, population: pop, size: scaleOf(pop).size }
   return out as Settlement
 }
 
