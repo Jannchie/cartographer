@@ -1,6 +1,7 @@
 import type { DisplayList } from './displayList'
 import { LABEL_SHRINK, MIN_LABEL_PX } from '../labelSize'
 import { clamp } from '../../../gen/util'
+import { cpuContext, TileCache } from './tiles'
 
 export interface Box {
   x: number
@@ -23,13 +24,16 @@ export interface Inset {
 /** 底图的投影（不在图框模式时） */
 const SHADOW = '0 18px 60px rgba(0, 0, 0, 0.45)'
 
+/** 细节层换了级别或列表后停稳多久才补画瓦片（毫秒） */
+const SETTLE = 150
+
 export type Chrome = (w: number, h: number, box: Box, k: number) => DisplayList
 
 /**
  * 矢量纸图查看器（两级"瓦片"）：
  * - 底图：整张图预先栅格化一次（最长边 ≤ 4096 px），缩放倍率不超过它的精度时直接由 GPU 缩放
- * - 细节层：视口大小的画布，放大到超出底图精度时，停手后只重绘与视口相交的矢量指令
- * 拖动/缩放过程中两层都用 CSS 变换跟随，所以交互始终流畅；停下后细节层按矢量重绘，任意倍率清晰。
+ * - 细节层：视口大小的画布，放大到超出底图精度时由分级缓存的矢量瓦片逐帧合成（见 TileCache），每帧最多补画一块
+ * 底图用 CSS 变换跟随拖动缩放；细节层每帧用已有瓦片重新合成，缺的瓦片逐块补上，所以交互始终流畅、停下后任意倍率清晰。
  * - 注记层：地图里的注记不画进前两层，另画在视口大小的画布上，每次视图变化的下一帧重画。
  *   注记在屏幕上的字号按字号体系（见 labelSize）：放大时最大到设计字号，再放大就以锚点为中心缩回、保持这个字号（像地图应用那样）；
  *   缩小时最多跟着地图缩到 LABEL_SHRINK 倍，再缩小保持不变，放不下的按优先顺序暂时隐藏。与窗口大小、世界尺寸无关。
@@ -47,9 +51,13 @@ export class AtlasViewer {
   private chromeRaf = 0
   private list: DisplayList | null = null
   private baseScale = 1
-  /** 细节层上次绘制时的视图 */
-  private drawn: { k: number; x: number; y: number } | null = null
+  /** 细节层的瓦片（换列表、进出图框模式时作废） */
+  private tiles: TileCache | null = null
+  private detailRaf = 0
   private timer = 0
+  /** 细节层的目标级别，与它（或列表）上次变化的时刻：变化后停稳 SETTLE 毫秒才开始画新瓦片 */
+  private level = 0
+  private settleAt = 0
   view = { x: 0, y: 0, k: 1 }
 
   constructor(private host: HTMLElement) {
@@ -75,7 +83,7 @@ export class AtlasViewer {
     host.appendChild(cc)
     new ResizeObserver(() => {
       this.drawChrome()
-      this.scheduleDetail(0)
+      this.scheduleDetail()
       this.scheduleLabels()
     }).observe(host)
   }
@@ -92,8 +100,8 @@ export class AtlasViewer {
     if (!make) this.wrap.style.clipPath = ''
     if (toggled) {
       this.rasterBase()
-      this.drawn = null
-      this.scheduleDetail(0)
+      this.resetTiles()
+      this.scheduleDetail()
     }
     this.drawChrome()
     this.scheduleLabels()
@@ -163,8 +171,7 @@ export class AtlasViewer {
     if (list === this.list) return
     this.list = list
     this.rasterBase()
-    this.drawn = null
-    this.detail.style.display = 'none'
+    this.resetTiles()
     this.drawChrome()
     this.apply()
     // 换了列表（成长动画逐帧换）要马上换注记，不等下一帧：与底图同一帧出现
@@ -195,7 +202,7 @@ export class AtlasViewer {
       this.base.width = bw
       this.base.height = bh
     }
-    const ctx = this.base.getContext('2d')!
+    const ctx = cpuContext(this.base)
     ctx.clearRect(0, 0, this.base.width, this.base.height)
     list.render(ctx, this.baseScale, 0, 0, this.chrome ? 'map' : undefined, false)
     this.base.style.width = list.width + 'px'
@@ -220,14 +227,9 @@ export class AtlasViewer {
   private apply() {
     const { x, y, k } = this.view
     this.base.style.transform = `translate(${x}px, ${y}px) scale(${k})`
-    if (this.drawn) {
-      // 细节层按绘制时的视图做相对变换，保持对齐
-      const r = k / this.drawn.k
-      this.detail.style.transform = `translate(${x - this.drawn.x * r}px, ${y - this.drawn.y * r}px) scale(${r})`
-    }
     // 比例尺跟着倍率变、缩小时图框跟着地图收拢
     this.refreshChrome()
-    this.scheduleDetail(160)
+    this.scheduleDetail()
     this.scheduleLabels()
   }
 
@@ -260,33 +262,62 @@ export class AtlasViewer {
     list.renderLabels(ctx, k * dpr, x * dpr, y * dpr, kl / k, vis, MIN_LABEL_PX * dpr, dpr)
   }
 
-  private scheduleDetail(delay: number) {
-    clearTimeout(this.timer)
-    this.timer = window.setTimeout(() => this.drawDetail(), delay)
+  private resetTiles() {
+    this.tiles = null
+    this.settleAt = performance.now()
+    this.detail.style.display = 'none'
   }
 
+  private scheduleDetail() {
+    if (!this.detailRaf)
+      this.detailRaf = requestAnimationFrame(() => {
+        this.detailRaf = 0
+        this.drawDetail()
+      })
+  }
+
+  /**
+   * 细节层：每帧用缓存的瓦片合成视口（缺的先用相邻级别顶替），再补画一块缺的瓦片，直到视口画满。
+   * 滚轮缩放跨了级别、换了列表时先停稳 SETTLE 毫秒再补画（缩放途中的级别很快就用不上）；平移时级别不变，边拖边补
+   */
   private drawDetail() {
-    if (!this.list) return
+    const list = this.list
+    if (!list) return
     const dpr = window.devicePixelRatio || 1
     const { x, y, k } = this.view
+    const scale = k * dpr
     // 底图精度足够时不需要细节层
-    if (k * dpr <= this.baseScale * 1.05) {
+    if (scale <= this.baseScale * 1.05) {
       this.detail.style.display = 'none'
-      this.drawn = null
       return
     }
     const w = this.host.clientWidth
     const h = this.host.clientHeight
-    this.detail.width = Math.round(w * dpr)
-    this.detail.height = Math.round(h * dpr)
-    this.detail.style.width = w + 'px'
-    this.detail.style.height = h + 'px'
-    const ctx = this.detail.getContext('2d')!
-    ctx.clearRect(0, 0, this.detail.width, this.detail.height)
-    this.list.render(ctx, k * dpr, x * dpr, y * dpr, this.chrome ? 'map' : undefined, false)
-    this.drawn = { x, y, k }
-    this.detail.style.transform = 'none'
-    this.detail.style.display = 'block'
+    if (!w || !h) return
+    const c = this.detail
+    fitCanvas(c, w, h, dpr)
+    const tiles = (this.tiles ??= new TileCache(list, this.baseScale, this.chrome ? 'map' : undefined))
+    const ctx = c.getContext('2d')!
+    const now = performance.now()
+    const z = tiles.level(scale)
+    if (z !== this.level) {
+      this.level = z
+      this.settleAt = now
+    }
+    const missing = tiles.composite(ctx, scale, x * dpr, y * dpr)
+    c.style.display = 'block'
+    if (!missing.length) return
+    const wait = this.settleAt + SETTLE - now
+    clearTimeout(this.timer)
+    if (wait > 0) {
+      this.timer = window.setTimeout(() => this.scheduleDetail(), wait)
+      return
+    }
+    // 补画一块，只把这一块贴到画面上（其余不变）
+    const [i, j] = missing[0]
+    tiles.render(z, i, j)
+    tiles.paint(ctx, scale, x * dpr, y * dpr, z, i, j)
+    if (missing.length > 1) this.scheduleDetail()
   }
 }
 
