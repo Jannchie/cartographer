@@ -1,4 +1,6 @@
 import type { DisplayList } from './displayList'
+import { LABEL_SHRINK, MIN_LABEL_PX } from '../labelSize'
+import { clamp } from '../../../gen/util'
 
 export interface Box {
   x: number
@@ -20,8 +22,6 @@ export interface Inset {
  */
 /** 底图的投影（不在图框模式时） */
 const SHADOW = '0 18px 60px rgba(0, 0, 0, 0.45)'
-/** 注记在屏幕上的最小字号（CSS 像素）：缩小看全图时小字不再跟着缩到看不清，放大到这个字号，放不下的暂时隐藏 */
-const MIN_LABEL_PX = 12
 
 export type Chrome = (w: number, h: number, box: Box, k: number) => DisplayList
 
@@ -31,8 +31,8 @@ export type Chrome = (w: number, h: number, box: Box, k: number) => DisplayList
  * - 细节层：视口大小的画布，放大到超出底图精度时，停手后只重绘与视口相交的矢量指令
  * 拖动/缩放过程中两层都用 CSS 变换跟随，所以交互始终流畅；停下后细节层按矢量重绘，任意倍率清晰。
  * - 注记层：地图里的注记不画进前两层，另画在视口大小的画布上，每次视图变化的下一帧重画。
- *   注记长到设计字号的 labelMax 倍（整图适配若更大，就到适配倍率）之前照常跟着放大；再放大时以锚点为中心缩回，在屏幕上保持这个字号（像地图应用那样）。
- *   缩小时照常跟着地图变小，不挤成一团。
+ *   注记在屏幕上的字号按字号体系（见 labelSize）：放大时最大到设计字号，再放大就以锚点为中心缩回、保持这个字号（像地图应用那样）；
+ *   缩小时最多跟着地图缩到 LABEL_SHRINK 倍，再缩小保持不变，放不下的按优先顺序暂时隐藏。与窗口大小、世界尺寸无关。
  */
 export class AtlasViewer {
   private base = document.createElement('canvas')
@@ -51,8 +51,6 @@ export class AtlasViewer {
   private drawn: { k: number; x: number; y: number } | null = null
   private timer = 0
   view = { x: 0, y: 0, k: 1 }
-  /** 注记最多长到设计字号的几倍（页面 1:1 时是 1 倍）：聚落图的字号设计得小，放大时可以多长一些 */
-  labelMax = 1
 
   constructor(private host: HTMLElement) {
     this.wrap.style.position = 'absolute'
@@ -148,15 +146,7 @@ export class AtlasViewer {
     const box = this.frameBox()
     const list = this.chrome(w, h, box, this.view.k)
     const cc = this.chromeCanvas
-    // 重设宽高会重新分配整块画布：只在舞台尺寸变了时做，平时清空重画
-    const cw = Math.round(w * dpr)
-    const ch = Math.round(h * dpr)
-    if (cc.width !== cw || cc.height !== ch) {
-      cc.width = cw
-      cc.height = ch
-      cc.style.width = w + 'px'
-      cc.style.height = h + 'px'
-    }
+    fitCanvas(cc, w, h, dpr)
     const ctx = cc.getContext('2d')!
     ctx.clearRect(0, 0, cc.width, cc.height)
     list.render(ctx, dpr, 0, 0)
@@ -241,16 +231,6 @@ export class AtlasViewer {
     this.scheduleLabels()
   }
 
-  /** 整张地图放进可用区时的倍率 */
-  private fitK() {
-    const list = this.list!
-    if (this.chrome) {
-      const r = this.inner()
-      return Math.min(r.w / list.MW, r.h / list.MH)
-    }
-    return Math.min(this.host.clientWidth / list.width, this.host.clientHeight / list.height)
-  }
-
   private scheduleLabels() {
     if (!this.labelsRaf)
       this.labelsRaf = requestAnimationFrame(() => {
@@ -268,23 +248,16 @@ export class AtlasViewer {
     if (!list || !w || !h) return
     const dpr = window.devicePixelRatio || 1
     const c = this.labels
-    const cw = Math.round(w * dpr)
-    const ch = Math.round(h * dpr)
-    if (c.width !== cw || c.height !== ch) {
-      c.width = cw
-      c.height = ch
-      c.style.width = w + 'px'
-      c.style.height = h + 'px'
-    }
+    fitCanvas(c, w, h, dpr)
     const ctx = c.getContext('2d')!
-    ctx.clearRect(0, 0, cw, ch)
+    ctx.clearRect(0, 0, c.width, c.height)
     const { x, y, k } = this.view
-    // 注记长到设计字号的 labelMax 倍就不再跟着放大
-    const kRef = Math.max(this.labelMax, this.fitK())
+    // 注记的屏幕倍率夹在 [LABEL_SHRINK, 1] × labelK 之间：层级比例不变，只是整体大小有上下限
+    const kl = clamp(k, list.labelK * LABEL_SHRINK, list.labelK)
     // 图框模式下只有图框内框露出来：面状注记挪位时只在这里面找地方
     const f = this.chrome ? this.frameBox() : null
     const vis: [number, number, number, number] | undefined = f ? [f.x * dpr, f.y * dpr, (f.x + f.w) * dpr, (f.y + f.h) * dpr] : undefined
-    list.renderLabels(ctx, k * dpr, x * dpr, y * dpr, Math.min(1, kRef / k), vis, MIN_LABEL_PX * dpr, dpr)
+    list.renderLabels(ctx, k * dpr, x * dpr, y * dpr, kl / k, vis, MIN_LABEL_PX * dpr, dpr)
   }
 
   private scheduleDetail(delay: number) {
@@ -315,4 +288,15 @@ export class AtlasViewer {
     this.detail.style.transform = 'none'
     this.detail.style.display = 'block'
   }
+}
+
+/** 画布按 CSS 尺寸 × dpr 定像素尺寸。重设宽高会重新分配整块画布：只在尺寸变了时做 */
+function fitCanvas(c: HTMLCanvasElement, w: number, h: number, dpr: number) {
+  const cw = Math.round(w * dpr)
+  const ch = Math.round(h * dpr)
+  if (c.width === cw && c.height === ch) return
+  c.width = cw
+  c.height = ch
+  c.style.width = w + 'px'
+  c.style.height = h + 'px'
 }

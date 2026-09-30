@@ -2,6 +2,7 @@ import type { Label, World } from '../../gen/types'
 import { areaMember, cellAt, rangeCells, type Area } from '../../gen/areas'
 import { bboxOf, chaikin } from '../../settlement/geom'
 import { cjkFont, lang, placeName } from '../../i18n'
+import { GLYPH_R, HALO_RATIO, LABEL_PAD, labelPx, logT } from './labelSize'
 import { REALM_COLORS, type Theme } from './styles'
 import { polyCrossings, polylineOf, rasterArea, rasterPoly, type AreaMask } from './svg/displayList'
 import { labelCtx } from './svg/recorder'
@@ -24,6 +25,9 @@ interface TextStyle {
 }
 
 type Kind = Label['kind'] | 'realm' | 'bay'
+
+/** 世界图注记按设计字号显示时的倍率（显示列表的 labelK）：S = 2 时页面 1:1 */
+export const atlasLabelK = (S: number) => 2 / S
 
 /** 带避让的注记排布：按重要度依次放置，放不下就在附近换位，再不行就舍弃 */
 /** 默认不描边的注记：大字直接压在浅色底图上 */
@@ -54,14 +58,24 @@ export class LabelLayer {
     return b.x0 > 4 && b.y0 > 4 && b.x1 < MW - 4 && b.y1 < MH - 4
   }
 
-  style(kind: Kind, weight: number): TextStyle {
+  /** 规模排在前四分之一的城市的 weight 下限（城市名分两级） */
+  private cityCut?: number
+
+  /**
+   * 注记的字体：字号取字号体系的级别（见 labelSize），面状的按占全图的面积比在两级之间按对数插值；
+   * 城市按规模分级：首都 > 国都 > 大城 > 其余（国都加粗）。页面字号 = 设计字号 ÷ atlasLabelK(S)
+   */
+  style(kind: Kind, weight: number, realmCapital = false): TextStyle {
     const L = this.theme.labels
-    const k = this.S / 2
-    // 中文、日文：可竖排，不用斜体、不大写，字距收紧；字体后面接对应语言的 CJK 字体
+    const labelK = atlasLabelK(this.S)
+    // 中文、日文：可竖排，不用斜体、不大写，字距收紧，字号略缩（见 CJK_SCALE）；字体后面接对应语言的 CJK 字体
     const zh = lang !== 'en'
     const vertical = zh && L.vertical.includes(kind)
     const caps = L.caps && !zh
-    const f = (style: string, size: number, fam: string) => ({ font: `${style} ${size * k}px ${fam}, ${cjkFont(lang)}`, size: size * k })
+    const f = (style: string, tier: number, fam: string) => {
+      const size = labelPx(tier, zh, labelK)
+      return { font: `${style} ${size}px ${fam}, ${cjkFont(lang)}`, size }
+    }
     const halo = !(L.noHalo ?? NO_HALO).includes(kind)
     const base = (o: ReturnType<typeof f>, color: string, spacing: number, upper: boolean): TextStyle => ({
       ...o,
@@ -72,31 +86,38 @@ export class LabelLayer {
       halo,
     })
     const it = zh ? '' : 'italic'
+    // 占全图的面积比
+    const share = weight / (this.world.W * this.world.H)
     switch (kind) {
       case 'ocean':
-        return base(f(`${it} 500`, zh ? 34 : 30, L.display), L.water, 0.42, true)
+        return base(f(`${it} 500`, 6, L.display), L.water, 0.42, true)
       case 'sea':
-        return base(f(`${it} 500`, zh ? 20 : 19, zh ? L.display : L.text), L.water, 0.25, false)
+        return base(f(`${it} 500`, 3, zh ? L.display : L.text), L.water, 0.25, false)
       case 'bay':
-        return base(f(`${it} 500`, zh ? 15.5 : 14.5, zh ? L.display : L.text), L.water, 0.18, false)
+        return base(f(`${it} 500`, 1, zh ? L.display : L.text), L.water, 0.18, false)
       case 'continent':
-        return base(f('600', Math.min(40, 22 + weight / 9000) * (zh ? 1.1 : 1), L.display), L.land, 0.55, true)
+        return base(f('600', 4 + 3 * logT(share, 0.02, 0.25), L.display), L.land, 0.55, true)
       case 'realm':
-        return base(f('600', Math.min(30, 15 + weight / 5000) * (zh ? 1.15 : 1), L.display), L.land, 0.35, true)
+        return base(f('600', 2 + 3 * logT(share, 0.004, 0.08), L.display), L.land, 0.35, true)
       case 'island':
-        return base(f('500', weight > 2500 ? 16 : 13, L.text), L.land, 0.12, false)
+        return base(f('500', 1.5 * logT(share, 0.0005, 0.02), L.text), L.land, 0.12, false)
       case 'range':
-        return base(f(`${it} 600`, zh ? 17 : 14.5, zh ? L.display : L.text), L.range, 0.36, true)
+        return base(f(`${it} 600`, 1, zh ? L.display : L.text), L.range, 0.36, true)
       case 'basin':
       case 'desert':
       case 'forest':
-        return base(f(`${it} 500`, 15, L.text), L.region, 0.22, false)
+        return base(f(`${it} 500`, 1, L.text), L.region, 0.22, false)
       case 'lake':
-        return base(f(`${it} 500`, 12.5, L.text), L.water, 0.05, false)
+        return base(f(`${it} 500`, 0, L.text), L.water, 0.05, false)
       case 'capital':
-        return base(f('700', 15.5, L.text), L.city, 0.04, false)
-      default:
-        return base(f('500', 13.5, L.text), L.city, 0.03, false)
+        return base(f('700', 2, L.text), L.city, 0.04, false)
+      default: {
+        if (this.cityCut === undefined) {
+          const ws = this.world.labels.filter((l) => l.kind === 'city').map((l) => l.weight).sort((a, b) => b - a)
+          this.cityCut = ws.length ? ws[Math.floor((ws.length - 1) / 4)] : Infinity
+        }
+        return base(f(realmCapital ? '700' : '500', realmCapital ? 1.5 : weight >= this.cityCut ? 1 : 0, L.text), L.city, 0.03, false)
+      }
     }
   }
 
@@ -120,7 +141,7 @@ export class LabelLayer {
    */
   text(raw: string, x: number, y: number, angle: number, st: TextStyle, place = true, color?: string, water = false, anchor?: [number, number], area?: AreaMask): boolean {
     const ctx = this.ctx
-    const k = this.S / 2
+    const pad = LABEL_PAD * st.size
     ctx.font = st.font
     const t = st.upper ? raw.toUpperCase() : raw
     const chars = [...t]
@@ -131,14 +152,14 @@ export class LabelLayer {
     if (st.vertical) {
       total = chars.length * st.size + sp * (chars.length - 1)
       const bw = st.size
-      box = { x0: x - bw / 2 - 3, y0: y - total / 2 - 3, x1: x + bw / 2 + 3, y1: y + total / 2 + 3 }
+      box = { x0: x - bw / 2 - pad, y0: y - total / 2 - pad, x1: x + bw / 2 + pad, y1: y + total / 2 + pad }
     } else {
       total = widths.reduce((a, b) => a + b, 0) + sp * (chars.length - 1)
       const c = Math.abs(Math.cos(angle))
       const s = Math.abs(Math.sin(angle))
       const bw = total * c + st.size * s
       const bh = total * s + st.size * c
-      box = { x0: x - bw / 2 - 3, y0: y - bh / 2 - 3, x1: x + bw / 2 + 3, y1: y + bh / 2 + 3 }
+      box = { x0: x - bw / 2 - pad, y0: y - bh / 2 - pad, x1: x + bw / 2 + pad, y1: y + bh / 2 + pad }
     }
     if (place && (this.hit(box) || !this.inside(box))) return false
     if (water && !this.allWater(box)) return false
@@ -151,7 +172,7 @@ export class LabelLayer {
     ctx.textAlign = st.vertical ? 'center' : 'left'
     const draw = (ch: string, cx: number, cy: number) => {
       if (st.halo) {
-        ctx.lineWidth = 3.2 * k
+        ctx.lineWidth = HALO_RATIO * st.size
         ctx.strokeStyle = this.theme.labels.halo
         ctx.lineJoin = 'round'
         ctx.strokeText(ch, cx, cy)
@@ -272,7 +293,6 @@ export class LabelLayer {
    */
   curved(raw: string, line: [number, number][], st: TextStyle): boolean {
     const ctx = this.ctx
-    const k = this.S / 2
     ctx.font = st.font
     const chars = [...(st.upper ? raw.toUpperCase() : raw)]
     const n = chars.length
@@ -307,8 +327,8 @@ export class LabelLayer {
       let bend = 0
       for (let i = 1; i < n; i++) bend = Math.max(bend, Math.abs(glyphs[i].a - glyphs[i - 1].a))
       if (bend > 0.5) continue
-      const r = size * 0.62
-      const boxes = glyphs.map(({ p }) => ({ x0: p[0] - r - 2, y0: p[1] - r - 2, x1: p[0] + r + 2, y1: p[1] + r + 2 }))
+      const r = size * (GLYPH_R + LABEL_PAD)
+      const boxes = glyphs.map(({ p }) => ({ x0: p[0] - r, y0: p[1] - r, x1: p[0] + r, y1: p[1] + r }))
       if (boxes.some((b) => this.hit(b) || !this.inside(b))) continue
       const mid = pointAt(s0 + total / 2)
       labelCtx(ctx).beginLabel?.(mid[0], mid[1], undefined, { line: pl, c: s0 + total / 2, up, slide: true })
@@ -320,7 +340,7 @@ export class LabelLayer {
         ctx.rotate(g.a)
         labelCtx(ctx).glyphAt?.(g.at)
         if (st.halo) {
-          ctx.lineWidth = 3.2 * k
+          ctx.lineWidth = HALO_RATIO * size
           ctx.strokeStyle = this.theme.labels.halo
           ctx.lineJoin = 'round'
           ctx.strokeText(g.ch, 0, 0)
@@ -341,7 +361,7 @@ export class LabelLayer {
     const ctx = this.ctx
     const k = this.S / 2
     const S = this.S
-    const st = this.style(l.kind, l.weight)
+    const st = this.style(l.kind, l.weight, realmCapital)
     const x = l.x * S
     const y = l.y * S
     const big = l.kind === 'capital' || realmCapital
@@ -352,18 +372,21 @@ export class LabelLayer {
     ctx.font = st.font
     const tw = [...name].reduce((a, ch) => a + ctx.measureText(ch).width, 0) + st.spacing * st.size * (name.length - 1)
     const size = st.size
+    // 字与符号的间距、碰撞留白都随字号
+    const gap = size * 0.3
+    const pad = LABEL_PAD * size
     const cands = [
-      [x + r + 4 * k + tw / 2, y],
-      [x - r - 4 * k - tw / 2, y],
+      [x + r + gap + tw / 2, y],
+      [x - r - gap - tw / 2, y],
       [x, y - r - size * 0.75],
       [x, y + r + size * 0.75],
     ]
     const hs = { ...st, vertical: false }
     for (const [cx, cy] of cands) {
-      const box = { x0: cx - tw / 2 - 2, y0: cy - size / 2 - 2, x1: cx + tw / 2 + 2, y1: cy + size / 2 + 2 }
+      const box = { x0: cx - tw / 2 - pad, y0: cy - size / 2 - pad, x1: cx + tw / 2 + pad, y1: cy + size / 2 + pad }
       if (this.hit(box) || !this.inside(box)) continue
       this.placed.push(dot)
-      this.text(name, cx, cy, 0, big ? { ...hs, font: hs.font.replace(/^\d+|^500/, '700') } : hs, true, undefined, false, [x, y])
+      this.text(name, cx, cy, 0, hs, true, undefined, false, [x, y])
       // 城市符号与城市名同一个锚点：放大时一起保持屏幕大小
       labelCtx(ctx).beginLabel?.(x, y)
       this.marker(x, y, r, big)

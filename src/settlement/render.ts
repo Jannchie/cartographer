@@ -9,6 +9,7 @@ import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type La
 import { tr } from '../i18n'
 import { regionShown, type SettleRegion } from './regions'
 import * as dmath from '../gen/dmath'
+import { GLYPH_R, HALO_RATIO, LABEL_PAD, labelPx } from '../render/atlas/labelSize'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -63,6 +64,9 @@ function themeFor(style: SettleStyleId, lg: Lang): SettleTheme {
 /** 整页排版时的比例（页面像素 / 米）：地图宽 1900 像素 */
 export const settlePageScale = (st: Settlement) => 1900 / st.width
 
+/** 聚落图注记按设计字号显示时的倍率：页面字号 = 设计字号 ÷ 它（整页 1900 像素宽，导出时字比屏幕上略小） */
+const SETTLE_LABEL_K = 1.15
+
 export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts: SettleOpts, measurer: CanvasRenderingContext2D): DisplayList {
   const lg = opts.lang ?? 'zh'
   const th = themeFor(style, lg)
@@ -71,6 +75,7 @@ export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts
   const MW = Math.round(st.width * S)
   const MH = Math.round(st.height * S)
   const list = new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH)
+  list.labelK = SETTLE_LABEL_K
   const R = new Painter(list, S, th)
   hatchPatterns(list, th)
 
@@ -1120,15 +1125,23 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
   placed.push([0, 0, 460, 140])
   placed.push([list.MW - 150, list.MH - 70, list.MW, list.MH])
   placed.push([list.MW - 90, 0, list.MW, 110])
-  // 字号：一个基准字号按层级乘系数——海 > 片区、河、山 > 大地标 > 地标 > 街名 > 小地点。
-  // 基准随比例尺温和缩放（小村放得大，字也略大；大都会缩得小，字也略小，但不小到看不清）；
-  // 拉丁字母同样字号看着比汉字小，英文略放大（全大写的片区名除外）
-  const base = 12 * Math.min(1.4, Math.max(0.85, dmath.pow(S, 0.2)))
-  const sizeOf = (l: MapLabel) => {
-    const k =
-      l.kind === 'water' ? 2 : l.kind === 'district' ? (lg === 'en' ? 1.05 : 1.25) : l.kind === 'river' || l.kind === 'hill' ? 1.2 : l.kind === 'landmark' ? (l.weight >= 7 ? 1.12 : 1) : l.kind === 'street' ? 0.9 : l.kind === 'poi' ? 0.8 : 1
-    return base * k * (lg === 'en' && l.kind !== 'district' ? 1.06 : 1) * (zoning && l.kind === 'district' ? 1.2 : 1)
-  }
+  // 字号取字号体系的级别（见 labelSize）：海 > 片区 > 河、山、大地标 > 地标 > 街名、小地点；
+  // 区划图上片区名再高一级。英文全大写的片区名比同字号的小写显大，低一级；中日文按 CJK_SCALE 略缩
+  const tierOf = (l: MapLabel) =>
+    l.kind === 'water'
+      ? 5
+      : l.kind === 'district'
+        ? (lg === 'en' ? 2 : 3) + (zoning ? 1 : 0)
+        : l.kind === 'river' || l.kind === 'hill'
+          ? 2
+          : l.kind === 'landmark'
+            ? l.weight >= 7
+              ? 2
+              : 1
+            : l.kind === 'street' || l.kind === 'poi'
+              ? 0
+              : 1
+  const sizeOf = (l: MapLabel) => labelPx(tierOf(l), lg !== 'en', list.labelK)
   const fontOf = (l: MapLabel) => {
     const f = th.font
     const px = `${sizeOf(l).toFixed(1)}px`
@@ -1151,7 +1164,7 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
   let area: LabelArea | undefined
   // along：沿路径排布的字在路径上的位置（见 TextItem.along）
   type Along = { line: [number, number][]; c: number; at: number }
-  const halo = (t: string, x: number, y: number, font: string, m?: [number, number, number, number, number, number], w = 3.2, along?: Along) => {
+  const halo = (t: string, x: number, y: number, font: string, m: [number, number, number, number, number, number] | undefined, w: number, along?: Along) => {
     list.text('map', { t, x, y, font, align: 'middle', baseline: 'central', stroke: { color: th.label.halo, alpha: 0.85, width: w }, m, opacity: 1, bbox: [x - 200, y - 40, x + 200, y + 40], g: anchor, along, area })
   }
   const text = (t: string, x: number, y: number, font: string, color: string, m?: [number, number, number, number, number, number], along?: Along) => {
@@ -1256,7 +1269,8 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
         for (let i = 0; i < chars.length; i++) {
           const g = pointAt(pp, s + widths[i] / 2)
           glyphs.push({ c: chars[i], p: g.p, a: g.angle, at: s + widths[i] / 2 })
-          boxes.push([g.p[0] - size * 0.6, g.p[1] - size * 0.6, g.p[0] + size * 0.6, g.p[1] + size * 0.6])
+          const r = size * (GLYPH_R + LABEL_PAD)
+          boxes.push([g.p[0] - r, g.p[1] - r, g.p[0] + r, g.p[1] + r])
           s += widths[i]
         }
         if (boxes.some((b) => placed.some((q) => overlap(b, q)))) continue
@@ -1276,7 +1290,7 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
           const c = dmath.cos(g.a)
           const sn = dmath.sin(g.a)
           const m: [number, number, number, number, number, number] = [c, sn, -sn, c, g.p[0], g.p[1]]
-          halo(g.c, 0, 0, font, m, size * 0.23, { line, c: mid, at: g.at })
+          halo(g.c, 0, 0, font, m, size * HALO_RATIO, { line, c: mid, at: g.at })
         }
         for (const g of glyphs) {
           const c = dmath.cos(g.a)
@@ -1289,7 +1303,8 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
     }
     const chars = [...str]
     const w = chars.reduce((s, c) => s + measurer.measureText(c).width + spacing, -spacing)
-    const boxAt = (cx: number, cy: number): Box => [cx - w / 2 - 3, cy - size * 0.75, cx + w / 2 + 3, cy + size * 0.75 + (l.sub ? size : 0)]
+    const pad = LABEL_PAD * size
+    const boxAt = (cx: number, cy: number): Box => [cx - w / 2 - pad, cy - size * 0.75, cx + w / 2 + pad, cy + size * 0.75 + (l.sub ? size : 0)]
     const ax = l.p[0] * S
     const ay = l.p[1] * S
     // 候选位置：地标文字默认写在图标上方，放不下（压字、压城墙）再试下方、右侧、左侧；
@@ -1299,10 +1314,10 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
     if (point) {
       const u = gateDir(l.p)
       if (u) {
-        const hw = w / 2 + 3
+        const hw = w / 2 + pad
         const hh = size * 0.75
-        const pad = size * 0.5 + 4 * S
-        const t = Math.min(Math.abs(u[0]) > 1e-3 ? (hw + pad) / Math.abs(u[0]) : Infinity, Math.abs(u[1]) > 1e-3 ? (hh + pad) / Math.abs(u[1]) : Infinity)
+        const off = size * 0.5 + 4 * S
+        const t = Math.min(Math.abs(u[0]) > 1e-3 ? (hw + off) / Math.abs(u[0]) : Infinity, Math.abs(u[1]) > 1e-3 ? (hh + off) / Math.abs(u[1]) : Infinity)
         // 城里一侧（贴着门、再往里）；让不开就沿墙错开一点，最后试城外一侧
         const v: P = [-u[1], u[0]]
         const side = Math.abs(v[0]) * (hw + 2) + Math.abs(v[1]) * (hh + 2)
@@ -1320,7 +1335,7 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
     const [x, y] = spot
     // 点状的（地标、兴趣点）以图标为锚点：放大时字向图标收拢；面状的以字的中心
     anchor = point ? [ax, ay] : [x, y]
-    area = point ? undefined : regionOf(l, w + 6, (size * 0.75 + (l.sub ? size : 0)) * 2)
+    area = point ? undefined : regionOf(l, w + pad * 2, (size * 0.75 + (l.sub ? size : 0)) * 2)
     placed.push(boxAt(x, y))
     if (x < 10 || y < 10 || x > list.MW - 10 || y > list.MH - 10) continue
     // 字距：逐字放置
@@ -1331,11 +1346,11 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
       glyphs.push({ c, x: cx + cw / 2 })
       cx += cw + spacing
     }
-    for (const g of glyphs) halo(g.c, g.x, y, font, undefined, l.kind === 'water' ? 0 : size * (zoning && l.kind === 'district' ? 0.34 : 0.23))
+    for (const g of glyphs) halo(g.c, g.x, y, font, undefined, l.kind === 'water' ? 0 : size * (zoning && l.kind === 'district' ? 1.5 : 1) * HALO_RATIO)
     for (const g of glyphs) text(g.c, g.x, y, font, color)
     if (l.sub) {
       const sf = `400 ${(size * 0.7).toFixed(1)}px ${th.font.label}`
-      halo(l.sub[lg], x, y + size, sf)
+      halo(l.sub[lg], x, y + size, sf, undefined, size * 0.7 * HALO_RATIO)
       text(l.sub[lg], x, y + size, sf, color)
     }
   }

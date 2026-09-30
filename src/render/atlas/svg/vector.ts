@@ -4,6 +4,7 @@ import { ATLAS, atlasSea, ramp, type RGB } from '../../palette'
 import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
 import { drawMapLabels, drawMapOverlays, fieldsFor, marginOf, type Reserved } from '../index'
+import { atlasLabelK } from '../labels'
 import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type StyleId } from '../styles'
 import { contourGrid, contours, pathData, type ContourGrid } from './contour'
 import { DisplayList, type Fill, type Segment, type Stroke } from './displayList'
@@ -412,6 +413,7 @@ export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId,
   const k = S / 2
   const M = marginOf(theme, S)
   const list = new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH)
+  list.labelK = atlasLabelK(S)
   list.head = `<title>${world.worldName}</title><style>@import url('${FONT_CSS.replace(/&/g, '&amp;')}');</style>`
   // 纸底
   list.path('page', `M0 0L${list.width} 0L${list.width} ${list.height}L0 ${list.height}Z`, { fill: { color: rgb(theme.paper), alpha: 1 } })
@@ -494,6 +496,7 @@ export function withLabels(base: AtlasBase, areas: AtlasOpts['areas']): DisplayL
   const { list: src, cut } = base
   if (!base.opts.labels) return src
   const list = new DisplayList(src.width, src.height, src.M, src.MW, src.MH)
+  list.labelK = src.labelK
   list.head = src.head
   list.clips = new Map(src.clips)
   list.patterns = new Map(src.patterns)

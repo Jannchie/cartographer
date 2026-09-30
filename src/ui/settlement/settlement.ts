@@ -357,11 +357,7 @@ async function refresh(fit = false, quiet = false) {
   const list = await listFor(s, ss.style, quiet ? 300 : 2500)
   if (id !== job) return
   ss.loading.show = false
-  if (!viewer) {
-    viewer = markRaw(new AtlasViewer(host))
-    // 聚落图的字号设计得小（街名、小地点十来个像素）：放大时注记长到 1.5 倍再固定
-    viewer.labelMax = 1.5
-  }
+  if (!viewer) viewer = markRaw(new AtlasViewer(host))
   const same = !!shown && shown.width === list.width && shown.height === list.height
   shown = list
   // 图廓固定在舞台上、铺满剩余空间，缩放只动图框里的地图

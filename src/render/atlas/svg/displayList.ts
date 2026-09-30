@@ -370,6 +370,8 @@ export class DisplayList {
   head = ''
   /** 为真时新写入的指令归入图廓件段（见 Segment.furniture） */
   furniture = false
+  /** 注记按设计字号显示时的倍率（每页面像素多少 CSS 像素）：地图注记的页面字号 = 设计字号 ÷ labelK（见 labelSize） */
+  labelK = 1
   private patternCache = new Map<string, CanvasPattern>()
   /** 沿路径可滑动的注记：路径的累计弧长、整条注记的半长与字的半径（段坐标，首次画注记时统计） */
   private curves: Map<[number, number][], Curve> | null = null
@@ -499,9 +501,10 @@ export class DisplayList {
   }
 
   /**
-   * 只画地图里的注记（连同带锚点的符号），每条注记以锚点为中心再缩放 s 倍：查看器放大时 s = 适配倍率 / 当前倍率，注记在屏幕上保持原来的大小。
+   * 只画地图里的注记（连同带锚点的符号），每条注记以锚点为中心再缩放 s 倍（相对地图；查看器按字号体系算出，见 AtlasViewer.drawLabels）。
    * 参数与 render 相同（整张页面坐标 → 画布）。
-   * minPx：屏幕上的最小字号（画布像素）；字号更小的注记整条放大到它，放大后压到别的注记的这一帧不画。
+   * s ≤ 1 时注记比排布时小，彼此不会压到；s > 1 时按排布时的优先顺序占位，压到已画注记的这一帧不画（放大地图后再出现）。
+   * minPx：屏幕上的最小字号（画布像素）；缩放后仍低于它的注记（附注、测深数字）单独放大到它，同样不压已画的注记。
    */
   renderLabels(ctx: CanvasRenderingContext2D, scale: number, ox: number, oy: number, s: number, vis?: BBox, minPx = 0, dpr = 1) {
     const cw = ctx.canvas.width
@@ -534,7 +537,7 @@ export class DisplayList {
     ctx.rect(0, 0, this.MW, this.MH)
     ctx.clip()
     this.resetText()
-    // 每条注记（同一锚点的字、晕边与符号）一组：字号低于下限的整组放大到下限；放大后压到别的注记的暂时不画（放大地图后再出现）
+    // 每条注记（同一锚点的字、晕边与符号）一组，整组一起缩放、一起占位
     const groups = this.groups ?? (this.groups = this.collectGroups())
     // 已画注记的包围盒按视口的 32 × 32 网格登记，查重叠只看相交的格子；跨格太多的大框另放一处，每次都查
     const cell = Math.max(x1 - x0, y1 - y0) / 32 || 1
@@ -562,16 +565,22 @@ export class DisplayList {
       if (!keys) return [...grid.values()].some((bs) => bs.some((q) => overlap(b, q)))
       return keys.some((k) => grid.get(k)?.some((q) => overlap(b, q)))
     }
-    // 字号低于下限的组放大到下限，放大后压到别的注记的这一帧不画。按设计字号从大到小占位（bySize，同字号保持原顺序）：
-    // 地名先占，测深数字这类密集的小字最后见缝插针
-    const enlarged = (g: LabelGroup) => minPx > 0 && g.fs * scale * s < minPx * 0.999
-    for (const g of groups) if (!g.optional && !enlarged(g)) this.drawGroup(ctx, g, s, frame)
-    for (const g of this.bySize!) if (!g.optional && enlarged(g)) this.drawGroup(ctx, g, minPx / (g.fs * scale), frame, hits)
+    // 各组的缩放：统一的 s，缩放后仍低于下限的单独放大到下限
+    const scaleOf = (g: LabelGroup) => (minPx > 0 && g.fs * scale * s < minPx * 0.999 ? minPx / (g.fs * scale) : s)
+    // 不比排布时大的组彼此压不到，直接画；其余按排布时的优先顺序占位（地名先占，附注这类小字后排）
+    const grown: [LabelGroup, number][] = []
+    for (const g of groups) {
+      if (g.optional) continue
+      const gs = scaleOf(g)
+      if (gs > 1.0001) grown.push([g, gs])
+      else this.drawGroup(ctx, g, gs, frame)
+    }
+    for (const [g, gs] of grown) this.drawGroup(ctx, g, gs, frame, hits)
     // 可省略的注记最后按 rank 占位：还没放大到它那一层的、整组在视口外的先跳过（这类注记数量多，逐组细算太费）
     const css = scale / dpr
     for (const g of this.optionals!) {
       if (css < g.optional!.zoom) continue
-      const gs = enlarged(g) ? minPx / (g.fs * scale) : s
+      const gs = scaleOf(g)
       const b = g.box!
       const pad = Math.max(b[2] - b[0], b[3] - b[1]) * Math.max(1, gs)
       if (b[2] + pad < x0 || b[0] - pad > x1 || b[3] + pad < y0 || b[1] - pad > y1) continue
@@ -582,8 +591,6 @@ export class DisplayList {
 
   /** 注记分组（按锚点；沿路径的按路径；都没有的各自一组），顺序即排布时的优先顺序 */
   private groups: LabelGroup[] | null = null
-  /** 同一批组按设计字号从大到小（稳定排序） */
-  private bySize: LabelGroup[] | null = null
   /** 可省略的组，按 rank 从小到大 */
   private optionals: LabelGroup[] | null = null
   private collectGroups(): LabelGroup[] {
@@ -609,7 +616,6 @@ export class DisplayList {
       }
     }
     for (const g of out) if (!Number.isFinite(g.fs)) g.fs = 12
-    this.bySize = [...out].sort((a, b) => b.fs - a.fs)
     this.optionals = out.filter((g) => g.optional).sort((a, b) => a.optional!.rank - b.optional!.rank)
     return out
   }
