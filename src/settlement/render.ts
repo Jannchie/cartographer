@@ -1,12 +1,14 @@
 import { eastAsian } from './culture'
 import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
-import { DisplayList, type BBox, type Fill, type Item, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
+import { DisplayList, rasterArea, rasterPoly, type BBox, type Fill, type Item, type LabelArea, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
 import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, type P, type Poly } from './geom'
 import { settleTheme, type SettleStyleId, type SettleTheme } from './themes'
 import type { BuildingKind, Field, MapLabel, Road, Settlement, SettlementSize } from './types'
 import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type LandUse } from './landuse'
 import { tr } from '../i18n'
+import { regionShown, type SettleRegion } from './regions'
+import * as dmath from '../gen/dmath'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -19,6 +21,10 @@ export interface SettleOpts {
   view?: 'map' | 'zoning'
   /** 区划图里关掉（不着色）的类 */
   hidden?: LandUse[]
+  /** 浏览器图廓层里画不画图饰（标题框、指北针、区划图例）；整页导出总是画 */
+  ornaments?: boolean
+  /** 命名区域（区域视图里改过的）：给了就按区域标片区名（见 regions.ts） */
+  regions?: SettleRegion[]
 }
 
 const SIZE_NAME: Record<Lang, Record<SettlementSize, string>> = {
@@ -95,7 +101,7 @@ export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts
   toriiLayer(R, st, th)
   wallLayers(R, st, th)
   wonderLayers(R, st, th)
-  if (opts.labels) labelLayers(R, st, th, measurer, lg)
+  if (opts.labels) labelLayers(R, st, th, measurer, lg, undefined, opts.regions)
   furniture(list, st, th, S, M, M, MW, MH, measurer, lg)
   return list
 }
@@ -184,7 +190,7 @@ function densify(r: Float32Array, step: number, closed: boolean): Float32Array {
     const j = (i + 1) % n
     const nx = r[j * 2]
     const ny = r[j * 2 + 1]
-    const m = Math.ceil(Math.hypot(nx - x, ny - y) / step)
+    const m = Math.ceil(dmath.hypot(nx - x, ny - y) / step)
     for (let k = 1; k < m; k++) out.push(x + ((nx - x) * k) / m, y + ((ny - y) * k) / m)
   }
   return Float32Array.from(out)
@@ -200,7 +206,7 @@ function ringsD(rings: Ring[], k: number, closed: boolean, smooth: boolean) {
     const r = smooth ? densify(simplify(raw, 0.3), 2, closed) : simplify(raw, 0.3)
     const n = r.length / 2
     if (n < 3) continue
-    const isClosed = closed || Math.hypot(r[0] - r[(n - 1) * 2], r[1] - r[(n - 1) * 2 + 1]) < 1.01
+    const isClosed = closed || dmath.hypot(r[0] - r[(n - 1) * 2], r[1] - r[(n - 1) * 2 + 1]) < 1.01
     if (!smooth) {
       let d = `M${f(r[0])} ${f(r[1])}`
       for (let i = 1; i < n; i++) d += `L${f(r[i * 2])} ${f(r[i * 2 + 1])}`
@@ -352,7 +358,7 @@ function drawTerrain(R: Painter, st: Settlement, th: SettleTheme, opts: SettleOp
       }
       const nx = (-(height[k + 1] - height[k - 1]) / (2 * cell)) * z
       const ny = (-(height[k + W] - height[k - W]) / (2 * cell)) * z
-      const inv = 1 / Math.hypot(nx, ny, 1)
+      const inv = 1 / dmath.hypot(nx, ny, 1)
       const l = ((nx * -0.6 + ny * -0.6 + 0.53) * inv) / 0.53
       dark[k] = 1 - l
       light[k] = l - 1
@@ -438,7 +444,7 @@ function drawWater(R: Painter, st: Settlement, th: SettleTheme) {
 
 /** 凸多边形内的平行线（Cyrus–Beck 裁剪） */
 function hatchLines(poly: Poly, angle: number, step: number): P[][] {
-  const u: P = [Math.cos(angle), Math.sin(angle)]
+  const u: P = [dmath.cos(angle), dmath.sin(angle)]
   const v: P = [-u[1], u[0]]
   let v0 = Infinity
   let v1 = -Infinity
@@ -648,10 +654,10 @@ function treeChunk(R: Painter, trees: Settlement['trees'], withShadow: boolean) 
       const y = t.p[1] * S
       const a0 = -0.35
       const a1 = Math.PI * 0.85
-      const sx = x + Math.cos(a0) * r
-      const sy = y + Math.sin(a0) * r
-      const ex = x + Math.cos(a1) * r
-      const ey = y + Math.sin(a1) * r
+      const sx = x + dmath.cos(a0) * r
+      const sy = y + dmath.sin(a0) * r
+      const ex = x + dmath.cos(a1) * r
+      const ey = y + dmath.sin(a1) * r
       return `M${f1(sx)} ${f1(sy)}A${f1(r)} ${f1(r)} 0 0 1 ${f1(ex)} ${f1(ey)}Q${f1(x + r * 0.25)} ${f1(y + r * 0.2)} ${f1(sx)} ${f1(sy)}Z`
     })
     .join('')
@@ -689,7 +695,7 @@ function roads(R: Painter, st: Settlement, th: SettleTheme) {
     const ticks: P[][] = []
     for (let s = 2; s < L; s += 3) {
       const { p, angle } = pointAt(r.line, s)
-      const n: P = [-Math.sin(angle) * r.width * 0.5, Math.cos(angle) * r.width * 0.5]
+      const n: P = [-dmath.sin(angle) * r.width * 0.5, dmath.cos(angle) * r.width * 0.5]
       ticks.push([[p[0] - n[0], p[1] - n[1]], [p[0] + n[0], p[1] + n[1]]])
     }
     R.lines(ticks, { color: th.ink, alpha: 0.45, width: 0.4 })
@@ -818,7 +824,7 @@ function boatLayers(R: Painter, st: Settlement, th: SettleTheme) {
   const hulls: Poly[] = []
   const masts: P[][] = []
   for (const b of st.boats) {
-    const u: P = [Math.cos(b.angle), Math.sin(b.angle)]
+    const u: P = [dmath.cos(b.angle), dmath.sin(b.angle)]
     const v: P = [-u[1], u[0]]
     const L = b.len / 2
     const w = b.len * 0.17
@@ -931,7 +937,7 @@ function wallLayers(R: Painter, st: Settlement, th: SettleTheme) {
     R.lines(runs, { color: th.water, alpha: 1, width: width * S, cap: 'butt', join: 'round' })
     R.lines(runs, { color: th.waterLine.color, alpha: th.waterLine.alpha[0], width: 0.6, cap: 'butt', join: 'round' })
     for (const b of bridges) {
-      const u: P = [Math.cos(b.angle), Math.sin(b.angle)]
+      const u: P = [dmath.cos(b.angle), dmath.sin(b.angle)]
       const q = rect(b.p, u, width + 5, 7)
       R.poly(q, { color: th.wall.fill, alpha: 1 }, { color: th.wall.stroke, alpha: 1, width: 0.9 })
     }
@@ -980,7 +986,7 @@ function wallLayers(R: Painter, st: Settlement, th: SettleTheme) {
     R.list.path('map', towers, { fill: { color: th.wall.fill, alpha: 1 }, stroke: { color: th.wall.stroke, alpha: 1, width: 1 } })
     // 城门楼：门洞两侧的方墩
     for (const g of w.gates) {
-      const u: P = [Math.cos(g.angle), Math.sin(g.angle)]
+      const u: P = [dmath.cos(g.angle), dmath.sin(g.angle)]
       const v: P = [-u[1], u[0]]
       const s = w.kind === 'stone' ? 1 : 0.7
       for (const side of [-1, 1]) {
@@ -1020,7 +1026,7 @@ function wonderLayers(R: Painter, st: Settlement, th: SettleTheme) {
       const pts: P[] = []
       for (let k = 0; k < 7; k++) {
         const a = -Math.PI / 2 + ((k * 3) % 7) * ((Math.PI * 2) / 7)
-        pts.push([c[0] + Math.cos(a) * w.r * 0.86, c[1] + Math.sin(a) * w.r * 0.86])
+        pts.push([c[0] + dmath.cos(a) * w.r * 0.86, c[1] + dmath.sin(a) * w.r * 0.86])
       }
       R.poly(pts, undefined, { color: th.magic, alpha: 0.75, width: 0.8 })
       // 符文刻度
@@ -1029,7 +1035,7 @@ function wonderLayers(R: Painter, st: Settlement, th: SettleTheme) {
         const a = (k / 36) * Math.PI * 2
         const r0 = w.r * 0.88
         const r1 = w.r * (k % 3 === 0 ? 0.98 : 0.94)
-        ticks.push([[c[0] + Math.cos(a) * r0, c[1] + Math.sin(a) * r0], [c[0] + Math.cos(a) * r1, c[1] + Math.sin(a) * r1]])
+        ticks.push([[c[0] + dmath.cos(a) * r0, c[1] + dmath.sin(a) * r0], [c[0] + dmath.cos(a) * r1, c[1] + dmath.sin(a) * r1]])
       }
       R.lines(ticks, { color: th.magic, alpha: 0.8, width: 0.6 })
     } else if (w.kind === 'spring') {
@@ -1043,8 +1049,8 @@ function wonderLayers(R: Painter, st: Settlement, th: SettleTheme) {
         const out: Poly = []
         for (let k = 0; k < 28; k++) {
           const a = (k / 28) * Math.PI * 2
-          const rr = r * (1 + 0.16 * Math.sin(a * 3 + seed) + 0.08 * Math.sin(a * 7 + seed * 2))
-          out.push([c[0] + Math.cos(a) * rr, c[1] + Math.sin(a) * rr * 0.8])
+          const rr = r * (1 + 0.16 * dmath.sin(a * 3 + seed) + 0.08 * dmath.sin(a * 7 + seed * 2))
+          out.push([c[0] + dmath.cos(a) * rr, c[1] + dmath.sin(a) * rr * 0.8])
         }
         return out
       }
@@ -1064,7 +1070,7 @@ function wonderLayers(R: Painter, st: Settlement, th: SettleTheme) {
       const trees: string[] = []
       for (let k = 0; k < 7; k++) {
         const a = k * 2.3
-        trees.push(R.circleD([c[0] + Math.cos(a) * w.r * 0.6, c[1] + Math.sin(a) * w.r * 0.45], w.r * 0.09))
+        trees.push(R.circleD([c[0] + dmath.cos(a) * w.r * 0.6, c[1] + dmath.sin(a) * w.r * 0.45], w.r * 0.09))
       }
       R.list.path('map', trees.join(''), { fill: { color: th.tree.fill, alpha: 1 }, stroke: { color: th.tree.dark, alpha: 0.8, width: 0.6 } })
     }
@@ -1104,7 +1110,7 @@ function segHitsBox(a: P, b: P, box: Box, pad: number): boolean {
   return true
 }
 
-function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: CanvasRenderingContext2D, lg: Lang, zoning?: { reserve: Box }) {
+function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: CanvasRenderingContext2D, lg: Lang, zoning?: { reserve: Box }, regions?: SettleRegion[]) {
   const S = R.S
   const list = R.list
   const placed: Box[] = []
@@ -1117,7 +1123,7 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
   // 字号：一个基准字号按层级乘系数——海 > 片区、河、山 > 大地标 > 地标 > 街名 > 小地点。
   // 基准随比例尺温和缩放（小村放得大，字也略大；大都会缩得小，字也略小，但不小到看不清）；
   // 拉丁字母同样字号看着比汉字小，英文略放大（全大写的片区名除外）
-  const base = 12 * Math.min(1.4, Math.max(0.85, S ** 0.2))
+  const base = 12 * Math.min(1.4, Math.max(0.85, dmath.pow(S, 0.2)))
   const sizeOf = (l: MapLabel) => {
     const k =
       l.kind === 'water' ? 2 : l.kind === 'district' ? (lg === 'en' ? 1.05 : 1.25) : l.kind === 'river' || l.kind === 'hill' ? 1.2 : l.kind === 'landmark' ? (l.weight >= 7 ? 1.12 : 1) : l.kind === 'street' ? 0.9 : l.kind === 'poi' ? 0.8 : 1
@@ -1139,14 +1145,60 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
   }
   // 区划图：片区名用正文墨色（最醒目）
   const colorOf = (kind: string) => (kind === 'water' || kind === 'river' ? th.label.water : kind === 'district' ? (zoning ? th.label.color : th.label.district) : th.label.color)
-  const halo = (t: string, x: number, y: number, font: string, m?: [number, number, number, number, number, number], w = 3.2) => {
-    list.text('map', { t, x, y, font, align: 'middle', baseline: 'central', stroke: { color: th.label.halo, alpha: 0.85, width: w }, m, opacity: 1, bbox: [x - 200, y - 40, x + 200, y + 40] })
+  // anchor：整条注记的锚点（查看器放大时注记以它为中心保持屏幕大小，见 TextItem.g）
+  let anchor: [number, number] | undefined
+  // area：面状注记（片区名、海名）标的区域，放大后原位置不在视口里时挪到区域露出来的一角（见 TextItem.area）
+  let area: LabelArea | undefined
+  // along：沿路径排布的字在路径上的位置（见 TextItem.along）
+  type Along = { line: [number, number][]; c: number; at: number }
+  const halo = (t: string, x: number, y: number, font: string, m?: [number, number, number, number, number, number], w = 3.2, along?: Along) => {
+    list.text('map', { t, x, y, font, align: 'middle', baseline: 'central', stroke: { color: th.label.halo, alpha: 0.85, width: w }, m, opacity: 1, bbox: [x - 200, y - 40, x + 200, y + 40], g: anchor, along, area })
   }
-  const text = (t: string, x: number, y: number, font: string, color: string, m?: [number, number, number, number, number, number]) => {
-    list.text('map', { t, x, y, font, align: 'middle', baseline: 'central', fill: { color, alpha: 1 }, m, opacity: 1, bbox: [x - 200, y - 40, x + 200, y + 40] })
+  const text = (t: string, x: number, y: number, font: string, color: string, m?: [number, number, number, number, number, number], along?: Along) => {
+    list.text('map', { t, x, y, font, align: 'middle', baseline: 'central', fill: { color, alpha: 1 }, m, opacity: 1, bbox: [x - 200, y - 40, x + 200, y + 40], g: anchor, along, area })
+  }
+  // 片区名：所在片区；海名：地形格网里的海面
+  const T = st.terrain
+  const regionOf = (l: MapLabel, w: number, h: number): LabelArea | undefined => {
+    if (l.kind === 'district') {
+      const rp = regionPoly.get(l)
+      const ward = rp ? null : st.wards.find((wd) => pointInPoly(l.p, wd.poly))
+      if (!rp && !ward) return undefined
+      const poly = (rp ?? ward!.poly).map(([x, y]) => [x * S, y * S] as P)
+      const b = bboxOf(poly)
+      return { mask: rasterPoly(b, Math.max(2, Math.max(b[2] - b[0], b[3] - b[1]) / 32), poly), w, h }
+    }
+    if (l.kind === 'water') {
+      const c = T.cell * S
+      const sea = (x: number, y: number) => {
+        const i = Math.min(T.W - 1, Math.max(0, Math.floor(x / c)))
+        const j = Math.min(T.H - 1, Math.max(0, Math.floor(y / c)))
+        const k = j * T.W + i
+        return T.water[k] < 0 && T.height[k] < -0.6
+      }
+      return { mask: rasterArea([0, 0, T.W * c, T.H * c], c * 2, sea), w, h }
+    }
+    return undefined
   }
   // 区划图：片区名先排（压过地标），小地点不标
-  const labels = [...st.labels].filter((l) => !zoning || l.kind !== 'poi').sort((a, b) => (zoning ? +(b.kind === 'district') - +(a.kind === 'district') : 0) || b.weight - a.weight)
+  // 命名区域改过：片区名按区域标（名字、位置、范围都来自区域）；此刻城还没长到的区域不标
+  const regionPoly = new Map<MapLabel, [number, number][]>()
+  let source = st.labels
+  if (regions) {
+    // 区域名排在原片区名的位置（同权重的注记按原顺序避让，挪到末尾会被别的名字挤掉）
+    const own: MapLabel[] = []
+    for (const r of regions) {
+      if (!regionShown(st, r)) continue
+      const l: MapLabel = { text: r.name, p: r.at, angle: 0, kind: 'district', weight: 5 }
+      regionPoly.set(l, r.poly)
+      own.push(l)
+    }
+    const at = st.labels.findIndex((l) => l.kind === 'district')
+    const rest = st.labels.filter((l) => l.kind !== 'district')
+    const cut = at < 0 ? rest.length : st.labels.slice(0, at).filter((l) => l.kind !== 'district').length
+    source = [...rest.slice(0, cut), ...own, ...rest.slice(cut)]
+  }
+  const labels = [...source].filter((l) => !zoning || l.kind !== 'poi').sort((a, b) => (zoning ? +(b.kind === 'district') - +(a.kind === 'district') : 0) || b.weight - a.weight)
   // 城墙、护城河（像素坐标，带半宽）：地标、兴趣点的字不压在墙上
   const barriers: { a: P; b: P; pad: number }[] = []
   for (const w of st.walls) {
@@ -1193,16 +1245,17 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
       // 路径方向：保证文字不倒置
       let pp = path
       const mid = pointAt(path, L / 2)
-      if (Math.cos(mid.angle) < 0) pp = [...path].reverse()
+      if (dmath.cos(mid.angle) < 0) pp = [...path].reverse()
       // 选几个起点，挑不冲突的
       for (const f of [0.5, 0.35, 0.65, 0.25, 0.75]) {
         let s = L * f - total / 2
         if (s < 0 || s + total > L) continue
         const boxes: Box[] = []
-        const glyphs: { c: string; p: P; a: number }[] = []
+        const glyphs: { c: string; p: P; a: number; at: number }[] = []
+        const mid = s + total / 2
         for (let i = 0; i < chars.length; i++) {
           const g = pointAt(pp, s + widths[i] / 2)
-          glyphs.push({ c: chars[i], p: g.p, a: g.angle })
+          glyphs.push({ c: chars[i], p: g.p, a: g.angle, at: s + widths[i] / 2 })
           boxes.push([g.p[0] - size * 0.6, g.p[1] - size * 0.6, g.p[0] + size * 0.6, g.p[1] + size * 0.6])
           s += widths[i]
         }
@@ -1216,16 +1269,19 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
         }
         if (bend > 0.6) continue
         placed.push(...boxes)
+        const line = pp as [number, number][]
+        anchor = undefined
+        area = undefined
         for (const g of glyphs) {
-          const c = Math.cos(g.a)
-          const sn = Math.sin(g.a)
+          const c = dmath.cos(g.a)
+          const sn = dmath.sin(g.a)
           const m: [number, number, number, number, number, number] = [c, sn, -sn, c, g.p[0], g.p[1]]
-          halo(g.c, 0, 0, font, m, size * 0.23)
+          halo(g.c, 0, 0, font, m, size * 0.23, { line, c: mid, at: g.at })
         }
         for (const g of glyphs) {
-          const c = Math.cos(g.a)
-          const sn = Math.sin(g.a)
-          text(g.c, 0, 0, font, color, [c, sn, -sn, c, g.p[0], g.p[1]])
+          const c = dmath.cos(g.a)
+          const sn = dmath.sin(g.a)
+          text(g.c, 0, 0, font, color, [c, sn, -sn, c, g.p[0], g.p[1]], { line, c: mid, at: g.at })
         }
         break
       }
@@ -1262,6 +1318,9 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
     })
     if (!spot) continue
     const [x, y] = spot
+    // 点状的（地标、兴趣点）以图标为锚点：放大时字向图标收拢；面状的以字的中心
+    anchor = point ? [ax, ay] : [x, y]
+    area = point ? undefined : regionOf(l, w + 6, (size * 0.75 + (l.sub ? size : 0)) * 2)
     placed.push(boxAt(x, y))
     if (x < 10 || y < 10 || x > list.MW - 10 || y > list.MH - 10) continue
     // 字距：逐字放置
@@ -1306,15 +1365,15 @@ function labelLayers(R: Painter, st: Settlement, th: SettleTheme, measurer: Canv
       for (let k = 0; k < 4; k++) {
         const a = (k * Math.PI) / 4
         spokes.push([
-          [l.p[0] - Math.cos(a) * 2.8, l.p[1] - Math.sin(a) * 2.8],
-          [l.p[0] + Math.cos(a) * 2.8, l.p[1] + Math.sin(a) * 2.8],
+          [l.p[0] - dmath.cos(a) * 2.8, l.p[1] - dmath.sin(a) * 2.8],
+          [l.p[0] + dmath.cos(a) * 2.8, l.p[1] + dmath.sin(a) * 2.8],
         ])
       }
     } else if (l.kind === 'windmill') {
       const a0 = ((l.p[0] * 13.7 + l.p[1] * 7.1) % 100) / 100 * (Math.PI / 2)
       for (let k = 0; k < 4; k++) {
         const a = a0 + (k * Math.PI) / 2
-        spokes.push([l.p, [l.p[0] + Math.cos(a) * 8, l.p[1] + Math.sin(a) * 8]])
+        spokes.push([l.p, [l.p[0] + dmath.cos(a) * 8, l.p[1] + dmath.sin(a) * 8]])
       }
     }
   }
@@ -1446,7 +1505,7 @@ function zoningMap(R: Painter, st: Settlement, th: SettleTheme, opts: SettleOpts
   const legend = zoningLegend(st, th, opts, measurer, lg)
   const lx = 22
   const ly = list.MH - 22 - legend.lh
-  labelLayers(R, st, th, measurer, lg, { reserve: [lx - 6, ly - 6, lx + legend.lw + 6, ly + legend.lh + 6] })
+  labelLayers(R, st, th, measurer, lg, { reserve: [lx - 6, ly - 6, lx + legend.lw + 6, ly + legend.lh + 6] }, opts.regions)
   legend.draw(list, list.M + lx, list.M + ly)
 }
 
@@ -1494,11 +1553,20 @@ function zoningLegend(st: Settlement, th: SettleTheme, opts: SettleOpts, measure
 // —————————————————————— 图廓 ——————————————————————
 
 /** 图廓：图框内框左上角在 (X, Y)、大小 MW × MH（整页排版时 X = Y = M）；S 是地图的像素 / 米（比例尺用） */
-function furniture(list: DisplayList, st: Settlement, th: SettleTheme, S: number, X: number, Y: number, MW: number, MH: number, measurer: CanvasRenderingContext2D, lg: Lang) {
+/** ornaments：图饰（标题框、朱印、指北针）；浏览器里默认不画，图框与比例尺照画 */
+function furniture(list: DisplayList, st: Settlement, th: SettleTheme, S: number, X: number, Y: number, MW: number, MH: number, measurer: CanvasRenderingContext2D, lg: Lang, ornaments = true) {
   const ink = th.frame
   // 图框：内细外粗
   list.path('page', `M${X} ${Y}H${X + MW}V${Y + MH}H${X}Z`, { stroke: { color: ink, alpha: 1, width: 1.4 } })
   list.path('page', `M${X - 8} ${Y - 8}H${X + MW + 8}V${Y + MH + 8}H${X - 8}Z`, { stroke: { color: ink, alpha: 1, width: 2.6 } })
+  if (ornaments) titleBlock(list, st, th, X, Y, measurer, lg)
+  scaleBar(list, th, S, X, Y, MW, MH)
+  if (ornaments) compass(list, th, X, Y, MW)
+}
+
+/** 标题框：城名、副标题与朱印 */
+function titleBlock(list: DisplayList, st: Settlement, th: SettleTheme, X: number, Y: number, measurer: CanvasRenderingContext2D, lg: Lang) {
+  const ink = th.frame
   // 标题框
   const tx = X + 22
   const ty = Y + 22
@@ -1529,7 +1597,11 @@ function furniture(list: DisplayList, st: Settlement, th: SettleTheme, S: number
       list.text('page', { t: c, x: px + sw / 2, y: py + 15.5 + i * 25, font: `400 21px "Ma Shan Zheng", ${th.font.label}`, align: 'middle', baseline: 'central', fill: { color: th.paper, alpha: 0.95 }, opacity: 1, bbox: [px, py, px + sw, py + sh] }),
     )
   }
-  // 比例尺：取最短的、画出来超过 120 像素的整数长度（浏览器里随缩放变，放大时到几米，缩小时到几公里）
+}
+
+/** 比例尺：取最短的、画出来超过 120 像素的整数长度（浏览器里随缩放变，放大时到几米，缩小时到几公里） */
+function scaleBar(list: DisplayList, th: SettleTheme, S: number, X: number, Y: number, MW: number, MH: number) {
+  const ink = th.frame
   const NICE = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000]
   const niceM = NICE.find((m) => m * S > 120) ?? NICE[NICE.length - 1]
   const len = niceM * S
@@ -1542,7 +1614,10 @@ function furniture(list: DisplayList, st: Settlement, th: SettleTheme, S: number
     [1, niceM >= 1000 ? `${niceM / 1000} km` : `${niceM} m`],
   ] as const)
     list.text('page', { t, x: sx + len * k, y: sy - 9, font: `400 11px ${th.font.label}`, align: 'middle', baseline: 'central', fill: { color: th.label.color, alpha: 1 }, opacity: 1, bbox: [sx - 20, sy - 20, sx + len + 20, sy] })
-  // 指北针
+}
+
+function compass(list: DisplayList, th: SettleTheme, X: number, Y: number, MW: number) {
+  const ink = th.frame
   const nx = X + MW - 50
   const ny = Y + 58
   list.path('page', `M${nx} ${ny - 30}L${nx + 9} ${ny + 8}L${nx} ${ny + 2}Z`, { fill: { color: ink, alpha: 1 } })
@@ -1554,10 +1629,10 @@ function furniture(list: DisplayList, st: Settlement, th: SettleTheme, S: number
 /** 纸边到图框内框的距离 */
 const RIM = 30
 /**
- * 浏览器里图框内框离舞台边的最小距离：外面还有一圈纸（RIM）和暗色桌面，底边多留，放操作提示。
+ * 浏览器里图框内框离舞台边的最小距离：外面还有一圈纸（RIM）和暗色桌面；上边让出"地图 / 区域"的页签，底边多留，放成长时间轴与操作提示。
  * 地图比可用区域小时（缩小了），图框贴着地图收拢，见 AtlasViewer 的图框模式。
  */
-export const SETTLE_FRAME_INSET = { t: 20 + RIM, r: 20 + RIM, b: 44 + RIM, l: 20 + RIM }
+export const SETTLE_FRAME_INSET = { t: 34 + RIM, r: 20 + RIM, b: 76 + RIM, l: 20 + RIM }
 
 /**
  * 浏览器里固定不动的图廓层（见 AtlasViewer 的图框模式）：纸边、图框、标题、指北针、比例尺、区划图例
@@ -1584,8 +1659,8 @@ export function buildSettlementChrome(
   list.path('page', band(x0, y0, x1, y) + band(x0, y + box.h, x1, y1) + band(x0, y, x, y + box.h) + band(x + box.w, y, x1, y + box.h), {
     fill: { color: th.paper, alpha: 1 },
   })
-  furniture(list, st, th, settlePageScale(st) * k, x, y, box.w, box.h, measurer, lg)
-  if (opts.view === 'zoning') {
+  furniture(list, st, th, settlePageScale(st) * k, x, y, box.w, box.h, measurer, lg, !!opts.ornaments)
+  if (opts.view === 'zoning' && opts.ornaments) {
     const legend = zoningLegend(st, th, opts, measurer, lg)
     legend.draw(list, x + 22, y + box.h - 22 - legend.lh)
   }

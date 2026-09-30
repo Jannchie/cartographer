@@ -4,6 +4,7 @@ import { perHousehold, scaleOf, urbanT } from './scale'
 import type { Building, BuildingKind, Culture, Household, Settlement, SettlementParams, WardType } from './types'
 import { dwelling } from './undo'
 import { defineStrings } from '../i18n'
+import * as dmath from '../gen/dmath'
 
 /**
  * 住户：每栋民居里住几户、每户几口人、以什么为生。
@@ -300,7 +301,7 @@ export function householdsOf(ctx: Ctx, poly: Poly, units: number, floors: number
     const trade = D.pick('trade', ids, weights, u)
     const cls = tradeOf(ctx.p.culture, trade)!.group.cls
     // 东方的大宅：一家人住好几座屋，只有记户的那座算人口，口数按整座宅院（多六成）
-    const size = Math.min(4.5, Math.max(0.55, (per / HOME_AREA) ** 0.6)) * EXTRA[cls].k * (ctx.estate ? 1.6 : 1)
+    const size = Math.min(4.5, Math.max(0.55, dmath.pow(per / HOME_AREA, 0.6))) * EXTRA[cls].k * (ctx.estate ? 1.6 : 1)
     const people = Math.max(2, Math.round(base * size * (0.85 + 0.3 * D.h('size', u))))
     out.push(MIXED.has(key) ? { trade, people, mixed: true } : { trade, people })
   }

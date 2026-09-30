@@ -1,3 +1,4 @@
+import * as dmath from '../gen/dmath'
 /**
  * 聚落用的平面几何：单位是米，多边形为顶点数组（逆时针或顺时针均可，函数内部按需归一）。
  * 城市结构里的多边形几乎都是凸的（Voronoi 单元、半平面裁剪、直线二分），
@@ -7,12 +8,12 @@
 export type P = [number, number]
 export type Poly = P[]
 
-export const dist = (a: P, b: P) => Math.hypot(a[0] - b[0], a[1] - b[1])
+export const dist = (a: P, b: P) => dmath.hypot(a[0] - b[0], a[1] - b[1])
 export const lerpP = (a: P, b: P, t: number): P => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
-export const rot = (v: P, a: number): P => [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a)]
+export const rot = (v: P, a: number): P => [v[0] * dmath.cos(a) - v[1] * dmath.sin(a), v[0] * dmath.sin(a) + v[1] * dmath.cos(a)]
 export const add = (a: P, b: P, k = 1): P => [a[0] + b[0] * k, a[1] + b[1] * k]
 export const unit = (v: P): P => {
-  const L = Math.hypot(v[0], v[1]) || 1
+  const L = dmath.hypot(v[0], v[1]) || 1
   return [v[0] / L, v[1] / L]
 }
 export const sub = (a: P, b: P): P => [a[0] - b[0], a[1] - b[1]]
@@ -119,7 +120,7 @@ export function dedupe(poly: Poly, eps = 1e-6): Poly {
 
 /** 凸多边形按直线切成两半，gap 为两侧各退让的宽度之和（小巷） */
 export function splitConvex(poly: Poly, o: P, dir: P, gap = 0): [Poly, Poly] {
-  const L = Math.hypot(dir[0], dir[1]) || 1
+  const L = dmath.hypot(dir[0], dir[1]) || 1
   // 法向
   const n: P = [-dir[1] / L, dir[0] / L]
   const h = gap / 2
@@ -145,7 +146,7 @@ export function insetConvex(poly: Poly, d: number | number[]): Poly {
     const b = p[(i + 1) % n]
     const ex = b[0] - a[0]
     const ey = b[1] - a[1]
-    const L = Math.hypot(ex, ey)
+    const L = dmath.hypot(ex, ey)
     if (L < 1e-9) continue
     // 有向面积为正（屏幕坐标顺时针）时，外法向为 (ey, -ex)
     const nx = -ey / L
@@ -164,7 +165,7 @@ export function growConvex(poly: Poly, d: number): Poly {
   // 有向面积为正（屏幕坐标顺时针）时，外法向为 (ey, -ex)
   const lines = p.map((a, i) => {
     const b = p[(i + 1) % n]
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    const L = dmath.hypot(b[0] - a[0], b[1] - a[1]) || 1
     const o: P = [(b[1] - a[1]) / L, -(b[0] - a[0]) / L]
     return { a: [a[0] + o[0] * d, a[1] + o[1] * d] as P, u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] as P }
   })
@@ -235,7 +236,7 @@ export function pointAt(line: P[], s: number): { p: P; angle: number } {
     const L = dist(line[i], line[i + 1])
     if (s <= L || i + 2 === line.length) {
       const t = L ? Math.max(0, Math.min(1, s / L)) : 0
-      return { p: lerpP(line[i], line[i + 1], t), angle: Math.atan2(line[i + 1][1] - line[i][1], line[i + 1][0] - line[i][0]) }
+      return { p: lerpP(line[i], line[i + 1], t), angle: dmath.atan2(line[i + 1][1] - line[i][1], line[i + 1][0] - line[i][0]) }
     }
     s -= L
   }
@@ -408,7 +409,7 @@ export function circlePoly(c: P, r: number, n = 16, phase = 0): Poly {
   const out: Poly = []
   for (let i = 0; i < n; i++) {
     const a = phase + (i / n) * Math.PI * 2
-    out.push([c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r])
+    out.push([c[0] + dmath.cos(a) * r, c[1] + dmath.sin(a) * r])
   }
   return out
 }
@@ -449,7 +450,7 @@ export function voronoiNb(sites: P[], bounds: [number, number, number, number]):
       // 这一圈里的站点至少离 s (ring - 1) × G 远：单元最远顶点不到它的一半，就不必再看了
       if (ring > 1) {
         let far = 0
-        for (const p of cell) far = Math.max(far, (p[0] - s[0]) ** 2 + (p[1] - s[1]) ** 2)
+        for (const p of cell) far = Math.max(far, dmath.pow(p[0] - s[0], 2) + dmath.pow(p[1] - s[1], 2))
         if (((ring - 1) * G) / 2 > Math.sqrt(far)) break
       }
       const cand: number[] = []
@@ -461,7 +462,7 @@ export function voronoiNb(sites: P[], bounds: [number, number, number, number]):
           for (const j of grid[yy * GW + xx]) if (j !== i) cand.push(j)
         }
       }
-      cand.sort((a, b) => (sites[a][0] - s[0]) ** 2 + (sites[a][1] - s[1]) ** 2 - ((sites[b][0] - s[0]) ** 2 + (sites[b][1] - s[1]) ** 2))
+      cand.sort((a, b) => dmath.pow(sites[a][0] - s[0], 2) + dmath.pow(sites[a][1] - s[1], 2) - (dmath.pow(sites[b][0] - s[0], 2) + dmath.pow(sites[b][1] - s[1], 2)))
       for (const j of cand) {
         const t = sites[j]
         const m: P = [(s[0] + t[0]) / 2, (s[1] + t[1]) / 2]
@@ -531,7 +532,7 @@ export function convexOverlap(a: Poly, b: Poly, tol = 0.05): boolean {
       const q = poly[(i + 1) % poly.length]
       let nx = q[1] - p[1]
       let ny = p[0] - q[0]
-      const L = Math.hypot(nx, ny)
+      const L = dmath.hypot(nx, ny)
       if (L < 1e-9) continue
       nx /= L
       ny /= L
@@ -625,7 +626,7 @@ export function inscribedRect(
   opts: { bands?: [number, number][]; minSide?: number; v?: P } = {},
 ): Poly | null {
   if (poly.length < 3) return null
-  const L = Math.hypot(u[0], u[1]) || 1
+  const L = dmath.hypot(u[0], u[1]) || 1
   const uu: P = [u[0] / L, u[1] / L]
   const v: P = opts.v ?? [-uu[1], uu[0]]
   let v0 = Infinity

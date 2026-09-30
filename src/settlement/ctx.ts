@@ -6,6 +6,7 @@ import type { FeatureEnv, FeatureId } from './features'
 import type { CityPlan, PlanZone } from './plans/types'
 import type { CultureStyle } from './culture'
 import type { Density, Landmark, Settlement, SettlementParams, Tier, Wall, WardType } from './types'
+import * as dmath from '../gen/dmath'
 
 /** 各规模的结构参数 */
 export interface SizeCfg {
@@ -27,6 +28,10 @@ export interface SizeCfg {
  * 于是房屋自然沿街退让、沿河收边，而无需通用的多边形布尔运算。
  */
 export type CorridorTag = 'road' | 'river' | 'wall'
+
+/** 线段与包围盒在某一轴上的间隙超过 r：线段离盒里的任何点都在 r 以外 */
+const segFar = (a: P, b: P, bb: BBox, r: number) =>
+  Math.min(a[0], b[0]) - bb[2] > r || bb[0] - Math.max(a[0], b[0]) > r || Math.min(a[1], b[1]) - bb[3] > r || bb[1] - Math.max(a[1], b[1]) > r
 
 /** 撤回用的记号：登记了几条、拆除记录有多长（见 undo.ts 的 checkpoint） */
 export type RegMark = readonly [number, number]
@@ -113,10 +118,13 @@ export class Corridors {
    * 贴着走廊边线放置的地块（裁剪结果）不算碰到。
    */
   hitsPoly(poly: Poly, pad = 0, tags?: CorridorTag[]) {
+    const bb = bboxOf(poly)
     for (const id of this.near(poly, Math.max(0, pad))) {
       const s = this.segs[id]
       if (s.dead) continue
       if (tags && !tags.includes(s.tag)) continue
+      // 包围盒离得够远的不必算精确距离
+      if (segFar(s.a, s.b, bb, s.hw + pad + 1e-6)) continue
       if (segPolyDist(s.a, s.b, poly) < s.hw + pad - 0.05) return true
     }
     return false
@@ -159,10 +167,14 @@ export class Corridors {
     let out = poly
     for (let pass = 0; pass < 2; pass++) {
       const c = centroid(out)
+      // 裁剪只会让多边形变小：这一遍开头的包围盒一直是保守的
+      const bb = bboxOf(out)
       for (const id of this.near(out)) {
         const s = this.segs[id]
         if (s.dead) continue
         if (tags && !tags.includes(s.tag)) continue
+        // 包围盒离得比半宽远：形心离得更远、gap 也够，不必算
+        if (segFar(s.a, s.b, bb, s.hw + 1e-6)) continue
         const { d, t } = segDist(c, s.a, s.b)
         if (d < s.hw && t > 0 && t < 1) return null
         // 用线段到多边形（含内部）的距离判断：街道从大地块中间穿过、附近没有顶点时也要切
@@ -170,7 +182,7 @@ export class Corridors {
         if (gap >= s.hw - 0.05) continue
         const dx = s.b[0] - s.a[0]
         const dy = s.b[1] - s.a[1]
-        const L = Math.hypot(dx, dy) || 1
+        const L = dmath.hypot(dx, dy) || 1
         // 只是擦边、且投影落在线段外很远：交给相邻线段处理（避免直线外延误切）；真正穿过的线段总要切
         const tu = ((c[0] - s.a[0]) * dx + (c[1] - s.a[1]) * dy) / (L * L)
         if (gap > 0 && (tu < -0.6 || tu > 1.6)) continue
@@ -314,6 +326,10 @@ export interface Ctx {
   style: CultureStyle
   /** 各模块在这次生成里的状态（规划形制的方格、麦地那已建的设施……），随 ctx 一起丢掉 */
   memo: Map<string, unknown>
+  /** 片区密度里只看位置的两项（离干道多近、位置噪声），见 densityAt；纯缓存，不随撤回恢复（所以不放 memo） */
+  density: Map<string, [number, number]>
+  /** 同上，按站点数组本身先查（片区的 site 一直是同一个数组，省去拼坐标串）；用到时才建 */
+  densityBySite?: WeakMap<P, [number, number]>
   /** 正在盖不算城里人口的房子（城外的村子、都城的宫殿）：不占民居预算，见 addBuilding */
   uncounted: boolean
   /** 正在盖东方疏档的大宅（一家人住好几座屋），见 eastWard */
@@ -464,8 +480,8 @@ export interface Core {
 
 /** 方格坐标系：以核心为原点、u 轴沿核心的方格朝向（与原点的偏移 (dx, dy) 换算成 (u, v)，以及反过来） */
 export function gridFrame(core: { c: P; angle: number }) {
-  const ca = Math.cos(core.angle)
-  const sa = Math.sin(core.angle)
+  const ca = dmath.cos(core.angle)
+  const sa = dmath.sin(core.angle)
   const c = core.c
   return {
     u: [ca, sa] as P,
@@ -510,10 +526,41 @@ export const SUB_WEIGHT = 1.15
 /** 方格程度：规整度里方格（而非放射）的那部分 */
 export const squareness = (p: SettlementParams) => p.regularity * (1 - p.radial)
 
+/** 水距网格每 4 格（20 米）一块的最小值：水距算好后不再改，按网格本身缓存 */
+const WATER_BLOCK = 4
+const waterMins = new WeakMap<Float32Array, { BW: number; m: Float32Array }>()
+/** 包围盒里任何一点的水距（双线性取样）都不小于它 */
+function waterFloor(ctx: Ctx, bb: BBox) {
+  const { W, H, cell, water } = ctx.T.terrain
+  let M = waterMins.get(water)
+  if (!M) {
+    const BW = Math.ceil(W / WATER_BLOCK)
+    const m = new Float32Array(BW * Math.ceil(H / WATER_BLOCK)).fill(Infinity)
+    for (let j = 0; j < H; j++)
+      for (let i = 0; i < W; i++) {
+        const k = Math.floor(j / WATER_BLOCK) * BW + Math.floor(i / WATER_BLOCK)
+        if (water[j * W + i] < m[k]) m[k] = water[j * W + i]
+      }
+    M = { BW, m }
+    waterMins.set(water, M)
+  }
+  // 取样用到的格点是 floor(x / cell) 与它的下一格（夹到边上）；两边各多放一格，不怕舍入
+  const i0 = Math.min(W - 2, Math.max(0, Math.floor(bb[0] / cell) - 1))
+  const i1 = Math.max(1, Math.min(W - 1, Math.floor(bb[2] / cell) + 2))
+  const j0 = Math.min(H - 2, Math.max(0, Math.floor(bb[1] / cell) - 1))
+  const j1 = Math.max(1, Math.min(H - 1, Math.floor(bb[3] / cell) + 2))
+  let m = Infinity
+  for (let bj = Math.floor(j0 / WATER_BLOCK); bj <= Math.floor(j1 / WATER_BLOCK); bj++)
+    for (let bi = Math.floor(i0 / WATER_BLOCK); bi <= Math.floor(i1 / WATER_BLOCK); bi++) m = Math.min(m, M.m[bj * M.BW + bi])
+  return m
+}
+
 /** 多边形的顶点与边上（每 3 米一点）离水最近的一点与它的水距；都在 margin 以外返回 null */
 function wettest(ctx: Ctx, poly: Poly, margin: number): { q: P; w: number } | null {
   let best: { q: P; w: number } | null = null
   if (!poly.length) return null
+  // 整个包围盒都离水够远：不必逐点取样
+  if (waterFloor(ctx, bboxOf(poly)) >= margin + 1e-3) return null
   for (const q of [...poly, ...resample([...poly, poly[0]], 3)]) {
     const w = ctx.T.waterAt(q)
     if (w < (best?.w ?? margin)) best = { q, w }
@@ -574,11 +621,12 @@ export function isFree(ctx: Ctx, poly: Poly, o: { pad?: number; water?: number; 
   const water = o.water ?? 1.5
   const c = centroid(poly)
   if (ctx.T.waterAt(c) < water) return false
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i]
-    const b = poly[(i + 1) % poly.length]
-    if (ctx.T.waterAt(a) < water || ctx.T.waterAt([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]) < water) return false
-  }
+  if (waterFloor(ctx, bboxOf(poly)) < water + 1e-3)
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i]
+      const b = poly[(i + 1) % poly.length]
+      if (ctx.T.waterAt(a) < water || ctx.T.waterAt([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]) < water) return false
+    }
   if (ctx.corridors.hitsPoly(poly, o.pad ?? 0, o.tags)) return false
   return !ctx.occ.overlaps(poly, o.gap ?? 0)
 }
@@ -624,7 +672,7 @@ export function whereOf(ctx: Ctx, poly: Poly): DistrictWhere {
   const c = centroid(poly)
   const dx = c[0] - ctx.center[0]
   const dy = c[1] - ctx.center[1]
-  const r = Math.hypot(dx, dy) / Math.max(1, ctx.Rin)
+  const r = dmath.hypot(dx, dy) / Math.max(1, ctx.Rin)
   const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'E' : 'W') : dy > 0 ? 'S' : 'N'
   return { dir, central: r < 0.35, outer: r > 0.8, river: !!ctx.T.river && ctx.T.waterAt(c) < ctx.cfg.patch }
 }
@@ -643,5 +691,5 @@ export function memo<T>(ctx: Ctx, key: string, make: () => T): T {
 /** 当前布局的"北"方向（东式城市按网格朝向） */
 export function northOf(ctx: Ctx): { n: P; e: P } {
   const a = ctx.gridAngle
-  return { n: [Math.sin(a), -Math.cos(a)], e: [Math.cos(a), Math.sin(a)] }
+  return { n: [dmath.sin(a), -dmath.cos(a)], e: [dmath.cos(a), dmath.sin(a)] }
 }

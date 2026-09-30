@@ -15,6 +15,7 @@ import { checkpoint, drop, rollback } from './undo'
 import { place, plantTree, scatterTrees } from './wards'
 import { isVillage } from './scale'
 import { nearestRoad, roadsNear } from './roads'
+import * as dmath from '../gen/dmath'
 
 /**
  * 名所：按地形才有的"招牌"布置，城边、城外挑合适的地方盖，放在片区、地标、城外设施都盖好以后。
@@ -87,7 +88,7 @@ function uphill(ctx: Ctx, q: P): P | null {
   const T = ctx.T
   const gx = T.heightAt([q[0] + 4, q[1]]) - T.heightAt([q[0] - 4, q[1]])
   const gy = T.heightAt([q[0], q[1] + 4]) - T.heightAt([q[0], q[1] - 4])
-  const L = Math.hypot(gx, gy)
+  const L = dmath.hypot(gx, gy)
   return L < 0.05 ? null : [gx / L, gy / L]
 }
 
@@ -173,7 +174,7 @@ function hilltops(ctx: Ctx, o: { d0: number; d1: number; rise: number; size: num
       const h = T.heightAt(q)
       if (h - h0 < o.rise || T.waterAt(q) < 30 || T.slopeAt(q) > 0.45) continue
       let top = true
-      for (let a = 0; a < 8 && top; a++) if (T.heightAt(add(q, [Math.cos((a * Math.PI) / 4), Math.sin((a * Math.PI) / 4)], 40)) > h + 0.3) top = false
+      for (let a = 0; a < 8 && top; a++) if (T.heightAt(add(q, [dmath.cos((a * Math.PI) / 4), dmath.sin((a * Math.PI) / 4)], 40)) > h + 0.3) top = false
       if (!top) continue
       const e = edgeDist(ctx, q)
       if (e < o.d0 || e > o.d1 || inCity(ctx, q)) continue
@@ -285,7 +286,7 @@ function senbonTorii(ctx: Ctx): boolean {
     let made = 0
     for (let s = 3; s < L - 6; s += 1.1) {
       const { p, angle } = pointAt(body, s)
-      const u: P = [Math.cos(angle), Math.sin(angle)]
+      const u: P = [dmath.cos(angle), dmath.sin(angle)]
       const n: P = [-u[1], u[0]]
       const at = s < twin ? [-1.9, 1.9] : [0]
       for (const o of at) if (placeWet(ctx, rect(add(p, n, o), u, 0.6, s < twin ? 2.6 : 3.2), 'torii', { role: '千本鸟居' })) made++
@@ -457,7 +458,7 @@ function shinkyo(ctx: Ctx): boolean {
     const { p: q, angle } = pointAt(line, s)
     const hw = T.river.hw[Math.min(T.river.hw.length - 1, Math.round((s / L) * (T.river.hw.length - 1)))]
     if (hw > 22) continue
-    const n: P = [-Math.sin(angle), Math.cos(angle)]
+    const n: P = [-dmath.sin(angle), dmath.cos(angle)]
     // 离城心远的一岸是社
     const side = dist(add(q, n, 40), ctx.center) > dist(add(q, n, -40), ctx.center) ? 1 : -1
     const f: P = [n[0] * side, n[1] * side]
@@ -497,7 +498,7 @@ function yamadera(ctx: Ctx): boolean {
   const tops = hilltops(ctx, { d0: 120, d1: 1200, rise: 14, size: 70, tag: 'sacred.yamadera' })
   for (const top of tops) {
     // 寺按方格朝向坐北朝南：地盘也顺着这个方向
-    const e: P = [Math.cos(ctx.gridAngle), Math.sin(ctx.gridAngle)]
+    const e: P = [dmath.cos(ctx.gridAngle), dmath.sin(ctx.gridAngle)]
     const zone = rect(top, e, 90, 90)
     if (!free(ctx, zone, 1)) continue
     const cp = checkpoint(ctx)
@@ -509,7 +510,7 @@ function yamadera(ctx: Ctx): boolean {
     }
     // 石阶到寺的南面（山门）：寺院按方格朝向坐北朝南
     const a = ctx.gridAngle
-    const gate: P = [top[0] - Math.sin(a) * 50, top[1] + Math.cos(a) * 50]
+    const gate: P = [top[0] - dmath.sin(a) * 50, top[1] + dmath.cos(a) * 50]
     if (!approach(ctx, gate, 'stair', 2.6, 700)) {
       rollback(ctx, cp)
       continue
@@ -545,7 +546,7 @@ function hillPagoda(ctx: Ctx): boolean {
       rollback(ctx, cp)
       continue
     }
-    for (let k = 0; k < 7; k++) plantTree(ctx, add(top, [Math.cos(k * 0.9), Math.sin(k * 0.9)], 17), 2.6)
+    for (let k = 0; k < 7; k++) plantTree(ctx, add(top, [dmath.cos(k * 0.9), dmath.sin(k * 0.9)], 17), 2.6)
     landmark(ctx, top, name(ctx, 'pagoda', top), 'temple', true, 16)
     return true
   }
@@ -612,8 +613,8 @@ function calvary(ctx: Ctx): boolean {
     const L = polylineLength(path)
     for (let k = 1; k <= 14; k++) {
       const { p, angle } = pointAt(path, (L * k) / 15)
-      const n: P = [-Math.sin(angle), Math.cos(angle)]
-      place(ctx, rect(add(p, n, 2.6), [Math.cos(angle), Math.sin(angle)], 1.2, 1.2), 'civic', { pad: 0.1 }, { role: '苦路站' })
+      const n: P = [-dmath.sin(angle), dmath.cos(angle)]
+      place(ctx, rect(add(p, n, 2.6), [dmath.cos(angle), dmath.sin(angle)], 1.2, 1.2), 'civic', { pad: 0.1 }, { role: '苦路站' })
     }
     return true
   }

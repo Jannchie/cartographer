@@ -2,6 +2,7 @@ import { Noise } from './noise'
 import { RNG } from './rng'
 import { Biome, type WorldParams } from './types'
 import { blur, clamp, smoothstep } from './util'
+import * as dmath from './dmath'
 
 export function latitudeOf(p: WorldParams, y: number, H: number): number {
   return p.latNorth + (p.latSouth - p.latNorth) * (y / (H - 1))
@@ -51,9 +52,9 @@ export function precipitationField(
     // 大气环流纬向调制
     const band =
       0.75 +
-      0.8 * Math.exp(-((lat / 11) ** 2)) -
-      0.42 * Math.exp(-(((al - 25) / 7) ** 2)) +
-      0.3 * Math.exp(-(((al - 50) / 11) ** 2)) -
+      0.8 * dmath.exp(-dmath.pow(lat / 11, 2)) -
+      0.42 * dmath.exp(-dmath.pow((al - 25) / 7, 2)) +
+      0.3 * dmath.exp(-dmath.pow((al - 50) / 11, 2)) -
       0.35 * smoothstep(60, 85, al)
     const row = y * W
     let m = 1
@@ -74,7 +75,7 @@ export function precipitationField(
         const hn = xn >= 0 && xn < W ? Math.max(0, elev[row + xn]) : h
         const rise = Math.max(0, hn - h)
         // 高空的饱和水汽量随海拔下降
-        const satAlt = sat * Math.exp(-h / 3.2)
+        const satAlt = sat * dmath.exp(-h / 3.2)
         let rain = m * 0.0032 * cellScale + m * Math.min(0.3, rise * 0.7)
         if (m > satAlt) rain += (m - satAlt) * 0.08
         rain = Math.min(rain, m)

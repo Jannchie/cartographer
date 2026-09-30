@@ -7,6 +7,7 @@ import type { Tri, Ward, WardType } from '../types'
 import { addBuilding, addGroup, urban } from '../wards'
 import { RESIDENTIAL } from './common'
 import type { CityPlan, PlanRoad, PlanZone } from './types'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 罗马营寨城（castrum / colonia，缩到地图的尺度）：
@@ -79,7 +80,7 @@ function roundRect(z: Pick<PlanZone, 'fromUV'>, b: ReturnType<typeof bounds>, r:
   for (const [cu, cv, a0] of corners)
     for (let k = 0; k <= n; k++) {
       const a = (a0 + k / (n * 2)) * Math.PI
-      out.push(z.fromUV(cu + Math.cos(a) * r, cv + Math.sin(a) * r))
+      out.push(z.fromUV(cu + dmath.cos(a) * r, cv + dmath.sin(a) * r))
     }
   return out
 }
@@ -145,10 +146,10 @@ export const castrum: CityPlan = {
     // 按干道原本的方向走最近的一座城门；那座门已经有干道、而另一座也差不多顺路时改走另一座，四门尽量都有路
     const g = grid(ctx, z)
     const used = memo(ctx, 'castrum.sides', () => new Set<number>())
-    const [du, dv] = z.toUV([z.c[0] + Math.cos(dir), z.c[1] + Math.sin(dir)])
-    const a = Math.atan2(dv, du)
+    const [du, dv] = z.toUV([z.c[0] + dmath.cos(dir), z.c[1] + dmath.sin(dir)])
+    const a = dmath.atan2(dv, du)
     const off = (s: P) => {
-      const d = Math.abs(Math.atan2(s[1], s[0]) - a) % (Math.PI * 2)
+      const d = Math.abs(dmath.atan2(s[1], s[0]) - a) % (Math.PI * 2)
       return Math.min(d, Math.PI * 2 - d)
     }
     const order = SIDES.map((s, k) => [off(s), k] as const).sort((p, q) => p[0] - q[0])
@@ -429,7 +430,7 @@ function openGates(ctx: Ctx, z: PlanZone, g: Grid): P[][] {
     wall.loop.splice(k + 1, 0, gp)
     wall.solid.splice(k + 1, 0, true)
     const out = z.fromUV(z.toUV(gp)[0] + s[0] * PU, z.toUV(gp)[1] + s[1] * PV)
-    const angle = Math.atan2(out[1] - gp[1], out[0] - gp[0])
+    const angle = dmath.atan2(out[1] - gp[1], out[0] - gp[0])
     wall.gates.push({ p: gp, angle })
     wall.towers = wall.towers.filter((t) => dist(t, gp) > 16)
     ctx.out.landmarks.push({ p: gp, name: ctx.namer.gate(angle), kind: 'gate' })

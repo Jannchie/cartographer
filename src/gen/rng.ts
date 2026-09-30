@@ -1,3 +1,4 @@
+import * as dmath from './dmath'
 /** 种子化随机数：同一种子永远生成同一个世界。 */
 
 export function hashString(s: string): number {
@@ -59,7 +60,7 @@ export class RNG {
   normal(): number {
     const u = Math.max(1e-12, this.next())
     const v = this.next()
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
+    return Math.sqrt(-2 * dmath.log(u)) * dmath.cos(2 * Math.PI * v)
   }
 
   pick<T>(arr: readonly T[]): T {

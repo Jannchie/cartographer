@@ -4,7 +4,8 @@ import { bboxOf, centroid, circlePoly, convexOverlap, dist, obb, pointInPoly, re
 import { vegetation } from './outer'
 import type { BuildingKind, Field, Tree } from './types'
 import { addGroup, inside, urban } from './wards'
-import { drop } from './undo'
+import { drop, mayHave } from './undo'
+import * as dmath from '../gen/dmath'
 
 /**
  * 公共设施与带露天场地的建筑群：酒馆、戏台、宣讲台、比武场、酒庄。
@@ -46,8 +47,9 @@ export function clear(ctx: Ctx, foot: Poly) {
     if (!b) fieldBox.set(f, (b = bboxOf(f.poly)))
     return b[0] > x1 || b[2] < x0 || b[1] > y1 || b[3] < y0 || !convexOverlap(f.poly, foot)
   }
-  drop(ctx, 'trees', (t) => !keepTree(t))
-  drop(ctx, 'fields', (f) => !keepField(f))
+  // 这块地上一定没有树、田时不必把全城的树、田扫一遍（见 undo.ts 的 mayHave）
+  if (mayHave(ctx, 'trees', [x0, y0, x1, y1])) drop(ctx, 'trees', (t) => !keepTree(t))
+  if (mayHave(ctx, 'fields', [x0, y0, x1, y1])) drop(ctx, 'fields', (f) => !keepField(f))
 }
 
 function trees(ctx: Ctx, pts: P[], r: number) {
@@ -175,7 +177,7 @@ export function stageAt(ctx: Ctx, at: P, axis: P): boolean {
   const fan: Poly = [L.pt(-R, d / 2 - 8)]
   for (let k = 1; k < 12; k++) {
     const a = Math.PI * (k / 12)
-    fan.push(L.pt(-Math.cos(a) * R, d / 2 - 8 - Math.sin(a) * R))
+    fan.push(L.pt(-dmath.cos(a) * R, d / 2 - 8 - dmath.sin(a) * R))
   }
   fan.push(L.pt(R, d / 2 - 8))
   emitArea(ctx, 'plazas', fan)
@@ -185,8 +187,8 @@ export function stageAt(ctx: Ctx, at: P, axis: P): boolean {
     for (const rr of [R * 0.45, R * 0.65, R * 0.85])
       for (let k = 1; k < 6; k++) {
         const a = Math.PI * (k / 6)
-        const p: P = [c[0] + (-Math.cos(a) * L.u[0] - Math.sin(a) * L.v[0]) * rr, c[1] + (-Math.cos(a) * L.u[1] - Math.sin(a) * L.v[1]) * rr]
-        const t: P = [Math.sin(a) * L.u[0] - Math.cos(a) * L.v[0], Math.sin(a) * L.u[1] - Math.cos(a) * L.v[1]]
+        const p: P = [c[0] + (-dmath.cos(a) * L.u[0] - dmath.sin(a) * L.v[0]) * rr, c[1] + (-dmath.cos(a) * L.u[1] - dmath.sin(a) * L.v[1]) * rr]
+        const t: P = [dmath.sin(a) * L.u[0] - dmath.cos(a) * L.v[0], dmath.sin(a) * L.u[1] - dmath.cos(a) * L.v[1]]
         addGroup(ctx, [[rect(p, t, rr * 0.42, 0.9), 'shed']], 0)
       }
   return true
@@ -250,12 +252,12 @@ export function amphitheater(ctx: Ctx, block: Poly): boolean {
   const b = obb(block)
   // 按建成时的人口定大小：城市后来长大，竞技场还是原来那座
   const pop = ctx.wardPop ?? ctx.p.population
-  const want = Math.min(95, Math.max(22, 26 + 20 * Math.log2(Math.max(1, pop / 5000)))) * (0.85 + ctx.rng.next() * 0.3)
+  const want = Math.min(95, Math.max(22, 26 + 20 * dmath.log2(Math.max(1, pop / 5000)))) * (0.85 + ctx.rng.next() * 0.3)
   const c = centroid(block)
   const ell = (a: number, e: number, n = 36): Poly =>
     Array.from({ length: n }, (_, k) => {
       const t = (k / n) * Math.PI * 2
-      return [c[0] + b.axis[0] * Math.cos(t) * a - b.axis[1] * Math.sin(t) * e, c[1] + b.axis[1] * Math.cos(t) * a + b.axis[0] * Math.sin(t) * e] as P
+      return [c[0] + b.axis[0] * dmath.cos(t) * a - b.axis[1] * dmath.sin(t) * e, c[1] + b.axis[1] * dmath.cos(t) * a + b.axis[0] * dmath.sin(t) * e] as P
     })
   // 从想要的大小往下缩，直到外圈空场整个落在片区里、不压路不压水
   for (let a = want; a >= 20; a *= 0.88) {
@@ -270,7 +272,7 @@ export function amphitheater(ctx: Ctx, block: Poly): boolean {
       if (k % (n / 4) === 0) continue
       const seg = (r: number, s: number, i: number): P => {
         const th = ((i % n) / n) * Math.PI * 2 - Math.PI / n
-        return [c[0] + b.axis[0] * Math.cos(th) * r - b.axis[1] * Math.sin(th) * s, c[1] + b.axis[1] * Math.cos(th) * r + b.axis[0] * Math.sin(th) * s]
+        return [c[0] + b.axis[0] * dmath.cos(th) * r - b.axis[1] * dmath.sin(th) * s, c[1] + b.axis[1] * dmath.cos(th) * r + b.axis[0] * dmath.sin(th) * s]
       }
       parts.push([[seg(a, e, k), seg(a, e, k + 1), seg(a - t, e - t, k + 1), seg(a - t, e - t, k)], 'civic'])
     }

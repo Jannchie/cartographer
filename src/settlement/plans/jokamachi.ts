@@ -6,6 +6,7 @@ import { rectOutline, RESIDENTIAL as MACHI } from './common'
 import { checkpoint, drop, rollback } from '../undo'
 import type { CityPlan, PlanRoad, PlanZone } from './types'
 import { planPopOf, scaleOf } from '../scale'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 城下町（江户时代日本的形制，缩到地图的尺度）：
@@ -184,7 +185,7 @@ export const jokamachi: CityPlan = {
   },
   exit(ctx, z, dir) {
     const L = layoutOf(ctx, z)
-    const d = z.toUV([z.c[0] + Math.cos(dir), z.c[1] + Math.sin(dir)])
+    const d = z.toUV([z.c[0] + dmath.cos(dir), z.c[1] + dmath.sin(dir)])
     const s = Math.abs(d[0]) >= Math.abs(d[1]) ? (d[0] >= 0 ? 0 : 2) : d[1] >= 0 ? 1 : 3
     const world = (r: number, tv: number) => {
       const uv = sideUV(s, r, tv)
@@ -261,7 +262,7 @@ export const jokamachi: CityPlan = {
     for (const l of lots) {
       // 按片区的形心算圈（站点落水时，邻近的片区会伸过来补上那一格）
       const c = cellOf(L, z.toUV(centroid(l.poly)))
-      if (Math.hypot(l.uv[0], l.uv[1]) < 1) l.type = 'castle'
+      if (dmath.hypot(l.uv[0], l.uv[1]) < 1) l.type = 'castle'
       else if (c.ring <= L.ns) l.type = 'noble'
       else if (c.ring === L.K && c.sides.some((s) => L.temples.includes(s))) l.type = 'temple'
       else if (l.inner) {
@@ -334,7 +335,7 @@ function nearLine(q: P, line: P[], d: number) {
     const dx = b[0] - a[0]
     const dy = b[1] - a[1]
     const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)))
-    if (Math.hypot(a[0] + dx * t - q[0], a[1] + dy * t - q[1]) < d) return true
+    if (dmath.hypot(a[0] + dx * t - q[0], a[1] + dy * t - q[1]) < d) return true
   }
   return false
 }

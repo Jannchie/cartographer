@@ -1,3 +1,4 @@
+import type { Area } from '../../gen/areas'
 import { Biome, type World } from '../../gen/types'
 import { blur, edt } from '../../gen/util'
 import { ATLAS, atlasSea, ramp, type RGB } from '../palette'
@@ -39,6 +40,8 @@ export interface AtlasOpts {
   labels: boolean
   contours: boolean
   graticule: boolean
+  /** 有名字的区域（大陆、海、湾……）：给了就按区域排这些地名（见 gen/areas.ts） */
+  areas?: Area[]
 }
 
 export interface Theme {

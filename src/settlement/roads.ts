@@ -2,6 +2,7 @@ import { dist, resample, segDist, type P } from './geom'
 import type { Ctx } from './ctx'
 import type { TerrainResult } from './terrain'
 import type { Road } from './types'
+import * as dmath from '../gen/dmath'
 
 /** 道路两侧让出的空地（米）：走廊半宽 = 路面半宽 + 这么多，房子、树不进走廊。规划的窄巷可以给得更紧 */
 export const ROAD_CLEAR = 1.2
@@ -114,7 +115,7 @@ class SegGrid {
           if (dir) {
             const ex = s.b[0] - s.a[0]
             const ey = s.b[1] - s.a[1]
-            const cos = Math.abs(dir[0] * ex + dir[1] * ey) / (Math.hypot(ex, ey) || 1)
+            const cos = Math.abs(dir[0] * ex + dir[1] * ey) / (dmath.hypot(ex, ey) || 1)
             if (cos < PARALLEL) continue
           }
           const p: P = [s.a[0] + (s.b[0] - s.a[0]) * t, s.a[1] + (s.b[1] - s.a[1]) * t]
@@ -246,7 +247,7 @@ function riverNormal(T: TerrainResult, q: P): P | null {
 function narrowest(T: TerrainResult, q: P): { w: number; d: P } {
   let best = { w: Infinity, d: [1, 0] as P }
   for (let deg = 0; deg < 180; deg += 5) {
-    const d: P = [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)]
+    const d: P = [dmath.cos((deg * Math.PI) / 180), dmath.sin((deg * Math.PI) / 180)]
     let w = 0
     for (const s of [1, -1]) {
       let t = 0

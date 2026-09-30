@@ -112,3 +112,10 @@ export function download(data: string | Blob, name: string) {
   a.click()
   if (typeof data !== 'string') setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
+
+/** 参数的签名（键排序后的 JSON）：与上次生成所用的参数比较，判断是否改过、还没重新生成 */
+export function paramSig(v: unknown): string {
+  return JSON.stringify(v, (_, x) =>
+    x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x,
+  )
+}

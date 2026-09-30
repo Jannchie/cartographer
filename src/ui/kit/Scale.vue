@@ -5,7 +5,8 @@ import { t } from '../i18n'
 /**
  * 滑杆（自绘，不用原生 range）：
  * - 拖动：点轨道直接跳到该处，按住指针拖；Shift 精细（1/10 速度）；靠近默认值时轻微吸附
- * - 双击整行（名称、轨道、读数任意处）平滑回到默认值；聚焦时 Delete / Backspace 也能复位
+ * - 双击整行（名称、轨道、读数任意处）平滑回到复位值 reset；聚焦时 Delete / Backspace 也能复位。
+ *   生成参数的复位值是当前生成结果所用的值（resetTip 换成相应的提示），显示选项的复位值是默认值
  * - 键盘：← → ↑ ↓ 一步，Shift 或 PageUp / PageDown 十步，Home / End 到两端
  * - 聚焦时滚轮微调（不抢面板滚动）
  * - 点读数可直接输入数值（inputScale 把内部值换算成显示单位，例如百分比传 100）
@@ -24,8 +25,9 @@ const props = withDefaults(
     title?: string
     inputScale?: number
     log?: boolean
+    resetTip?: string
   }>(),
-  { inputScale: 1 },
+  { inputScale: 1, resetTip: '双击恢复默认' },
 )
 const emit = defineEmits<{ 'update:modelValue': [v: number]; change: [v: number] }>()
 
@@ -54,7 +56,7 @@ const decimals = computed(() => {
 })
 const tip = computed(() => {
   const parts = [props.title ? t(props.title) : '']
-  if (props.reset !== undefined) parts.push(t('双击恢复默认') + ` · ${props.fmt ? props.fmt(props.reset) : props.reset}`)
+  if (props.reset !== undefined) parts.push(t(props.resetTip) + ` · ${props.fmt ? props.fmt(props.reset) : props.reset}`)
   return parts.filter(Boolean).join('\n')
 })
 

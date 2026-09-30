@@ -116,7 +116,7 @@ select {
 }
 .panel {
   position: relative;
-  width: 320px;
+  width: var(--panel-w, 320px);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -127,6 +127,38 @@ select {
     inset -1px 0 0 var(--ink),
     inset -4px 0 0 var(--paper),
     inset -5px 0 0 var(--rule-2);
+}
+
+/* 右缘的拖动条：大半在面板外，不压住面板的滚动条；悬停时沿面板边显出一道强调色细线 */
+.panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -7px;
+  width: 9px;
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+}
+.panel-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.panel-resize:hover::after,
+.app.resizing .panel-resize::after {
+  opacity: 1;
+}
+/* 拖动时整页保持调节光标，不选中文字 */
+.app.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .masthead {
@@ -140,7 +172,7 @@ select {
 }
 .wordmark {
   font-family: var(--display);
-  font-size: 27px;
+  font-size: 25px;
   line-height: 1;
   letter-spacing: -0.005em;
   transition: color 0.2s;
@@ -151,55 +183,63 @@ select {
 .file {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: 10px;
   white-space: nowrap;
 }
-.modules select.lang {
-  margin-left: auto;
-  align-self: center;
-  transform: translateY(-4px);
-}
-.modules {
+/*
+ * 分页：品牌名下面一排等宽的图标页签，名称写在图标下。
+ * 与底栏对称：固定的页头、页脚与中间滚动区之间用墨线，页头内部（品牌名与页签之间）用淡线
+ */
+.ptabs {
   display: flex;
-  gap: 18px;
-  margin-top: 16px;
+  margin: 12px -24px 0;
+  padding: 0 16px;
+  border-top: 1px solid var(--rule-2);
   border-bottom: 1px solid var(--ink);
 }
-.modules button {
+.ptabs button {
   position: relative;
-  padding: 0 0 8px;
-  white-space: nowrap;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 2px 9px;
   color: var(--ink-3);
-  font-size: 12.5px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: center;
   transition: color 0.2s;
 }
-.modules button::after {
+.ptabs svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.ptabs span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.ptabs button::after {
   content: '';
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 3px;
-  background: var(--ink);
+  left: 30%;
+  right: 30%;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
   transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 0.3s var(--ease);
+  transition: transform 0.25s var(--ease);
 }
-.modules .no {
-  margin-right: 7px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--accent);
-}
-.modules button:hover {
+.ptabs button:hover {
   color: var(--ink);
 }
-.modules button.on {
+.ptabs button.on {
   color: var(--ink);
 }
-.modules button.on::after {
+.ptabs button.on::after {
   transform: none;
 }
 
@@ -216,12 +256,71 @@ select {
   padding: 4px 24px 24px;
 }
 .panel-foot {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  display: flex;
   gap: 8px;
   padding: 14px 24px 18px;
   border-top: 1px solid var(--ink);
+}
+.panel-foot .primary {
+  flex: 1;
+  min-width: 0;
+}
+/* 导出：生成按钮右侧的方形图标按钮，点开向上弹出格式菜单 */
+.export-menu {
+  position: relative;
+  flex: none;
+}
+.export-btn {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 100%;
+  border: 1px solid var(--ink);
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.export-btn:hover,
+.export-menu.open .export-btn {
+  background: var(--ink);
+  color: var(--paper);
+}
+.export-list {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  padding: 4px 0;
+  background: var(--grain), var(--paper);
+  border: 1px solid var(--ink);
+  box-shadow:
+    0 0 0 3px var(--paper),
+    0 0 0 4px var(--rule-2),
+    0 10px 28px rgba(30, 26, 21, 0.18);
+}
+.export-list button {
+  padding: 6px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  transition: background 0.15s;
+}
+.export-list button:hover {
+  background: var(--paper-2);
+}
+.pop-enter-active,
+.pop-leave-active {
+  transition:
+    opacity 0.15s,
+    transform 0.15s var(--ease);
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
 }
 
 /* ———————————————————— 分节 ———————————————————— */
@@ -552,9 +651,11 @@ select.lang:hover {
     background 0.15s,
     color 0.15s;
 }
-/* 指定列数时每格固定宽度（例如编辑工具三列、滤镜四列） */
+/* 指定列数时每格固定宽度（例如编辑工具三列、滤镜四列）；仍放不下的名称在格内折行，不溢出 */
 .seg.cols button {
   flex: 1 1 calc(100% / var(--cols) - 1px);
+  white-space: normal;
+  line-height: 1.2;
 }
 .seg button:hover {
   background: var(--paper-2);
@@ -907,31 +1008,6 @@ select.lang:hover {
   cursor: progress;
   background: var(--ink-2);
 }
-/* 生成 + 成长：主按钮占满，成长是一枚描边的小按钮 */
-.gen-row {
-  display: flex;
-  gap: 6px;
-}
-.gen-row .primary {
-  flex: 1;
-}
-.grow {
-  flex: none;
-  padding: 0 14px;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  transition:
-    background 0.2s,
-    color 0.2s;
-}
-.grow:hover,
-.grow.on {
-  background: var(--accent);
-  color: var(--accent-ink);
-}
 /* 参数改了还没重算：按钮上走一道斜纹，像待复核的图稿 */
 .primary.dirty::before {
   content: '';
@@ -960,7 +1036,6 @@ select.lang:hover {
   color: var(--ink);
   text-decoration-color: var(--ink);
 }
-.export,
 .pair button,
 .wide {
   padding: 8px 10px;
@@ -970,15 +1045,10 @@ select.lang:hover {
     background 0.15s,
     color 0.15s;
 }
-.export:hover,
 .pair button:hover,
 .wide:hover {
   background: var(--ink);
   color: var(--paper);
-}
-.export::after {
-  content: ' ↓';
-  font-family: var(--mono);
 }
 .pair {
   display: grid;
@@ -1068,6 +1138,55 @@ select.lang:hover {
   margin-bottom: 14px;
 }
 
+/* ———————————————————— 区域视图的侧栏 ———————————————————— */
+.area-panel > * + * {
+  margin-top: 14px;
+}
+.area-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.area-actions .field {
+  width: 100%;
+}
+.area-group h3 small {
+  margin-left: 4px;
+  font-family: var(--mono);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--ink-3);
+}
+.area-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.area-list button {
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--rule-2);
+  font-size: 12px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.area-list button:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.area-list button.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
 /* ———————————————————— 图签：当前世界 / 聚落 ———————————————————— */
 .cartouche {
   margin-top: 22px;
@@ -1096,7 +1215,7 @@ select.lang:hover {
 }
 .cartouche dl {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px 8px;
   margin: 0;
   padding-top: 10px;
@@ -1112,6 +1231,10 @@ select.lang:hover {
   font-family: var(--mono);
   font-size: 12px;
   white-space: nowrap;
+}
+/* 英文的读数带单位词（buildings、people/ha），三列放不下 */
+:root:lang(en) .cartouche dl {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 /* 图签里的职业表：大类一行（名字、占比条、人数），点开是细分的行当 */
@@ -1129,7 +1252,7 @@ select.lang:hover {
 }
 .occupations summary {
   display: grid;
-  grid-template-columns: 6.5em 1fr auto;
+  grid-template-columns: var(--occ-w, 6.5em) 1fr auto;
   align-items: center;
   gap: 8px;
   padding: 3px 0;
@@ -1145,9 +1268,12 @@ select.lang:hover {
   text-underline-offset: 2px;
 }
 .occ-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+/* 英文的职业名长（Labourers and servants）：名称列放宽，仍放不下就折成两行 */
+:root:lang(en) .occupations {
+  --occ-w: 8em;
 }
 .occ-bar {
   height: 5px;
@@ -1159,6 +1285,7 @@ select.lang:hover {
   background: var(--ink-2);
 }
 .occ-num {
+  margin-left: auto;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-2);
@@ -1172,8 +1299,9 @@ select.lang:hover {
 }
 .occupations li {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
+  gap: 0 8px;
   padding: 2px 0;
   font-size: 11.5px;
   color: var(--ink-2);
@@ -1261,6 +1389,131 @@ select.lang:hover {
   cursor: crosshair;
 }
 
+/* 区域视图的叠加层：多边形不接事件（点选按坐标算，拖动照常平移地图），只有手柄接 */
+.area-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 4;
+  pointer-events: none;
+  overflow: visible;
+}
+.area-poly {
+  fill: rgba(70, 120, 60, 0.1);
+  stroke: rgba(46, 84, 40, 0.8);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  transition:
+    fill 0.12s,
+    stroke 0.12s;
+}
+.area-poly.water {
+  fill: rgba(40, 100, 160, 0.09);
+  stroke: rgba(24, 70, 120, 0.8);
+}
+.area-poly.feature {
+  fill: rgba(140, 100, 50, 0.06);
+  stroke: rgba(110, 70, 30, 0.85);
+  stroke-dasharray: 5 3;
+}
+.area-poly.hover {
+  fill: rgba(70, 120, 60, 0.22);
+  stroke-width: 2;
+}
+.area-poly.feature.hover {
+  fill: rgba(140, 100, 50, 0.18);
+}
+.area-poly.water.hover {
+  fill: rgba(40, 100, 160, 0.2);
+}
+.area-poly.sel,
+.area-poly.water.sel {
+  fill: rgba(63, 110, 98, 0.24);
+}
+.area-sel-halo,
+.area-sel-line {
+  fill: none;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.area-sel-halo {
+  stroke: var(--paper);
+  stroke-width: 6;
+  stroke-opacity: 0.9;
+}
+.area-sel-line {
+  stroke: var(--accent);
+  stroke-width: 2.6;
+}
+.area-vertex,
+.area-mid,
+.area-label {
+  pointer-events: all;
+  cursor: grab;
+}
+.area-vertex {
+  fill: var(--paper);
+  stroke: var(--accent-2);
+  stroke-width: 1.5;
+}
+.area-vertex:hover {
+  fill: var(--accent);
+}
+.area-mid {
+  fill: var(--paper);
+  fill-opacity: 0.85;
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  stroke-opacity: 0.8;
+}
+.area-mid:hover {
+  fill: var(--accent);
+  fill-opacity: 1;
+}
+.area-label circle {
+  fill: var(--accent);
+  stroke: var(--paper);
+  stroke-width: 2;
+}
+.area-label text {
+  font-family: var(--ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+/* 没有 WebGL 时 3D 视图里的说明 */
+.no3d {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 3;
+  width: min(420px, calc(100% - 64px));
+  padding: 18px 22px;
+  transform: translate(-50%, -50%);
+  background: var(--grain), var(--paper);
+  border: 1px solid var(--ink);
+  box-shadow:
+    inset 0 0 0 3px var(--paper),
+    inset 0 0 0 4px var(--rule-2);
+}
+.no3d h3 {
+  margin: 0 0 8px;
+  font-family: var(--cjk-serif);
+  font-size: 16px;
+}
+.no3d p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
 /* 图廓：内图廓一条细线，外侧每 64 像素一道刻度 */
 .neatline {
   position: absolute;
@@ -1326,10 +1579,126 @@ select.lang:hover {
   box-shadow: none;
 }
 
+/* 聚落的成长时间轴：地图下方的一条刻度尺（对数人口），播放键在左、读数在右 */
+.timeline {
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  bottom: 44px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 28px;
+  color: var(--night-text);
+  user-select: none;
+}
+.tl-play {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--night-line);
+  color: var(--paper);
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.tl-play:hover,
+.tl-play.on {
+  border-color: var(--paper);
+}
+.tl-tri {
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border: 5px solid transparent;
+  border-right: 0;
+  border-left: 8px solid currentColor;
+}
+.tl-stop {
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+}
+.tl-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+.timeline.dragging .tl-track {
+  cursor: grabbing;
+}
+.tl-rail,
+.tl-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+}
+.tl-rail {
+  right: 0;
+  height: 1px;
+  background: var(--night-line);
+}
+.tl-fill {
+  height: 2px;
+  transform: translateY(-0.5px);
+  background: var(--night-text);
+}
+/* 规模档位的分界：短刻度，名称写在刻度下方 */
+.tl-mark {
+  position: absolute;
+  top: 50%;
+  padding-top: 6px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.tl-mark::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  width: 1px;
+  height: 7px;
+  background: var(--night-text);
+}
+.tl-thumb {
+  position: absolute;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  margin-left: -1.5px;
+  transform: translateY(-50%);
+  background: var(--paper);
+  box-shadow: 0 0 0 2px var(--night);
+}
+.tl-track:focus-visible .tl-thumb {
+  box-shadow:
+    0 0 0 2px var(--night),
+    0 0 0 3.5px var(--paper);
+}
+.tl-read {
+  flex: none;
+  min-width: 11em;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--paper);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .hint {
   position: absolute;
   left: 30px;
-  bottom: 26px;
+  bottom: 22px;
   z-index: 3;
   font-family: var(--mono);
   font-size: 10.5px;
@@ -1473,6 +1842,10 @@ select.lang:hover {
   display: grid;
   place-items: center;
   background: rgba(26, 24, 21, 0.62);
+}
+/* 淡出途中不再挡住地图（拖动、点选不必等动画走完） */
+.loading.fade-leave-active {
+  pointer-events: none;
 }
 .loading-card {
   width: 320px;
@@ -1840,6 +2213,9 @@ select.lang:hover {
 @media (max-width: 760px) {
   .app {
     flex-direction: column-reverse;
+  }
+  .panel-resize {
+    display: none;
   }
   .panel {
     width: 100%;

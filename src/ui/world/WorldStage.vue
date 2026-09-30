@@ -3,7 +3,11 @@ import { computed, onMounted, ref } from 'vue'
 import { t } from '../i18n'
 import Loading from '../kit/Loading.vue'
 import Probe from '../kit/Probe.vue'
-import { mountWorld, setMode, toggleTour, ws, type Mode } from './world'
+import RegionOverlay from '../kit/RegionOverlay.vue'
+import { isFeatureArea, isWaterArea, type Area } from '../../gen/areas'
+import { placeName } from '../../i18n'
+import { langRef } from '../i18n'
+import { areaCheckpoint, commitAreas, mountWorld, selectArea, setMode, toggleTour, ws, type Mode } from './world'
 
 const stage = ref<HTMLElement>()
 const v3 = ref<HTMLElement>()
@@ -11,26 +15,50 @@ const v2 = ref<HTMLElement>()
 const ve = ref<HTMLElement>()
 onMounted(() => mountWorld({ stage: stage.value!, v3: v3.value!, v2: v2.value!, ve: ve.value! }))
 
+/** 区域叠加层要的名字、大小与是否水域 */
+const areaInfo = (a: Area) => {
+  void langRef.value
+  return { label: placeName(a), size: a.cells, water: isWaterArea(a.kind) || a.kind === 'lake', feature: isFeatureArea(a.kind) }
+}
+
 const MODES: { id: Mode; label: string }[] = [
   { id: '3d', label: '3D 沙盘' },
   { id: '2d', label: '纸图' },
   { id: 'edit', label: '编辑' },
+  { id: 'areas', label: '区域' },
 ]
 const hint = computed(() =>
   ws.mode === '3d'
     ? ws.touring
       ? '自动运镜中 · → 下一个镜头 · 拖动或 Esc 交还手动'
-      : '拖动旋转 · 右键平移 · 滚轮缩放 · T 巡览 · R 随机 · P 性能'
+      : '拖动旋转 · 右键平移 · 滚轮缩放 · WASD / 方向键移动 · Q E 转向 · PgUp PgDn 俯仰 · +/− 远近 · T 巡览 · R 随机 · P 性能'
     : ws.mode === '2d'
-      ? '拖动平移 · 滚轮缩放 · 双击复位 · R 随机'
-      : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销',
+      ? '拖动平移 · 滚轮缩放 · 方向键平移 · +/− 缩放 · 双击或 0 复位 · R 随机'
+      : ws.mode === 'areas'
+        ? '点选区域 · 拖顶点改边界 · 拖边中点加顶点 · 双击顶点删除 · 拖名字挪注记 · Ctrl+Z 撤销'
+        : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销',
 )
 </script>
 
 <template>
   <main ref="stage" class="stage">
     <div ref="v3" class="view" :class="{ hidden: ws.mode !== '3d' }"></div>
-    <div ref="v2" class="view paper-view" :class="{ hidden: ws.mode !== '2d' }"></div>
+    <div v-if="ws.no3d && ws.mode === '3d'" class="no3d">
+      <h3>{{ t('3D 沙盘不可用') }}</h3>
+      <p>{{ t('浏览器没能创建 WebGL，多半是显卡加速被停用了。完全退出浏览器再重新打开通常就能恢复；在 Chrome 里可以打开 chrome://gpu 查看状态。纸图与编辑不受影响。') }}</p>
+    </div>
+    <div ref="v2" class="view paper-view" :class="{ hidden: ws.mode !== '2d' && ws.mode !== 'areas' }">
+      <RegionOverlay
+        v-if="ws.mode === 'areas'"
+        :regions="ws.areas"
+        :info="areaInfo"
+        :selected="ws.areaSel"
+        :view="ws.paper"
+        @select="selectArea"
+        @checkpoint="areaCheckpoint"
+        @commit="commitAreas"
+      />
+    </div>
     <div ref="ve" class="view edit-view" :class="{ hidden: ws.mode !== 'edit' }"></div>
     <div class="neatline" aria-hidden="true"></div>
     <nav class="tabs" role="tablist">
@@ -41,11 +69,11 @@ const hint = computed(() =>
     <Transition name="fade">
       <div v-if="ws.editStatus" class="status">{{ ws.editStatus }}</div>
     </Transition>
-    <button v-if="ws.mode === '3d' && !ws.loading.show" type="button" class="tour" :class="{ on: ws.touring }" :title="t('自动运镜俯瞰浏览（T）')" @click="toggleTour">
+    <button v-if="ws.mode === '3d' && !ws.no3d && !ws.loading.show" type="button" class="tour" :class="{ on: ws.touring }" :title="t('自动运镜俯瞰浏览（T）')" @click="toggleTour">
       <i aria-hidden="true"></i>{{ t(ws.touring ? '停止巡览' : '巡览') }}
     </button>
     <!-- 纸图的悬停读数画在图廓里（见 world.ts 的 probeCard） -->
-    <Probe :data="ws.mode === '2d' ? null : ws.probe" />
+    <Probe :data="ws.mode === '2d' || ws.mode === 'areas' ? null : ws.probe" />
     <div class="hint">{{ t(hint) }}</div>
     <Loading :show="ws.loading.show" title="正在塑造世界" :stage="ws.loading.stage" :frac="ws.loading.frac" />
   </main>

@@ -2,6 +2,7 @@ import type { Namer } from './naming'
 import { RNG } from './rng'
 import type { Label, Realm } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
+import * as dmath from './dmath'
 
 /** 政区划分（不含名字）：hints 是给每个国家起名用的随机数，按生成顺序预先取好 */
 export interface RealmMap {
@@ -35,7 +36,7 @@ export function realmMap(
   const seeds: Label[] = []
   for (const c of cities) {
     if (seeds.length >= target) break
-    if (seeds.some((s) => Math.hypot(s.x - c.x, s.y - c.y) < minSep)) continue
+    if (seeds.some((s) => dmath.hypot(s.x - c.x, s.y - c.y) < minSep)) continue
     seeds.push(c)
   }
 

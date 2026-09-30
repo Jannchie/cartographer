@@ -1,4 +1,4 @@
-import { Biome, type World } from '../../gen/types'
+import { Biome, reliefKm, type World } from '../../gen/types'
 import type { RGB } from '../palette'
 
 export function sm(a: number, b: number, x: number) {
@@ -149,7 +149,7 @@ export class Fields {
   scan(fn: (p: Px, o: Float32Array) => void): ImageData {
     const { W, S, MW, MH, world } = this
     const e = world.elevation
-    const km = world.kmPerCell
+    const km = reliefKm(world)
     const img = new ImageData(MW, MH)
     const d = img.data
     const o = new Float32Array(3)

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import type { Label, World } from '../gen/types'
+import { reliefKm, type Label, type World } from '../gen/types'
 import { buildDetailMask, buildMaterialMask } from './aerial/mask'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
@@ -55,6 +55,27 @@ const SX = 100
 /** 昼夜循环中主光方向转过这么多（弧度）才重画阴影贴图（约 0.6°） */
 const SHADOW_STEP = 0.0105
 
+/** 3D 视图的导航键 → 动作（大小写、Shift 改出的 + / _ 都算同一个键） */
+const NAV_KEYS: Record<string, string> = {
+  ArrowUp: 'forward',
+  w: 'forward',
+  ArrowDown: 'back',
+  s: 'back',
+  ArrowLeft: 'left',
+  a: 'left',
+  ArrowRight: 'right',
+  d: 'right',
+  q: 'turnLeft',
+  e: 'turnRight',
+  PageUp: 'tiltUp',
+  PageDown: 'tiltDown',
+  '+': 'zoomIn',
+  '=': 'zoomIn',
+  '-': 'zoomOut',
+  _: 'zoomOut',
+}
+const navKey = (e: KeyboardEvent): string | undefined => NAV_KEYS[e.key.length === 1 ? e.key.toLowerCase() : e.key]
+
 /**
  * 3D 立体沙盘：地形网格 + 水面 + 河流 + 侧面剖面，
  * 光照带实时阴影，太阳方位与高度可调。
@@ -96,12 +117,17 @@ export class Scene3D {
   private pointer: { x: number; y: number; dirty: boolean } | null = null
   private pickRay = new THREE.Raycaster()
   private pickNdc = new THREE.Vector2()
+  /** 高清块网格（与世界无关，首次用到时建一次） */
+  private patchGeo: THREE.BufferGeometry | null = null
   private bake: TerrainBake | null = null
   private riverMat: THREE.ShaderMaterial | null = null
   private carve: RiverCarve | null = null
   private roadMask: RoadMask | null = null
   private riverList: SmoothRiver[] = []
   private lastInteract = 0
+  /** 按住的导航键（见 keyNav） */
+  private navHeld = new Set<string>()
+  private navFast = false
   private frame = 0
   /** 性能读数（按 P 开关）：帧率、GPU 耗时（EXT_disjoint_timer_query_webgl2） */
   private perf: { el: HTMLDivElement; frames: number; t0: number } | null = null
@@ -246,7 +272,10 @@ export class Scene3D {
         this.focusPoint = this.tour.subject
         this.tourFade.style.opacity = String(this.tour.fade)
         this.lastInteract = performance.now()
-      } else this.controls.update()
+      } else {
+        this.keyNav(Math.min(dt, 0.05))
+        this.controls.update()
+      }
       this.frame++
       if (performance.now() - this.lastInteract > 1500 && this.frame % 2) return
       const pf = this.perf
@@ -279,12 +308,71 @@ export class Scene3D {
     }
     this.raf = requestAnimationFrame(loop)
     window.addEventListener('keydown', (e) => {
+      this.navFast = e.shiftKey
       if (!this.active || e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e)) return
       if (e.key === 'p' || e.key === 'P') this.togglePerf()
       else if (e.key === 't' || e.key === 'T') this.toggleTour()
       else if (this.tour.active && (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N')) this.tour.next()
       else if (this.tour.active && e.key === 'Escape') this.stopTour()
+      else {
+        const k = navKey(e)
+        if (!k) return
+        e.preventDefault()
+        // 巡览中按导航键：交还手动控制
+        if (this.tour.active) this.stopTour()
+        this.navHeld.add(k)
+        this.lastInteract = performance.now()
+      }
     })
+    window.addEventListener('keyup', (e) => {
+      this.navFast = e.shiftKey
+      const k = navKey(e)
+      if (k) this.navHeld.delete(k)
+    })
+    window.addEventListener('blur', () => this.navHeld.clear())
+  }
+
+  /**
+   * 键盘导航（每帧按住的键推进一步）：方向键 / WASD 沿地面平移（前后按镜头朝向），Q / E 绕目标转，
+   * PageUp / PageDown 抬高、压低视角，+ / − 推近拉远。速度随镜头距离，按住 Shift 三倍
+   */
+  /** keyNav 每帧复用的临时量 */
+  private navTmp = { offset: new THREE.Vector3(), fwd: new THREE.Vector3(), right: new THREE.Vector3(), move: new THREE.Vector3(), sph: new THREE.Spherical() }
+  private keyNav(dt: number) {
+    const held = this.navHeld
+    if (!held.size || !dt) return
+    const cam = this.camera
+    const target = this.controls.target
+    const { offset, fwd, right, move, sph } = this.navTmp
+    offset.copy(cam.position).sub(target)
+    const dist = offset.length()
+    const fast = this.navFast ? 3 : 1
+    // 平移：前方向是镜头朝向在地面上的投影
+    fwd.set(-offset.x, 0, -offset.z).normalize()
+    right.set(-fwd.z, 0, fwd.x)
+    move.set(0, 0, 0)
+    if (held.has('forward')) move.add(fwd)
+    if (held.has('back')) move.sub(fwd)
+    if (held.has('right')) move.add(right)
+    if (held.has('left')) move.sub(right)
+    if (move.lengthSq()) {
+      move.normalize().multiplyScalar(dist * 0.9 * fast * dt)
+      target.add(move)
+      cam.position.add(move)
+    }
+    // 旋转、俯仰、推拉：在目标周围的球坐标里改
+    sph.setFromVector3(offset)
+    const turn = (+held.has('turnLeft') - +held.has('turnRight')) * 1.2 * fast * dt
+    const tilt = (+held.has('tiltDown') - +held.has('tiltUp')) * 0.8 * fast * dt
+    const zoom = +held.has('zoomOut') - +held.has('zoomIn')
+    if (turn || tilt || zoom) {
+      sph.theta += turn
+      sph.phi = Math.min(this.controls.maxPolarAngle, Math.max(0.05, sph.phi + tilt))
+      sph.radius = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, sph.radius * Math.exp(zoom * 1.4 * fast * dt)))
+      cam.position.copy(target).add(move.setFromSpherical(sph))
+    }
+    cam.lookAt(target)
+    this.lastInteract = performance.now()
   }
 
   // —— 昼夜 ——
@@ -436,7 +524,7 @@ export class Scene3D {
   get vScale() {
     const w = this.world
     if (!w) return 0.5
-    return (SX / (w.W * w.kmPerCell)) * this.opts.exaggeration
+    return (SX / (w.W * reliefKm(w))) * this.opts.exaggeration
   }
 
   private viewDir = new THREE.Vector3()
@@ -497,6 +585,7 @@ export class Scene3D {
     const pr = this.renderer.getPixelRatio()
     this.clouds?.setSize(Math.round(w * pr), Math.round(h * pr))
     this.post.setSize(Math.round(w * pr), Math.round(h * pr))
+    this.labelsDirty = true
     this.renderer.domElement.style.width = w + 'px'
     this.renderer.domElement.style.height = h + 'px'
     this.camera.aspect = w / Math.max(1, h)
@@ -507,7 +596,10 @@ export class Scene3D {
     const prev = this.opts
     this.opts = { ...this.opts, ...o }
     if (o.exaggeration !== undefined && o.exaggeration !== prev.exaggeration && this.world) this.rebuildGeometry()
-    if (o.labels !== undefined) this.labelLayer.style.display = this.opts.labels ? '' : 'none'
+    if (o.labels !== undefined) {
+      this.labelLayer.style.display = this.opts.labels ? '' : 'none'
+      this.labelsDirty = true
+    }
     if (o.quality !== undefined && o.quality !== prev.quality) this.applyQuality()
     if (o.shadowSoftness !== undefined) this.applyShadow()
     // 观感只在终合成里生效：不打断累积
@@ -538,6 +630,7 @@ export class Scene3D {
       sh.mapSize.set(size, size)
       sh.map?.dispose()
       sh.map = null
+      this.renderer.shadowMap.needsUpdate = true
     }
     if (this.clouds) {
       this.clouds.march.uniforms.uSteps.value = q.cloudSteps
@@ -547,11 +640,10 @@ export class Scene3D {
     this.resize()
   }
 
-  /** 阴影软硬：PCF 半径以纹素计，按阴影贴图尺寸换算成同样的世界尺度 */
+  /** 阴影软硬：PCF 半径以纹素计，按阴影贴图尺寸换算成同样的世界尺度。只影响采样，不必重画阴影贴图 */
   private applyShadow() {
     // 月光的阴影更柔
     this.sun.shadow.radius = Math.max(1, (this.opts.shadowSoftness * this.dl.shadowSoft * this.sun.shadow.mapSize.x) / 4096)
-    this.renderer.shadowMap.needsUpdate = true
     this.post.reset()
   }
 
@@ -559,7 +651,12 @@ export class Scene3D {
   private applyLook() {
     this.diorama.stage.visible = this.opts.stage
     const roadsOn = this.opts.roads && !!this.roadMask ? 1 : 0
-    for (const c of this.group.children) if (c.userData.bridge) c.visible = !!roadsOn
+    // 桥投影：显隐变了才重画阴影贴图
+    for (const c of this.group.children)
+      if (c.userData.bridge && c.visible !== !!roadsOn) {
+        c.visible = !!roadsOn
+        this.renderer.shadowMap.needsUpdate = true
+      }
     if (this.terrainU) this.terrainU.uRoadOn.value = roadsOn
     if (this.waterMat) this.waterMat.uniforms.uRoadOn.value = roadsOn
     const cloudsOn = this.opts.clouds && !!this.clouds
@@ -575,15 +672,17 @@ export class Scene3D {
 
   /**
    * 按当前时刻铺开整套光照（aerial/daylight.ts 算好的数值分发给各个材质）。
-   * immediate：阴影贴图立即重画、累积重来；昼夜循环逐帧推进时为 false——
+   * immediate：累积重来，主光方向有任何变化都立即重画阴影贴图；昼夜循环逐帧推进时为 false——
    * 阴影只在主光转过 SHADOW_STEP 或日月交接时重画，累积不打断。
+   * 阴影贴图只取决于主光方向与投影物（地形、剖面、底座、桥），
+   * 霾、云、景深、展台、阴影软硬等选项不改变它，不重画。
    */
   private applyDaylight(immediate: boolean) {
     const dl = daylight(this.opts.timeOfDay, this.opts.sunAzimuth, this.opts.sunElevation)
     const softChanged = dl.shadowSoft !== this.dl.shadowSoft
     this.dl = dl
     const d = dl.keyDir
-    if (immediate || dl.moonKey !== this.shadowMoon || this.shadowDir.angleTo(d) > SHADOW_STEP) {
+    if (dl.moonKey !== this.shadowMoon || (immediate ? !this.shadowDir.equals(d) : this.shadowDir.angleTo(d) > SHADOW_STEP)) {
       this.renderer.shadowMap.needsUpdate = true
       this.shadowDir.copy(d)
       this.shadowMoon = dl.moonKey
@@ -649,7 +748,8 @@ export class Scene3D {
       this.group.remove(c)
       c.traverse((o) => {
         const m = o as THREE.Mesh
-        m.geometry?.dispose()
+        // 高清块网格与世界无关，跨世界复用
+        if (m.geometry !== this.patchGeo) m.geometry?.dispose()
         const mat = m.material as THREE.Material | THREE.Material[] | undefined
         if (Array.isArray(mat)) mat.forEach((x) => x.dispose())
         else mat?.dispose()
@@ -701,7 +801,8 @@ export class Scene3D {
     {
       const bake = new TerrainBake(PATCH_N, PATCH_N, ht, hSize, new THREE.Vector2(SX, this.SZ))
       const pm = makePatch(bake.rt.texture, PATCH_N)
-      const mesh = new THREE.Mesh(patchGeometry(PATCH_N), pm.mat)
+      this.patchGeo ??= patchGeometry(PATCH_N)
+      const mesh = new THREE.Mesh(this.patchGeo, pm.mat)
       mesh.receiveShadow = true
       mesh.frustumCulled = false
       mesh.visible = false
@@ -816,6 +917,7 @@ export class Scene3D {
     this.group.add(...this.skirts(w, vs, base))
     this.diorama.setBase(base)
     for (const l of this.labelEls) l.pos.y = this.labelY(l.kind, l.pos.x, l.pos.z)
+    this.labelsDirty = true
     // 城市灯火钉在真实地表上（随垂直夸张重建）
     this.lights.build(w, { SX, SZ: this.SZ, height: baked })
     this.buildClouds()
@@ -1091,6 +1193,7 @@ export class Scene3D {
     e.el.textContent = placeName(l)
     e.w = e.el.offsetWidth
     e.h = e.el.offsetHeight
+    this.labelsDirty = true
   }
 
   private buildLabels() {
@@ -1115,6 +1218,7 @@ export class Scene3D {
       l.h = l.el.offsetHeight
     }
     this.labelLayer.style.display = this.opts.labels ? '' : 'none'
+    this.labelsDirty = true
   }
 
   /** 地名锚点高度：城镇标点钉在地面上，海名贴海面，山脉、大陆等区域名悬在上空 */
@@ -1125,12 +1229,26 @@ export class Scene3D {
   }
 
   private tmp = new THREE.Vector3()
+  /** 地名层需要重排（地名增删改、锚点高度、尺寸、开关变了）；否则只在镜头动了时重排 */
+  private labelsDirty = true
+  private labelView = new THREE.Matrix4()
+  private labelProj = new THREE.Matrix4()
+  private labelDist = -1
+  /** 已放下的地名框，每 4 个数一个 [x0, y0, x1, y1] */
+  private labelBoxes: number[] = []
   private updateLabels() {
     if (!this.opts.labels || !this.labelEls.length) return
+    const cam = this.camera
+    const dist = cam.position.distanceTo(this.controls.target)
+    if (!this.labelsDirty && dist === this.labelDist && this.labelView.equals(cam.matrixWorld) && this.labelProj.equals(cam.projectionMatrix)) return
+    this.labelsDirty = false
+    this.labelDist = dist
+    this.labelView.copy(cam.matrixWorld)
+    this.labelProj.copy(cam.projectionMatrix)
     const wpx = this.container.clientWidth
     const hpx = this.container.clientHeight
-    const dist = this.camera.position.distanceTo(this.controls.target)
-    const boxes: number[][] = []
+    const boxes = this.labelBoxes
+    boxes.length = 0
     for (const l of this.labelEls) {
       this.tmp.copy(l.pos).project(this.camera)
       const vis = this.tmp.z < 1 && Math.abs(this.tmp.x) < 1.1 && Math.abs(this.tmp.y) < 1.1
@@ -1142,12 +1260,22 @@ export class Scene3D {
       const x = (this.tmp.x * 0.5 + 0.5) * wpx
       const y = (-this.tmp.y * 0.5 + 0.5) * hpx
       // 与更重要的地名重叠则隐藏
-      const b = [x - l.w / 2 - 4, y - l.h - 2, x + l.w / 2 + 4, y + 2]
-      if (boxes.some((q) => b[0] < q[2] && b[2] > q[0] && b[1] < q[3] && b[3] > q[1])) {
+      const b0 = x - l.w / 2 - 4
+      const b1 = y - l.h - 2
+      const b2 = x + l.w / 2 + 4
+      const b3 = y + 2
+      let hit = false
+      for (let q = 0; q < boxes.length; q += 4) {
+        if (b0 < boxes[q + 2] && b2 > boxes[q] && b1 < boxes[q + 3] && b3 > boxes[q + 1]) {
+          hit = true
+          break
+        }
+      }
+      if (hit) {
         l.el.style.opacity = '0'
         continue
       }
-      boxes.push(b)
+      boxes.push(b0, b1, b2, b3)
       const dot = l.kind === 'capital' ? 3.5 : l.kind === 'city' ? 2.5 : 0
       l.el.style.transform = `translate(${x.toFixed(1)}px, ${(y + dot).toFixed(1)}px) translate(-50%, -100%)`
     }
@@ -1214,12 +1342,14 @@ const PATCH_N = 513
  * 四周再加一圈向下的裙边（position.y = 1 的顶点下沉），遮住与粗网格之间的细缝。
  */
 function patchGeometry(N: number) {
-  const ring: number[] = []
-  for (let x = 0; x < N; x++) ring.push(x)
-  for (let y = 1; y < N; y++) ring.push(y * N + N - 1)
-  for (let x = N - 2; x >= 0; x--) ring.push((N - 1) * N + x)
-  for (let y = N - 2; y > 0; y--) ring.push(y * N)
-  const total = N * N + ring.length
+  const R = 4 * (N - 1)
+  const ring = new Uint32Array(R)
+  let r = 0
+  for (let x = 0; x < N; x++) ring[r++] = x
+  for (let y = 1; y < N; y++) ring[r++] = y * N + N - 1
+  for (let x = N - 2; x >= 0; x--) ring[r++] = (N - 1) * N + x
+  for (let y = N - 2; y > 0; y--) ring[r++] = y * N
+  const total = N * N + R
   const pos = new Float32Array(total * 3)
   const uv = new Float32Array(total * 2)
   const nor = new Int8Array(total * 3)
@@ -1230,27 +1360,43 @@ function patchGeometry(N: number) {
       pos[i * 3 + 2] = y / (N - 1)
     }
   }
-  ring.forEach((src, k) => {
+  for (let k = 0; k < R; k++) {
+    const src = ring[k]
     const i = N * N + k
     pos[i * 3] = pos[src * 3]
     pos[i * 3 + 1] = 1
     pos[i * 3 + 2] = pos[src * 3 + 2]
-  })
+  }
   for (let i = 0; i < total; i++) nor[i * 3 + 1] = 127
-  const idx: number[] = Array.from(gridIndex(N, N).array as Uint32Array)
-  for (let k = 0; k < ring.length; k++) {
+  const grid = gridIndex(N, N).array as Uint32Array
+  const idx = new Uint32Array(grid.length + R * 12)
+  idx.set(grid)
+  let j = grid.length
+  for (let k = 0; k < R; k++) {
+    const k1 = k + 1 === R ? 0 : k + 1
     const a = ring[k]
-    const b = ring[(k + 1) % ring.length]
+    const b = ring[k1]
     const a2 = N * N + k
-    const b2 = N * N + ((k + 1) % ring.length)
+    const b2 = N * N + k1
     // 两面都连：裙边从哪一侧看都不透
-    idx.push(a, b, a2, b, b2, a2, a, a2, b, b, a2, b2)
+    idx[j++] = a
+    idx[j++] = b
+    idx[j++] = a2
+    idx[j++] = b
+    idx[j++] = b2
+    idx[j++] = a2
+    idx[j++] = a
+    idx[j++] = a2
+    idx[j++] = b
+    idx[j++] = b
+    idx[j++] = a2
+    idx[j++] = b2
   }
   const g = new THREE.BufferGeometry()
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
   g.setAttribute('normal', new THREE.BufferAttribute(nor, 3, true))
-  g.setIndex(idx)
+  g.setIndex(new THREE.BufferAttribute(idx, 1))
   return g
 }
 

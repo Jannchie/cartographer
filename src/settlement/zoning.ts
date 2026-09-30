@@ -7,6 +7,7 @@ import type { Building, SettlementParams, WardType } from './types'
 import { addBuilding, inside } from './wards'
 import { checkpoint, clearYards, demolish, removable, rollback } from './undo'
 import { outMark, stamp } from './history'
+import * as dmath from '../gen/dmath'
 
 /** 城内的一块候选片区 */
 export interface Lot {
@@ -43,13 +44,15 @@ export function zoneLots(ctx: Ctx, lots: Lot[], center: number, households: (cum
   // 与时间无关的部分先算好
   const fixed = lots.map((l, i) => {
     const core = l.poly.map((v) => [v[0] * 0.7 + l.site[0] * 0.3, v[1] * 0.7 + l.site[1] * 0.3] as P)
+    const cb = bboxOf(core)
     let gap = Infinity
     for (const a of arterials) gap = Math.min(gap, polylineDist(l.site, a))
     return {
       water: l.poly.some((v) => ctx.T.waterAt(v) < 4),
       sea: l.poly.some((v) => ctx.T.seaAt(v)),
       high: Math.min(1, Math.max(0, 0.5 + (ctx.T.heightAt(l.site) - h0) / 40)),
-      clear: !dense.some((l) => l.some((q) => pointInPoly(q, core))),
+      // 干道上每 3 米一个点：先比包围盒，落在外面的不必做点在多边形内的测试
+      clear: !dense.some((l) => l.some((q) => q[0] >= cb[0] && q[0] <= cb[2] && q[1] >= cb[1] && q[1] <= cb[3] && pointInPoly(q, core))),
       nearCenter: center >= 0 && lots[center].nb.includes(i),
       road: Math.max(0, 1 - gap / (ctx.cfg.patch * 0.9)),
       area: Math.abs(l.poly.reduce((a, v, k) => a + v[0] * l.poly[(k + 1) % l.poly.length][1] - l.poly[(k + 1) % l.poly.length][0] * v[1], 0)) / 2,
@@ -240,7 +243,7 @@ export function placeLandmarks(ctx: Ctx) {
       const L = polylineLength(r.line)
       for (let s = 10; s < L - 10; s += 16) {
         const { p, angle } = pointAt(r.line, s)
-        const axis: P = [Math.cos(angle), Math.sin(angle)]
+        const axis: P = [dmath.cos(angle), dmath.sin(angle)]
         const nrm: P = [-axis[1], axis[0]]
         const side = hashAt(ctx, p, `${tag}.side`) < 0.5 ? -1 : 1
         // 退到道路走廊之外再留 1 米

@@ -9,6 +9,7 @@ import {
   landmark, loop, ngon, northward, offWater, part, pave, pointInPoly, reach, rock, rocks, row, scatter, shore, spur, touch,
   tree, walk, wall, dry, rectIn, type Garden, type Skel,
 } from './kit'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 元素池：园子里能放的每样东西（水面、园路、亭榭、花木、小品），各自标明
@@ -171,7 +172,7 @@ function narrowest(K: Garden, q: Poly, minW = 6): [P, P] | null {
   let best: [P, P] | null = null
   let bw = Infinity
   for (let i = 0; i < 12; i++) {
-    const d: P = [Math.cos(o + (i * Math.PI) / 12), Math.sin(o + (i * Math.PI) / 12)]
+    const d: P = [dmath.cos(o + (i * Math.PI) / 12), dmath.sin(o + (i * Math.PI) / 12)]
     const n = perp(d)
     for (const t of [-0.3, -0.15, 0, 0.15, 0.3]) {
       const m = add(c, n, t * (reach(q, c, n) + reach(q, c, neg(n))))
@@ -305,7 +306,7 @@ const EDGE: El[] = [
       // 林带：沿园边，按方位留出几处望远的缺口
       const c = centroid(K.g)
       const ph = K.C.nth.h('belt.phase') * 6.28
-      scatter(K, K.inner, 0.03, 2.4, 4.4, (p) => edgeDist(p, K.g) < 9 && Math.sin(Math.atan2(p[1] - c[1], p[0] - c[0]) * 3 + ph) < 0.55)
+      scatter(K, K.inner, 0.03, 2.4, 4.4, (p) => edgeDist(p, K.g) < 9 && dmath.sin(dmath.atan2(p[1] - c[1], p[0] - c[0]) * 3 + ph) < 0.55)
       return true
     },
   },
@@ -504,10 +505,10 @@ const END: El[] = [
     build: (K, s) => {
       // 半圆的绿廊（exedra）：一弯修剪的树围着一尊雕像
       const c = add(s.p, s.d, 1.5)
-      const a0 = Math.atan2(s.d[1], s.d[0])
+      const a0 = dmath.atan2(s.d[1], s.d[0])
       for (let k = 0; k <= 8; k++) {
         const a = a0 - Math.PI / 2 + (k / 8) * Math.PI
-        tree(K, add(c, [Math.cos(a), Math.sin(a)], 6.5), 1.2, true)
+        tree(K, add(c, [dmath.cos(a), dmath.sin(a)], 6.5), 1.2, true)
       }
       pave(K, circlePoly(c, 5, 16))
       return landmark(K, add(c, s.d, 2), 'statue')
@@ -661,7 +662,7 @@ const COMPART: El[] = [
       part(K, cbox(F, 0, 0, r * 2, r * 2), 'pond')
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2
-        tree(K, add(F.o, [Math.cos(a), Math.sin(a)], r + 3), 1.8, true)
+        tree(K, add(F.o, [dmath.cos(a), dmath.sin(a)], r + 3), 1.8, true)
       }
       return true
     },
@@ -778,8 +779,8 @@ const WATER: El[] = [
           for (let i = 0; i <= 14; i++) {
             const t = i / 14
             const x = c[0] * f + (t - 0.5) * K.hx * 1.3 * f
-            const y = c[1] * f + Math.sin(t * Math.PI * 1.6 + ph) * amp * f
-            const w = w0 * f * (0.55 + 0.45 * Math.sin(t * Math.PI)) * (1 + 0.25 * Math.sin(t * 9 + ph))
+            const y = c[1] * f + dmath.sin(t * Math.PI * 1.6 + ph) * amp * f
+            const w = w0 * f * (0.55 + 0.45 * dmath.sin(t * Math.PI)) * (1 + 0.25 * dmath.sin(t * 9 + ph))
             L.push(at(K, x, y - w))
             R.push(at(K, x, y + w))
           }
@@ -808,8 +809,8 @@ const WATER: El[] = [
           const out: Poly = []
           for (let i = 0; i < 44; i++) {
             const t = (i / 44) * Math.PI * 2
-            const k = 1 + 0.12 * Math.sin(3 * t + ph) + 0.06 * Math.cos(5 * t - ph)
-            out.push(at(K, c[0] * f + Math.cos(t) * rx * f * k, c[1] * f + Math.sin(t) * ry * f * k * (waist + (1 - waist) * Math.abs(Math.cos(t)) ** 0.7)))
+            const k = 1 + 0.12 * dmath.sin(3 * t + ph) + 0.06 * dmath.cos(5 * t - ph)
+            out.push(at(K, c[0] * f + dmath.cos(t) * rx * f * k, c[1] * f + dmath.sin(t) * ry * f * k * (waist + (1 - waist) * dmath.pow(Math.abs(dmath.cos(t)), 0.7))))
           }
           return out
         },
@@ -1363,7 +1364,7 @@ const FIELD: El[] = [
       // 梅林：疏朗的格点，稍有错落
       const step = 6.5
       const ang = K.C.nth.num('plumGrid.angle', 0, Math.PI / 2)
-      const a: P = [Math.cos(ang), Math.sin(ang)]
+      const a: P = [dmath.cos(ang), dmath.sin(ang)]
       const b = perp(a)
       const R = Math.max(K.hx, K.hy)
       for (let i = -R; i <= R; i += step) for (let j = -R; j <= R; j += step) tree(K, [K.o[0] + a[0] * i + b[0] * j + (K.rng.next() - 0.5) * 2, K.o[1] + a[1] * i + b[1] * j + (K.rng.next() - 0.5) * 2], 1.5 + K.rng.next() * 0.6)
@@ -1519,7 +1520,7 @@ function karesansui(K: Garden): boolean {
   if (g1 - g0 < 6) return true
   const gy = (g0 + g1) / 2
   const gravel = cbox(R, 0, sy * gy, gx * 2, g1 - g0)
-  part(K, gravel, 'gravel', Math.atan2(R.f[1], R.f[0]) + (V.chance('karesansui.rake', 0.25) ? Math.PI / 2 : 0))
+  part(K, gravel, 'gravel', dmath.atan2(R.f[1], R.f[0]) + (V.chance('karesansui.rake', 0.25) ? Math.PI / 2 : 0))
   // 石组：七五三（沿长边错落）、群岛（大小不一的几处）、或一座"蓬莱"大石组
   const style = V.pick('karesansui.style', ['753', 'isles', 'horai'] as const, [3, 2, 1])
   note(K, 'field', `stones-${style}`)
@@ -1645,7 +1646,7 @@ const PATHS: El[] = [
       const d = unit(perp(sub(b, a)))
       const ph = K.C.nth.h('meander.phase') * 6
       const pts: P[] = []
-      for (let i = 0; i <= 6; i++) pts.push(offWater(K, add(lerpP(a, b, i / 6), d, i === 0 || i === 6 ? 0 : Math.sin((i / 6) * Math.PI * 2 + ph) * Math.min(K.hy, 14) * 0.5), 2))
+      for (let i = 0; i <= 6; i++) pts.push(offWater(K, add(lerpP(a, b, i / 6), d, i === 0 || i === 6 ? 0 : dmath.sin((i / 6) * Math.PI * 2 + ph) * Math.min(K.hy, 14) * 0.5), 2))
       walk(K, dry(K, pts), 1.6, true)
       return true
     },
@@ -1863,7 +1864,7 @@ const TERMINAL: El[] = [
       const c = at(F, F.hx * 0.5, 0)
       round(K, c, r)
       landmark(K, c, 'statue')
-      for (let k = 0; k < 12; k++) tree(K, add(c, [Math.cos((k / 12) * 6.28), Math.sin((k / 12) * 6.28)], r + 2.5), 1.8)
+      for (let k = 0; k < 12; k++) tree(K, add(c, [dmath.cos((k / 12) * 6.28), dmath.sin((k / 12) * 6.28)], r + 2.5), 1.8)
       return seat(K, c)
     },
   },

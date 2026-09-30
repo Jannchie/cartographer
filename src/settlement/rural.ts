@@ -6,6 +6,35 @@ import { centroid, circlePoly, dist, pointAt, polylineLength, rect, type P, type
 import type { BuildingKind, Landmark } from './types'
 import { addGroup, plantTree } from './wards'
 import { waysideAt } from './tiers'
+import * as dmath from '../gen/dmath'
+
+/**
+ * 离城区边缘多远（城区边缘按城内片区的中心估计：离最近的中心减去 half）；超过 max 时只需知道"太远"，返回 Infinity。
+ * 片区中心按网格分桶，只查 max + half 以内的：大城里有上千个片区，逐个量距离是这两处选址的主要开销
+ */
+function edgeDistance(cores: P[], half: number, max: number) {
+  const R = max + half
+  const cell = Math.max(64, R / 2)
+  const grid = new Map<string, P[]>()
+  for (const c of cores) {
+    const k = `${Math.floor(c[0] / cell)},${Math.floor(c[1] / cell)}`
+    const g = grid.get(k)
+    if (g) g.push(c)
+    else grid.set(k, [c])
+  }
+  const reach = Math.ceil(R / cell)
+  return (p: P) => {
+    const gx = Math.floor(p[0] / cell)
+    const gy = Math.floor(p[1] / cell)
+    let edge = Infinity
+    for (let y = gy - reach; y <= gy + reach; y++)
+      for (let x = gx - reach; x <= gx + reach; x++) {
+        const g = grid.get(`${x},${y}`)
+        if (g) for (const c of g) edge = Math.min(edge, dist(c, p) - half)
+      }
+    return edge > max ? Infinity : edge
+  }
+}
 
 /**
  * 城外（与城边）的地图级设施：河上的水车磨坊、高处的风车、城门外大路边的刑场、
@@ -36,6 +65,7 @@ function hillTombs(ctx: Ctx, n: number) {
   const cores = ctx.out.wards.filter((w) => w.inner).map((w) => centroid(w.poly))
   if (!cores.length) return
   const half = ctx.cfg.patch * 0.55
+  const edgeOf = edgeDistance(cores, half, 500)
   const step = 36
   const cands: { p: P; score: number }[] = []
   for (let x = 60; x < ctx.MW - 60; x += step)
@@ -44,8 +74,7 @@ function hillTombs(ctx: Ctx, n: number) {
       if (T.waterAt(p) < 25) continue
       const slope = T.slopeAt(p)
       if (slope > 0.25) continue
-      let edge = Infinity
-      for (const c of cores) edge = Math.min(edge, dist(c, p) - half)
+      const edge = edgeOf(p)
       if (edge < 50 || edge > 500 || ctx.corridors.hits(p, 18)) continue
       cands.push({ p, score: Math.min(slope, 0.12) * 5 + hashAt(ctx, p, 'rural.tomb.score') * 0.6 - edge * 0.0008 })
     }
@@ -60,7 +89,7 @@ function hillTombs(ctx: Ctx, n: number) {
     // 朝向低处（坡上的坟面朝山下）；平地朝南
     const gx = T.heightAt([p[0] + 4, p[1]]) - T.heightAt([p[0] - 4, p[1]])
     const gy = T.heightAt([p[0], p[1] + 4]) - T.heightAt([p[0], p[1] - 4])
-    const gl = Math.hypot(gx, gy)
+    const gl = dmath.hypot(gx, gy)
     const front: P = gl > 0.05 ? [-gx / gl, -gy / gl] : [0, 1]
     const side: P = [-front[1], front[0]]
     const k = 2 + Math.floor(hashAt(ctx, p, 'rural.tomb.n') * 4)
@@ -76,7 +105,7 @@ function hillTombs(ctx: Ctx, n: number) {
     ctx.occ.add(ground)
     // 背后半圈松柏
     for (let a = -1.2; a <= 1.2; a += 0.3) {
-      const d: P = [-front[0] * Math.cos(a) + side[0] * Math.sin(a), -front[1] * Math.cos(a) + side[1] * Math.sin(a)]
+      const d: P = [-front[0] * dmath.cos(a) + side[0] * dmath.sin(a), -front[1] * dmath.cos(a) + side[1] * dmath.sin(a)]
       plantTree(ctx, [p[0] + d[0] * (r + 2.5), p[1] + d[1] * (r + 2.5)], 2.2 + hashAt(ctx, d, 'rural.tomb.tree') * 0.8)
     }
     made.push(p)
@@ -119,7 +148,7 @@ function watermills(ctx: Ctx, n: number) {
     const s = c.p[0]
     const { p, angle } = pointAt(river.line, s)
     if (made.some((m) => dist(m, p) < 140)) continue
-    const u: P = [Math.cos(angle), Math.sin(angle)]
+    const u: P = [dmath.cos(angle), dmath.sin(angle)]
     // 河的半宽：取最近的河道节点
     let k = 0
     for (let i = 1; i < river.line.length; i++) if (dist(river.line[i], p) < dist(river.line[k], p)) k = i
@@ -155,7 +184,7 @@ function windmills(ctx: Ctx, n: number) {
       let around = 0
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2
-        around += T.heightAt([x + Math.cos(a) * 60, y + Math.sin(a) * 60])
+        around += T.heightAt([x + dmath.cos(a) * 60, y + dmath.sin(a) * 60])
       }
       const prom = T.heightAt(q) - around / 8
       cands.push({ p: q, score: prom + hashAt(ctx, q, 'rural.windmill') * 1.5 - (d / R1) * 0.5 })
@@ -176,6 +205,7 @@ function windmills(ctx: Ctx, n: number) {
 function roadsideOutside(ctx: Ctx, s0: number, s1: number, tag: string): { p: P; u: P }[] {
   const cores = ctx.out.wards.filter((w) => w.inner).map((w) => centroid(w.poly))
   const half = ctx.cfg.patch * 0.55
+  const edgeOf = edgeDistance(cores, half, s1)
   const out: { p: P; u: P; key: number }[] = []
   for (const r of ctx.out.roads) {
     if (r.kind !== 'highway') continue
@@ -183,10 +213,9 @@ function roadsideOutside(ctx: Ctx, s0: number, s1: number, tag: string): { p: P;
     for (let s = 6; s < L; s += 12) {
       const { p, angle } = pointAt(r.line, s)
       if (!onMap(ctx, p, 50)) continue
-      let edge = Infinity
-      for (const c of cores) edge = Math.min(edge, dist(c, p) - half)
+      const edge = edgeOf(p)
       if (edge < s0 || edge > s1) continue
-      out.push({ p, u: [Math.cos(angle), Math.sin(angle)], key: hashAt(ctx, p, tag) })
+      out.push({ p, u: [dmath.cos(angle), dmath.sin(angle)], key: hashAt(ctx, p, tag) })
     }
   }
   return out.sort((a, b) => a.key - b.key)
@@ -281,7 +310,7 @@ function lighthouse(ctx: Ctx, n: number) {
       let sea = 0
       for (let k = 0; k < 16; k++) {
         const a = (k / 16) * Math.PI * 2
-        if (T.seaAt([x + Math.cos(a) * 45, y + Math.sin(a) * 45])) sea++
+        if (T.seaAt([x + dmath.cos(a) * 45, y + dmath.sin(a) * 45])) sea++
       }
       cands.push({ p: q, score: sea + hashAt(ctx, q, 'rural.lighthouse') * 2 })
     }

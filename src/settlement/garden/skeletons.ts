@@ -7,6 +7,7 @@ import {
   area, centroid, clipHalf, dist, farCorner, gates, isle, loop, northward, offWater, pointInPoly, reach, rectIn,
   spur, wall, walk, type Garden, type Skel,
 } from './kit'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 骨架：园子的构图法。每种骨架只管"哪里有什么槽位"（轴端、园心、池岸、园角、参道两旁……），
@@ -168,7 +169,7 @@ function natural(K: Garden): boolean {
     const used: string[] = []
     for (let i = 0; i < nIs; i++) {
       const a = V.h('natural.isleA') * 6.28
-      const c = add(lc, [Math.cos(a), Math.sin(a)], lr * V.num('natural.isleD', 0.1, 0.4))
+      const c = add(lc, [dmath.cos(a), dmath.sin(a)], lr * V.num('natural.isleD', 0.1, 0.4))
       // 离宫的湖心岛要放得下水殿：第一座岛大一些
       const rr = lr * (i ? 0.14 : V.num('natural.isleR', 0.16, 0.24) * (palace ? 1.5 : 1))
       const q = isle(K, lake, c, rr, a)
@@ -193,7 +194,7 @@ function natural(K: Garden): boolean {
   let prev = ''
   for (let i = 0; i < scenes; i++) {
     const a = ph + (i / scenes) * 6.28 + V.num('natural.scene', -0.25, 0.25)
-    const dir: P = [Math.cos(a), Math.sin(a)]
+    const dir: P = [dmath.cos(a), dmath.sin(a)]
     let s: Spot | null = null
     if (lake && (i % 2 === 0 || !path)) s = slot('shore', add(lc, dir, reach(lake, lc, dir)), dir, lr)
     else if (path) {

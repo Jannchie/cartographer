@@ -1,4 +1,4 @@
-import type { DisplayList, Matrix } from './displayList'
+import type { DisplayList, LabelAlong, LabelArea, LabelOptional, Matrix } from './displayList'
 import { pathBBox, transformBBox } from './displayList'
 
 /**
@@ -194,7 +194,8 @@ export class Recorder {
     const strokeP = fill
       ? undefined
       : { color: c, alpha: a, width: this.st.lineWidth, dash: this.st.dash.length ? [...this.st.dash] : undefined, cap: this.st.lineCap, join: this.st.lineJoin }
-    const sig = JSON.stringify([fillP, strokeP, m, this.st.alpha])
+    // 锚点也算进签名：不同城市的符号不合并成一条（各自以自己的锚点缩放）
+    const sig = JSON.stringify([fillP, strokeP, m, this.st.alpha, this.anchor])
     if (last && last.k === 'path' && (last as unknown as { sig?: string }).sig === sig) {
       last.d += d
       const b = transformBBox(pathBBox(d), m)
@@ -203,7 +204,7 @@ export class Recorder {
       last.p2d = undefined
       return
     }
-    const it = this.list.path(this.space, d, { fill: fillP, stroke: strokeP, m, opacity: this.st.alpha })
+    const it = this.list.path(this.space, d, { fill: fillP, stroke: strokeP, m, opacity: this.st.alpha, g: this.anchor })
     if (it) (it as unknown as { sig?: string }).sig = sig
   }
 
@@ -227,6 +228,38 @@ export class Recorder {
   }
 
   // —— 文字 ——
+  /** 之后写的字（与符号）同属一条注记，锚点是当前坐标系里的 (x, y)（见 TextItem.g）；画完调 endLabel。真实的 Canvas 没有这两个方法，调用方用 ?. 调 */
+  private anchor: [number, number] | undefined
+  private area: LabelArea | undefined
+  /** 当前注记的路径（已换算到段坐标）与弧长的换算倍数 f */
+  private curve: (Omit<LabelAlong, 'at'> & { f: number }) | undefined
+  private at = 0
+  private optional: LabelOptional | undefined
+  /**
+   * area：面状注记标的区域（见 TextItem.area）。
+   * along：沿路径逐字排布的注记（见 TextItem.along）——路径（当前坐标系）与注记中点的弧长；每个字写之前用 glyphAt 给出它在路径上的弧长。
+   * optional：可省略的注记（见 TextItem.optional）
+   */
+  beginLabel(x = 0, y = 0, area?: LabelArea, along?: Omit<LabelAlong, 'at'>, optional?: LabelOptional) {
+    const m = this.st.m
+    this.anchor = [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
+    this.area = area
+    this.optional = optional
+    if (along) {
+      const f = Math.hypot(m[0], m[1])
+      this.curve = { ...along, line: along.line.map(([px, py]) => [m[0] * px + m[2] * py + m[4], m[1] * px + m[3] * py + m[5]]), c: along.c * f, f }
+    }
+  }
+  /** 下一个字在路径上的弧长（beginLabel 的 along 所用的坐标系） */
+  glyphAt(at: number) {
+    this.at = at
+  }
+  endLabel() {
+    this.anchor = undefined
+    this.area = undefined
+    this.curve = undefined
+    this.optional = undefined
+  }
   measureText(t: string) {
     this.measurer.font = this.st.font
     return this.measurer.measureText(t)
@@ -240,7 +273,8 @@ export class Recorder {
     const w = this.measurer.measureText(t).width
     const size = parseFloat(this.st.font.match(/([\d.]+)px/)?.[1] ?? '12')
     const bx0 = align === 'middle' ? x - w / 2 : align === 'end' ? x - w : x
-    const bb = transformBBox([bx0 - 4, y - size * 1.2, bx0 + w + 4, y + size * 1.2], this.m)
+    // 局部坐标的包围盒：list.text 按 m 换算到图面（这里再换算一次就成了两遍，视口裁剪会误删字）
+    const bb: [number, number, number, number] = [bx0 - 4, y - size * 1.2, bx0 + w + 4, y + size * 1.2]
     const [c, a] = color(stroke ? this.st.strokeStyle : this.st.fillStyle)
     this.list.text(this.space, {
       t,
@@ -254,6 +288,10 @@ export class Recorder {
       m: this.m,
       opacity: this.st.alpha,
       bbox: bb,
+      g: this.anchor,
+      area: this.area,
+      along: this.curve && { line: this.curve.line, c: this.curve.c, at: this.at * this.curve.f, up: this.curve.up, slide: this.curve.slide },
+      optional: this.optional,
     })
   }
   fillText(t: string, x: number, y: number) {
@@ -263,3 +301,6 @@ export class Recorder {
     this.text(t, x, y, true)
   }
 }
+
+/** 矢量记录器（Recorder）多出的注记分组方法（真实的 Canvas 没有，调用方用 ?. 调） */
+export const labelCtx = (ctx: CanvasRenderingContext2D) => ctx as CanvasRenderingContext2D & Partial<Pick<Recorder, 'beginLabel' | 'glyphAt' | 'endLabel'>>

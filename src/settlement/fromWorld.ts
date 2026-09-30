@@ -1,6 +1,7 @@
 import { Biome, type Label, type World } from '../gen/types'
 import { resolveNaming } from '../gen/naming'
 import type { SettlementParams } from './types'
+import * as dmath from '../gen/dmath'
 
 /**
  * 从世界地图上的一座城镇推断聚落环境：名字、规模、河流与来向、海的方向、山地、气候。
@@ -19,7 +20,7 @@ export function fromWorld(w: World, l: Label): Partial<SettlementParams> {
     nameZh: l.zh,
     nameJa: l.ja,
     // 人口：都城约一万五，其余按重要度在几百到几千之间
-    population: l.kind === 'capital' ? 15000 : Math.round(Math.exp(Math.log(300) + rank * (Math.log(9000) - Math.log(300))) / 10) * 10,
+    population: l.kind === 'capital' ? 15000 : Math.round(dmath.exp(dmath.log(300) + rank * (dmath.log(9000) - dmath.log(300))) / 10) * 10,
     climate: { temp: w.temperature[i], rain: w.precipitation[i], biome: w.biome[i] },
     capital: l.kind === 'capital',
   }
@@ -33,7 +34,7 @@ export function fromWorld(w: World, l: Label): Partial<SettlementParams> {
   if (out.coast) {
     const gx = cd[i + 1] - cd[i - 1]
     const gy = cd[i + W] - cd[i - W]
-    out.coastDir = Math.atan2(-gy, -gx)
+    out.coastDir = dmath.atan2(-gy, -gx)
   } else out.coastDir = NaN
   // 河：附近有河道点
   let best = Infinity
@@ -41,12 +42,12 @@ export function fromWorld(w: World, l: Label): Partial<SettlementParams> {
   for (const r of w.rivers) {
     const pts = r.points
     for (let k = 0; k + 1 < pts.length / 2; k++) {
-      const d = Math.hypot(pts[k * 2] - l.x, pts[k * 2 + 1] - l.y)
+      const d = dmath.hypot(pts[k * 2] - l.x, pts[k * 2 + 1] - l.y)
       if (d < best && r.flow[k] > 2) {
         best = d
         // 上游方向（河道点由源头流向河口）
         const k0 = Math.max(0, k - 3)
-        dir = Math.atan2(pts[k0 * 2 + 1] - pts[k * 2 + 1], pts[k0 * 2] - pts[k * 2])
+        dir = dmath.atan2(pts[k0 * 2 + 1] - pts[k * 2 + 1], pts[k0 * 2] - pts[k * 2])
       }
     }
   }
@@ -75,7 +76,7 @@ export function fromWorld(w: World, l: Label): Partial<SettlementParams> {
       }
     }
   out.hills = hmax - w.elevation[i] > 0.25
-  out.hillDir = out.hills ? Math.atan2(hy, hx) : NaN
+  out.hillDir = out.hills ? dmath.atan2(hy, hx) : NaN
   out.relief = Math.min(1, Math.max(0.1, (sum / Math.max(1, n)) * 2.5))
   const b = w.biome[i]
   out.farms = b !== Biome.IceCap && b !== Biome.Tundra

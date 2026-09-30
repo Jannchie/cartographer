@@ -15,7 +15,10 @@
     "settlement:png": "tsx scripts/settlement.ts",
     "showcase": "tsx scripts/showcase.ts docs/images",
     "icon": "tsx scripts/icon.ts",
-    "banner": "tsx scripts/banner.ts"
+    "banner": "tsx scripts/banner.ts",
+    "plates": "tsx scripts/plates.ts",
+    "earth": "tsx scripts/earth.ts",
+    "check:dmath": "tsx scripts/check-dmath.ts"
   },
   "dependencies": {
     "three": "^0.186.1",

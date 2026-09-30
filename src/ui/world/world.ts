@@ -3,37 +3,42 @@ import { latitudeOf } from '../../gen/climate'
 import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from '../../app/project'
 import { EditorView, type EditTool, type EditView } from '../../editor/editor'
 import { autoContinents, floodLand, regionAnchor } from '../../editor/layers'
-import { BIOME_NAMES, DEFAULT_PARAMS, type Label, type World, type WorldEdits, type WorldParams } from '../../gen/types'
+import { BIOME_NAMES, DEFAULT_PARAMS, normalizeParams, type Label, type World, type WorldEdits, type WorldParams } from '../../gen/types'
+import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
+import type { AtlasBase } from '../../render/atlas/svg/vector'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
-import { smoothRivers, type SmoothRiver } from '../../render/rivers'
+import type { SmoothRiver } from '../../render/rivers'
 import { Scene3D, type View3DOptions } from '../../render/scene3d'
 import { LOOKS, QUALITIES, type Look, type QualityId } from '../../render/aerial/looks'
 import { DEFAULT_TIME } from '../../render/aerial/daylight'
-import { buildPhysicalTexture } from '../../render/texture'
-import type { WorkerOut } from '../../worker'
+import { buildPhysicalTexture, textureCanvases } from '../../render/texture'
+import type { WorkerIn, WorkerOut } from '../../worker'
 import GenWorker from '../../worker?worker'
 import { lang, onLang, placeName, worldTitle } from '../../i18n'
-import { app, download, initialQuery, registerRoute, storeGet, storeSet, syncRoute } from '../app'
+import { app, download, initialQuery, registerRoute, paramSig, storeGet, storeSet, syncRoute } from '../app'
 import { t } from '../i18n'
 import { isTypingTarget } from '../keys'
+import { mapFontsReady } from '../fonts'
 import { bindPanZoom } from '../panZoom'
 import { syllableSeed } from '../seed'
 
-export type Mode = '3d' | '2d' | 'edit'
+export type Mode = '3d' | '2d' | 'edit' | 'areas'
 
 export const pct = (v: number) => `${Math.round(v * 100)}%`
 export const latFmt = (v: number) => `${Math.abs(v)}°${v > 0 ? 'N' : v < 0 ? 'S' : ''}`
 
 // 预设：一键换一类世界
 export const PRESETS: { name: string; desc: string; p: Partial<WorldParams> }[] = [
-  { name: '大陆', desc: '几块中等大小的大陆，温带为主', p: { landRatio: 0.36, plates: 14, mountains: 1, coastRoughness: 0.55, rainfall: 1, temperature: 0, latNorth: 64, latSouth: 14 } },
-  { name: '群岛', desc: '破碎的岛链与浅海，热带到亚热带', p: { landRatio: 0.2, plates: 22, mountains: 1.2, coastRoughness: 0.85, rainfall: 1.2, temperature: 3, latNorth: 30, latSouth: -30 } },
-  { name: '泛大陆', desc: '一整块超级大陆，内陆干旱、山系绵长', p: { landRatio: 0.56, plates: 9, mountains: 1.3, coastRoughness: 0.4, rainfall: 0.85, temperature: 1, latNorth: 55, latSouth: -40 } },
-  { name: '冰原', desc: '高纬寒冷，冰盖、苔原与峡湾', p: { landRatio: 0.4, plates: 12, mountains: 1.1, coastRoughness: 0.9, rainfall: 0.9, temperature: -9, latNorth: 82, latSouth: 42 } },
-  { name: '沙海', desc: '炎热少雨，沙漠与盐湖广布', p: { landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
+  { name: '大陆', desc: '几块中等大小的大陆，温带为主', p: { globe: false, earth: false, landRatio: 0.36, plates: 14, mountains: 1, coastRoughness: 0.55, rainfall: 1, temperature: 0, latNorth: 64, latSouth: 14 } },
+  { name: '群岛', desc: '破碎的岛链与浅海，热带到亚热带', p: { globe: false, earth: false, landRatio: 0.2, plates: 22, mountains: 1.2, coastRoughness: 0.85, rainfall: 1.2, temperature: 3, latNorth: 30, latSouth: -30 } },
+  { name: '泛大陆', desc: '一整块超级大陆，内陆干旱、山系绵长', p: { globe: false, earth: false, landRatio: 0.56, plates: 9, mountains: 1.3, coastRoughness: 0.4, rainfall: 0.85, temperature: 1, latNorth: 55, latSouth: -40 } },
+  { name: '冰原', desc: '高纬寒冷，冰盖、苔原与峡湾', p: { globe: false, earth: false, landRatio: 0.4, plates: 12, mountains: 1.1, coastRoughness: 0.9, rainfall: 0.9, temperature: -9, latNorth: 82, latSouth: 42 } },
+  { name: '沙海', desc: '炎热少雨，沙漠与盐湖广布', p: { globe: false, earth: false, landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
+  { name: '类地球', desc: '全球全图：几块大陆隔着大洋，从赤道雨林到两极冰原', p: { globe: true, earth: false, landRatio: 0.29, plates: 16, mountains: 1.1, coastRoughness: 0.6, rainfall: 1, temperature: 0, latNorth: 80, latSouth: -62 } },
+  { name: '地球', desc: '真实地球的大陆、山脉与海深（ETOPO1），地名仍是虚构的', p: { globe: true, earth: true, mountains: 1, coastRoughness: 0.5, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
 ]
 
 /** 观感：上次选的预设 + 在其上的微调（旧版本存的字段缺了就用预设补上） */
@@ -53,6 +58,7 @@ function loadTime() {
 }
 
 // —— 界面状态（响应式） ——
+export type WorldTab = 'gen' | 'view' | 'stats'
 export const ws = reactive({
   params: { ...DEFAULT_PARAMS, ...readQuery(initialQuery('world') ?? new URLSearchParams(storeGet('worldQuery') ?? '')) } as WorldParams,
   view3d: {
@@ -74,9 +80,25 @@ export const ws = reactive({
   lookId: storeGet('lookId') ?? LOOKS[0].id,
   atlasStyle: ((storeGet('atlasStyle') as StyleId) || 'physical') as StyleId,
   atlasOpts: { labels: true, contours: true, graticule: true },
+  /** 纸图的图饰：标题框、指北针、图例（默认不画，只影响浏览器里的图廓层；导出总是画） */
+  ornaments: storeGet('atlasOrnaments') === '1',
   mode: '3d' as Mode,
+  /** 浏览器创建不了 WebGL（显卡加速被停用等）：3D 沙盘里只显示说明，纸图与编辑照常 */
+  no3d: false,
+  /** 侧边栏当前的分页：生成、视图（随模式是沙盘、纸图风格或编辑）、统计 */
+  tab: (['gen', 'view', 'stats'].includes(storeGet('worldTab') ?? '') ? storeGet('worldTab') : 'gen') as WorldTab,
   /** 参数改了但还没重新生成 */
   dirty: false,
+  /** 区域视图：编辑中的区域（改了就写进 edits.areas）与选中的那个 */
+  areas: [] as Area[],
+  areaSel: null as string | null,
+  /** 区域改过（存着完整的列表，不再跟着自动推断） */
+  areasEdited: false,
+  /** 纸图当前在舞台上的位置（区域视图的叠加层跟着它）：页面坐标 → 屏幕 = (x + 页面·k)；地图格 → 页面 = M + (格 + 0.5)·S；frame 是露出地图的图框内框 */
+  /** 纸图的视图（区域叠加层用）：half 是格中心相对格左上角的偏移（格 (x, y) 的中心在 x + 0.5） */
+  paper: { x: 0, y: 0, k: 1, M: 0, S: 2, half: 0.5, frame: { x: 0, y: 0, w: 0, h: 0 } },
+  /** 当前世界生成时所用的参数（滑杆双击回到这里） */
+  applied: null as WorldParams | null,
   busy: false,
   preset: -1,
   loading: { show: true, stage: '…', frac: 0 },
@@ -105,8 +127,17 @@ let editor: EditorView | null = null
 let els: { stage: HTMLElement; v3: HTMLElement; v2: HTMLElement; ve: HTMLElement } | null = null
 let world: World | null = null
 let rivers: SmoothRiver[] = []
-/** 每种风格缓存一份矢量显示列表（预览、SVG 导出、PNG 导出共用） */
-const atlasCache = new Map<string, DisplayList>()
+/**
+ * 每种风格缓存一份矢量显示列表（预览、SVG 导出、PNG 导出共用）。
+ * base 是不含地图注记的部分：区域改动只作废 list，按新区域重录注记即可
+ */
+const atlasCache = new Map<string, { base: AtlasBase; list: DisplayList | null }>()
+/** 区域改了：各风格只重排注记 */
+function relabelAtlas() {
+  for (const c of atlasCache.values()) c.list = null
+}
+/** 查看器当前列表所用的底：同一个底换列表时只重画注记层 */
+let shownBase: AtlasBase | null = null
 /** 当前预览的纸图尺寸（像素，与导出一致） */
 let atlasCanvas: { width: number; height: number } | null = null
 /** 用户对当前世界的编辑（与 params.width/height 对应） */
@@ -143,23 +174,32 @@ export function ensureWorld(): Promise<World | null> {
 /** 舞台挂载后接上引擎；第一次进入世界模块（或别处要用世界）时才生成 */
 export function mountWorld(e: NonNullable<typeof els>) {
   els = e
-  scene = markRaw(new Scene3D(e.v3, structuredClone(toRaw(ws.view3d))))
-  scene.onTourChange = (on) => (ws.touring = on)
-  // 昼夜循环推进的时刻反映到滑杆上（不再回传给场景）
-  let savedAt = 0
-  scene.onTimeChange = (h) => {
-    ws.view3d.timeOfDay = h
-    // 循环中每 2 秒记一次
-    const now = performance.now()
-    if (now - savedAt > 2000) {
-      savedAt = now
-      storeSet('timeOfDay', h.toFixed(2))
+  try {
+    scene = markRaw(new Scene3D(e.v3, structuredClone(toRaw(ws.view3d))))
+  } catch (err) {
+    // 没有 WebGL 时先显示纸图（3D 页签里说明原因），别让异常中断整个界面的挂载（聚落模块也在同一轮挂载）
+    console.error(err)
+    ws.no3d = true
+    ws.mode = '2d'
+  }
+  if (scene) {
+    scene.onTourChange = (on) => (ws.touring = on)
+    // 昼夜循环推进的时刻反映到滑杆上（不再回传给场景）
+    let savedAt = 0
+    scene.onTimeChange = (h) => {
+      ws.view3d.timeOfDay = h
+      // 循环中每 2 秒记一次
+      const now = performance.now()
+      if (now - savedAt > 2000) {
+        savedAt = now
+        storeSet('timeOfDay', h.toFixed(2))
+      }
     }
   }
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__scene = scene
   syncActive()
   bindPanZoom(e.v2, map, applyMap, { min: 0.15, max: 24, fit: fitMap })
-  window.addEventListener('resize', () => ws.mode === '2d' && fitMap())
+  window.addEventListener('resize', () => paperMode() && fitMap())
   e.stage.addEventListener('pointermove', (ev) => {
     cancelAnimationFrame(probeRaf)
     probeRaf = requestAnimationFrame(() => probeAt(ev.clientX, ev.clientY))
@@ -171,9 +211,12 @@ export function mountWorld(e: NonNullable<typeof els>) {
   if (viewer) {
     viewer = null
     atlasCanvas = null
-    if (ws.mode === '2d' && world) refreshAtlas()
+    if (paperMode() && world) refreshAtlas()
   }
 }
+
+/** 纸图或区域视图（区域视图的底图就是纸图） */
+const paperMode = () => ws.mode === '2d' || ws.mode === 'areas'
 
 function syncActive() {
   if (scene) scene.active = app.module === 'world' && ws.mode === '3d'
@@ -191,21 +234,29 @@ watch(
 )
 
 // —— 参数 ——
-export function markDirty(d = true) {
-  ws.dirty = d
-  if (d) ws.preset = -1
+/** 参数改动后调用：与当前世界所用的参数比较，改回原样就不再算改过 */
+export function markDirty() {
+  ws.dirty = !!ws.applied && paramSig(ws.params) !== paramSig(ws.applied)
+  ws.preset = -1
 }
 export function setParam<K extends keyof WorldParams>(k: K, v: WorldParams[K]) {
   ws.params[k] = v
+  // 全球图的高度随纬度范围走；开关全球图时换宽高比
+  // 关掉全球图时地球底图一并关掉（地球底图总是全球图，见 normalizeParams）
+  if (k === 'globe' && !v) ws.params.earth = false
+  normalizeParams(ws.params)
   markDirty()
 }
 export function resetParams() {
   Object.assign(ws.params, { ...DEFAULT_PARAMS, seed: ws.params.seed })
+  normalizeParams(ws.params)
   markDirty()
 }
+/** 预设只填入参数，点「生成」才生效 */
 export function applyPreset(i: number) {
   Object.assign(ws.params, PRESETS[i].p)
-  generate()
+  normalizeParams(ws.params)
+  markDirty()
   ws.preset = i
 }
 
@@ -256,6 +307,11 @@ export function setAtlasStyle(s: StyleId) {
   storeSet('atlasStyle', s)
   refreshAtlas()
 }
+export function setOrnaments(v: boolean) {
+  ws.ornaments = v
+  storeSet('atlasOrnaments', v ? '1' : '0')
+  viewer?.refreshChrome()
+}
 export function setAtlasOpt(k: keyof typeof ws.atlasOpts, v: boolean) {
   ws.atlasOpts[k] = v
   atlasCache.clear()
@@ -267,16 +323,27 @@ export function toggleTour() {
   scene?.toggleTour()
 }
 
+export function setTab(tab: WorldTab) {
+  ws.tab = tab
+  storeSet('worldTab', tab)
+}
+
 export function setMode(m: Mode) {
+  // 编辑要用侧边栏里的工具：进编辑时翻到视图页
+  if (m === 'edit') setTab('view')
   if (m !== '3d') scene?.stopTour()
   ws.mode = m
   syncActive()
   ws.probe = null
   if (m === '3d' && sceneStale && world && lastTex) {
-    scene!.setWorld(world, lastTex.color, lastTex.roughness, rivers)
+    scene?.setWorld(world, lastTex.color, lastTex.roughness, rivers)
     sceneStale = false
   }
-  if (m === '2d' && world) refreshAtlas()
+  if (m === 'areas') {
+    setTab('view')
+    loadAreas()
+  }
+  if ((m === '2d' || m === 'areas') && world) refreshAtlas()
   if (m === 'edit') {
     ensureEditor()
     if (world && lastTex) editor!.setWorld(world, lastTex.color, edits, genEdits)
@@ -291,6 +358,8 @@ export function generate(quiet = false) {
   const id = ++jobId
   const p = ws.params
   p.seed = p.seed.trim() || 'world'
+  // 链接、旧存档里带的高度可能与宽度、纬度范围对不上
+  normalizeParams(p)
   // 换了种子：编辑是针对旧世界的，询问后清除
   if (p.seed !== editsSize.seed && hasEdits(edits)) {
     if (!window.confirm(t('换种子会生成一个全新的世界，当前的编辑将被清除。继续吗？'))) {
@@ -305,13 +374,17 @@ export function generate(quiet = false) {
   editsSize = { W: p.width, H: p.height, seed: p.seed }
   storeSet('worldQuery', worldQuery().toString())
   syncRoute('world')
-  markDirty(false)
+  ws.applied = { ...toRaw(p) }
+  ws.dirty = false
   quietJob = quiet
   if (quiet) ws.editStatus = t('演算中…')
   else Object.assign(ws.loading, { show: true, frac: 0 })
   ws.busy = true
   sentEdits = snapshotEdits(edits)
-  worker.postMessage({ id, params: { ...toRaw(p) }, edits: { ...edits } })
+  // 区域不影响地形，不发给生成线程（也不影响"没有编辑时整份缓存"的判断）；
+  // 带上现有贴图的地面版本：地面没变时 Worker 不再算贴图
+  const msg: WorkerIn = { id, params: { ...toRaw(p) }, edits: { ...edits, areas: undefined }, ground: lastTex ? lastGround : undefined }
+  worker.postMessage(msg)
 }
 worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   const m = ev.data
@@ -332,14 +405,17 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   const next = markRaw(m.world)
   const places = placeSig(next)
   // 地面与地点位置都没变（例如只改了命名）：只换名字，不重建地表贴图与 3D 场景
+  // 区域按这次的地名在 Worker 里推断好了
+  inferred = { world: next, areas: m.areas }
   if (world && lastTex && m.ground === lastGround && places === lastPlaces) {
     world = next
-    if (!sceneStale) scene!.setNames(world)
+    rivers = m.rivers
+    if (!sceneStale) scene?.setNames(world)
     genEdits = sentEdits
     if (edits.regions) syncContinentLabels()
     editor?.setWorld(world, lastTex.color, edits, genEdits)
     atlasCache.clear()
-    if (ws.mode === '2d') await refreshAtlas()
+    if (paperMode()) await refreshAtlas()
     showStats(world, m.cached)
     ws.loading.show = false
     ws.editStatus = null
@@ -350,13 +426,14 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   ws.loading.stage = t('绘制地表')
   await new Promise((r) => setTimeout(r, 16))
   world = next
-  rivers = smoothRivers(world)
+  rivers = m.rivers
   try {
-    const tex = buildPhysicalTexture(world, rivers, 2)
+    // 贴图像素由 Worker 算好，这里只写进画布；Worker 省略时（地面没变）沿用旧贴图
+    const tex = m.tex ? textureCanvases(world, rivers, m.tex, 2) : m.ground === lastGround && lastTex ? lastTex : buildPhysicalTexture(world, rivers, 2)
     lastTex = tex
     // 编辑视图里不重建 3D（较慢），切回 3D 时再建
     if (ws.mode === '3d' || !editor) {
-      scene!.setWorld(world, tex.color, tex.roughness, rivers)
+      scene?.setWorld(world, tex.color, tex.roughness, rivers)
       sceneStale = false
     } else sceneStale = true
     genEdits = sentEdits
@@ -374,7 +451,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   }
   atlasCanvas = null
   atlasCache.clear()
-  if (ws.mode === '2d') await refreshAtlas()
+  if (paperMode()) await refreshAtlas()
   showStats(world, m.cached)
   ws.loading.show = false
   ws.editStatus = null
@@ -412,28 +489,41 @@ function takeStale() {
 }
 async function buildList(w: World, style: StyleId) {
   takeStale()
-  let list = atlasCache.get(style)
-  if (list) return list
-  const { buildAtlasVector } = await import('../../render/atlas/svg/vector')
-  const measurer = document.createElement('canvas').getContext('2d')!
-  list = buildAtlasVector(w, rivers, style, toRaw(ws.atlasOpts), measurer, 2)
-  atlasCache.set(style, list)
-  return list
+  const hit = atlasCache.get(style)
+  if (hit?.list) return hit.list
+  const { buildAtlasBase, withLabels } = await import('../../render/atlas/svg/vector')
+  let c = atlasCache.get(style)
+  if (!c) {
+    const measurer = document.createElement('canvas').getContext('2d')!
+    c = { base: buildAtlasBase(w, rivers, style, { ...toRaw(ws.atlasOpts) }, measurer, 2), list: null }
+    atlasCache.set(style, c)
+  }
+  c.list ??= withLabels(c.base, currentAreas())
+  return c.list
 }
-async function refreshAtlas() {
+/** 把列表交给查看器：与当前列表同一个底（只有注记不同）时不重画底图 */
+function showList(list: DisplayList, style: StyleId) {
+  const base = atlasCache.get(style)?.base ?? null
+  if (base && base === shownBase) viewer!.setLabels(list)
+  else viewer!.setList(list)
+  shownBase = base
+}
+/** quiet：不弹加载遮罩（区域视图里改名、拖边界后的重排：旧图一直显示到新图就绪，编辑不被打断） */
+async function refreshAtlas(quiet = false) {
   if (!world || !els) return
   const w = world
   const style = ws.atlasStyle
   const job = ++atlasJob
   takeStale()
-  if (!atlasCache.has(style)) {
+  if (!atlasCache.has(style) && !quiet) {
     Object.assign(ws.loading, { show: true, frac: 1, stage: t('矢量绘制{style}', { style: t(THEMES.find((th) => th.id === style)!.name) }) })
+    await mapFontsReady()
     await ensureFonts(w, style)
     await new Promise((r) => setTimeout(r, 20))
     if (job !== atlasJob || w !== world) return
   }
   const list = await buildList(w, style)
-  ws.loading.show = false
+  if (!quiet) ws.loading.show = false
   if (job !== atlasJob) return
   const keepView = atlasCanvas !== null && atlasCanvas.width === list.width && atlasCanvas.height === list.height
   atlasCanvas = { width: list.width, height: list.height }
@@ -441,8 +531,10 @@ async function refreshAtlas() {
   if (!viewer) viewer = markRaw(new AtlasViewer(els.v2))
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__viewer = viewer
   // 图框模式：图廓固定在舞台上、贴着地图收拢或铺满可用区，缩放只动图框里的地图（导出仍是整页排版）
-  viewer.setChrome((cw, ch, box) => buildAtlasChrome(w, style, list, map, chromeMeasurer, cw, ch, box, probeCard()), atlasBackdrop(style), atlasFrameInset(style))
-  viewer.setList(list)
+  viewer.setChrome((cw, ch, box) => buildAtlasChrome(w, style, list, map, chromeMeasurer, cw, ch, box, probeCard(), ws.ornaments), atlasBackdrop(style), atlasFrameInset(style))
+  showList(list, style)
+  ws.paper.M = list.M
+  if (ws.mode === 'areas' && areasWorld !== w) loadAreas()
   if (!keepView) fitMap()
   else applyMap()
 }
@@ -454,6 +546,7 @@ let shown: DisplayList | null = null
 const chromeMeasurer = document.createElement('canvas').getContext('2d')!
 function applyMap() {
   viewer?.setView(map.x, map.y, map.k)
+  if (viewer && ws.mode === 'areas') Object.assign(ws.paper, { x: map.x, y: map.y, k: map.k, frame: viewer.frame() })
 }
 /** 把地图（不含整页排版的留白）整个放进图框内框，四周留一点空 */
 function fitMap() {
@@ -469,12 +562,12 @@ function fitMap() {
 
 /** 纸图里的悬停读数画进图廓（跟着地图的纸色与字体）；3D、编辑视图仍用浮层 */
 const probeCard = () => {
-  const p = ws.mode === '2d' ? ws.probe : null
+  const p = paperMode() ? ws.probe : null
   return p && { title: t(p.title), rows: p.rows.map(([k, v]): [string, string] => [t(k), v]) }
 }
 watch(
   () => ws.probe,
-  () => ws.mode === '2d' && viewer?.refreshChrome(),
+  () => paperMode() && viewer?.refreshChrome(),
 )
 
 // —— 探针：悬停查看地点信息 ——
@@ -482,7 +575,7 @@ let probeRaf = 0
 function probeAt(clientX: number, clientY: number) {
   if (!world || !els) return
   let cell: { x: number; y: number } | null = null
-  if (ws.mode === '3d') cell = scene!.pick(clientX, clientY)
+  if (ws.mode === '3d') cell = scene?.pick(clientX, clientY) ?? null
   else if (ws.mode === 'edit' && editor) {
     const r = els.ve.getBoundingClientRect()
     const c = editor.toCell(clientX - r.left, clientY - r.top)
@@ -514,20 +607,30 @@ function probeAt(clientX: number, clientY: number) {
   rows.push(['年均温', `${world.temperature[i].toFixed(1)} °C`])
   if (e > 0) rows.push(['年降水', `${Math.round(world.precipitation[i]).toLocaleString()} mm`])
   if (e > 0 && world.flow[i] > 1) rows.push(['径流', `${world.flow[i].toFixed(0)}`])
-  ws.probe = { title: BIOME_NAMES[world.biome[i]], rows }
+  const title = BIOME_NAMES[world.biome[i]]
+  // 读数没变（同一格、或编辑后读数恰好相同）就不换对象：换对象会触发图廓重排（每帧约 5 ms）
+  if (sameProbe(ws.probe, title, rows)) return
+  ws.probe = { title, rows }
+}
+/** 探针内容是否与当前一致 */
+export function sameProbe(p: { title: string; rows: [string, string][] } | null, title: string, rows: [string, string][]) {
+  if (!p || p.title !== title || p.rows.length !== rows.length) return false
+  for (let i = 0; i < rows.length; i++) if (p.rows[i][0] !== rows[i][0] || p.rows[i][1] !== rows[i][1]) return false
+  return true
 }
 
 // —— 导出 ——
 export async function exportPng() {
   if (!world || !els) return
   let url: string
-  if (ws.mode === '3d') url = scene!.snapshot()
+  if (ws.mode === '3d' && scene) url = scene.snapshot()
   else {
     // 由矢量显示列表按 2 倍分辨率栅格化
+    await mapFontsReady()
     await ensureFonts(world, ws.atlasStyle)
     const list = await buildList(world, ws.atlasStyle)
     if (!viewer) viewer = markRaw(new AtlasViewer(els.v2))
-    viewer.setList(list)
+    showList(list, ws.atlasStyle)
     url = viewer.rasterize(2).toDataURL('image/png')
   }
   download(url, `${world.worldName.toLowerCase()}-${ws.params.seed}-${ws.mode === '3d' ? '3d' : ws.atlasStyle}.png`)
@@ -537,6 +640,7 @@ export async function exportSvg() {
   if (!world) return
   const w = world
   Object.assign(ws.loading, { show: true, frac: 1, stage: t('矢量化：追踪等值线与区域轮廓') })
+  await mapFontsReady()
   await ensureFonts(w, ws.atlasStyle)
   await new Promise((r) => setTimeout(r, 20))
   try {
@@ -641,7 +745,7 @@ function ensureEditor() {
           edits.labels = world.labels.map((l) => ({ ...l }))
           // 地点改动立即反映到纸图与 3D 地名，政区在重算后更新
           atlasStale = true
-          scene!.refreshLabels()
+          scene?.refreshLabels()
         }
         scheduleRegen()
       },
@@ -838,9 +942,119 @@ export function deleteRegion() {
 }
 
 // —— 快捷键 ——
+// —— 区域（大陆、海、湾……）：自动推断，区域视图里改名、改边界 ——
+let inferred: { world: World; areas: Area[] } | null = null
+/** 当前世界的区域：改过就用改过的，否则自动推断（每个世界推断一次；通常已由 Worker 算好） */
+function currentAreas(): Area[] {
+  if (edits.areas) return edits.areas
+  if (!world) return []
+  if (inferred?.world !== world) inferred = { world, areas: inferAreas(world) }
+  return inferred.areas
+}
+/** 区域视图里显示、编辑的是当前区域的副本；换了世界要重新载入 */
+let areasWorld: World | null = null
+function loadAreas() {
+  if (!world) return
+  areasWorld = world
+  ws.areas = structuredClone(toRaw(currentAreas()))
+  ws.areasEdited = !!edits.areas
+  if (ws.areaSel && !ws.areas.some((a) => a.id === ws.areaSel)) ws.areaSel = null
+}
+const areaUndo: Area[][] = []
+/** 一次改动开始前记下原样（拖顶点、改名、新建、删除……），Ctrl+Z 撤回；prev：事先存下的原样（拖动真的动了才记） */
+export function areaCheckpoint(prev?: Area[]) {
+  areaUndo.push(prev ?? structuredClone(toRaw(ws.areas)))
+  if (areaUndo.length > 60) areaUndo.shift()
+}
+/** 区域视图里的改动写进编辑，纸图注记按新的区域重排（拖动过程中不调：重排一次要几百毫秒，松手时调） */
+let areaTimer = 0
+export function commitAreas() {
+  edits.areas = structuredClone(toRaw(ws.areas))
+  ws.areasEdited = true
+  clearTimeout(areaTimer)
+  areaTimer = window.setTimeout(() => {
+    relabelAtlas()
+    refreshAtlas(true)
+  }, 80)
+}
+export function undoAreas() {
+  const prev = areaUndo.pop()
+  if (!prev) return
+  ws.areas = prev
+  if (ws.areaSel && !ws.areas.some((a) => a.id === ws.areaSel)) ws.areaSel = null
+  commitAreas()
+}
+export function selectArea(id: string | null) {
+  ws.areaSel = id
+}
+/** 丢掉全部区域改动，回到自动推断 */
+export function resetAreas() {
+  if (!edits.areas) return
+  areaCheckpoint()
+  edits.areas = undefined
+  loadAreas()
+  relabelAtlas()
+  refreshAtlas()
+}
+/** 在视图中央放一个新区域（六边形，约占视图的六分之一），选中它 */
+export function addArea(kind: AreaKind) {
+  if (!world || !viewer) return
+  areaCheckpoint()
+  const f = viewer.frame()
+  const P = ws.paper
+  const toCell = (sx: number, sy: number): [number, number] => [(sx - P.x) / P.k / P.S - P.M / P.S - P.half, (sy - P.y) / P.k / P.S - P.M / P.S - P.half]
+  const [cx, cy] = toCell(f.x + f.w / 2, f.y + f.h / 2)
+  const r = Math.min(f.w, f.h) / 6 / P.k / P.S
+  const poly: [number, number][] = []
+  for (let i = 0; i < 6; i++) poly.push([cx + r * Math.cos((i * Math.PI) / 3), cy + r * Math.sin((i * Math.PI) / 3)])
+  const water = isWaterArea(kind) || kind === 'lake'
+  const id = `user:${Date.now().toString(36)}`
+  const name = t(water ? '新水域' : '新区域')
+  ws.areas.push({ id, kind, name, zh: name, ja: name, poly, at: [cx, cy], cells: Math.round(Math.PI * r * r) })
+  ws.areaSel = id
+  commitAreas()
+}
+/** 把地图移到区域上（区域比视口大就缩小到整个放下） */
+export function focusArea(id: string) {
+  const a = ws.areas.find((x) => x.id === id)
+  if (!a || !viewer) return
+  const P = ws.paper
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const [x, y] of a.poly) {
+    x0 = Math.min(x0, x)
+    y0 = Math.min(y0, y)
+    x1 = Math.max(x1, x)
+    y1 = Math.max(y1, y)
+  }
+  const pg = (c: number) => P.M + (c + 0.5) * P.S
+  const f = viewer.inner()
+  const bw = (x1 - x0) * P.S
+  const bh = (y1 - y0) * P.S
+  map.k = Math.min(map.k, (f.w * 0.8) / Math.max(1, bw), (f.h * 0.8) / Math.max(1, bh))
+  map.x = f.x + f.w / 2 - ((pg(x0) + pg(x1)) / 2) * map.k
+  map.y = f.y + f.h / 2 - ((pg(y0) + pg(y1)) / 2) * map.k
+  applyMap()
+}
+export function deleteArea(id: string) {
+  const i = ws.areas.findIndex((a) => a.id === id)
+  if (i < 0) return
+  areaCheckpoint()
+  ws.areas.splice(i, 1)
+  if (ws.areaSel === id) ws.areaSel = null
+  commitAreas()
+}
+
 window.addEventListener('keydown', (e) => {
   if (app.module !== 'world') return
   const typing = isTypingTarget(e)
+  if (ws.mode === 'areas' && !typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault()
+    undoAreas()
+    return
+  }
   if (ws.mode === 'edit' && !typing) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault()
@@ -858,9 +1072,10 @@ onLang(async () => {
   ws.probe = null
   if (!world) return
   showStats(world)
+  await mapFontsReady()
   await document.fonts.load(`600 20px ${lang === 'ja' ? '"Noto Serif JP"' : '"Noto Serif SC"'}`, worldTitle(world) + [...world.labels, ...world.realms].map((l) => placeName(l)).join(''))
   atlasCache.clear()
-  if (ws.mode === '2d') refreshAtlas()
+  if (paperMode()) refreshAtlas()
   scene?.refreshLanguage()
   editor?.draw()
 })

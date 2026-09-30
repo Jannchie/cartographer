@@ -5,6 +5,7 @@ import { residentsOf } from './people'
 import { scaleOf } from './scale'
 import { dwelling } from './undo'
 import type { Culture, Settlement } from './types'
+import * as dmath from '../gen/dmath'
 
 /**
  * 城市的成长史：城市按人口一路长大，每样东西（房子、田、树、路……）都有出生与消亡的时刻（按人口计）。
@@ -29,6 +30,8 @@ export interface Piece {
   p?: P
   /** 算进人口的户数（民居） */
   units: number
+  /** 调度时所属的形态（schedule 开头记上） */
+  form?: Form
 }
 /** 渐进形态里一起出现的一组：一户人家（房子与它院里的东西） */
 interface Group {
@@ -40,6 +43,8 @@ interface Group {
   key: number
   form: Form
   entered: boolean
+  /** 进候补的先后（schedule 里用） */
+  seq?: number
 }
 export interface Form {
   patch: number
@@ -176,7 +181,7 @@ export function groupForm(ctx: Ctx, f: Form, avail: (h: number) => number, key: 
       const b = g.pieces[0].box
       const dx = Math.max(b[0] - x.box[2], x.box[0] - b[2], 0)
       const dy = Math.max(b[1] - x.box[3], x.box[1] - b[3], 0)
-      const d = Math.hypot(dx, dy)
+      const d = dmath.hypot(dx, dy)
       if (d < bd) {
         bd = d
         best = g
@@ -207,8 +212,7 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
   for (const f of forms) (byPatch.get(f.patch) ?? byPatch.set(f.patch, []).get(f.patch)!).push(f)
   for (const l of byPatch.values()) l.sort((a, b) => a.start - b.start)
   const pending = [...forms].sort((a, b) => a.start - b.start)
-  const formOf = new Map<Piece, Form>()
-  for (const f of forms) for (const x of f.pieces) formOf.set(x, f)
+  for (const f of forms) for (const x of f.pieces) x.form = f
   let fi = 0
   let supply = 0
   const bear = (x: Piece, t: number, patch: number) => {
@@ -235,16 +239,16 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
     if (f.rural && !f.whole) {
       // 零散的农家：田地、树留着，只有原来那块地（片区底）换成这一个；屋旁的菜园、草场压住的旧田换下来
       const plots = f.base.filter((x) => x.key === 'fields' || x.key === 'enclosures')
-      for (const x of [...own]) if (x.key === 'wards' || x.key === 'blocks' || (x.key === 'fields' && plots.some((y) => overlaps(y, x)))) kill(x, t, f.patch)
+      for (const x of own) if (x.key === 'wards' || x.key === 'blocks' || (x.key === 'fields' && plots.some((y) => overlaps(y, x)))) kill(x, t, f.patch)
     } else if (f.whole || !f.rebuild) {
       // 整片建成或从田野辟成民居：原来的一切清掉
-      for (const x of [...own]) kill(x, t, f.patch)
+      for (const x of own) kill(x, t, f.patch)
     } else {
       // 从农家翻建成街坊：散在田间的田地一次清掉
-      for (const x of [...own]) if (x.key === 'fields') kill(x, t, f.patch)
+      for (const x of own) if (x.key === 'fields') kill(x, t, f.patch)
       // 翻建：旧的街坊底去掉，落在新街坊之外（新的巷子里）的旧东西拆掉
       const blocks = f.base.filter((x) => x.key === 'blocks' && x.poly).map((x) => x.poly!)
-      for (const x of [...own]) {
+      for (const x of own) {
         if (x.key === 'blocks' || x.key === 'wards') kill(x, t, f.patch)
         else if (blocks.length) {
           const c: P = x.p ?? [(x.box[0] + x.box[2]) / 2, (x.box[1] + x.box[3]) / 2]
@@ -254,9 +258,42 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
     }
     for (const x of f.base) bear(x, t, f.patch)
   }
-  // 等着入住的户：按最早可以入住的时刻排，到时移进"可以入住"，再按先后入住
-  const waiting: Group[] = []
+  // 等着入住的户：按 (最早可以入住的时刻, 进候补的先后) 的小顶堆，到时移进"可以入住"，再按先后入住
+  const wait: Group[] = []
+  let seq = 0
+  const before = (a: Group, b: Group) => a.avail < b.avail || (a.avail === b.avail && a.seq! < b.seq!)
+  const waitPush = (g: Group) => {
+    g.seq = seq++
+    wait.push(g)
+    let i = wait.length - 1
+    while (i > 0) {
+      const pa = (i - 1) >> 1
+      if (!before(wait[i], wait[pa])) break
+      ;[wait[i], wait[pa]] = [wait[pa], wait[i]]
+      i = pa
+    }
+  }
+  const waitPop = () => {
+    const top = wait[0]
+    const last = wait.pop()!
+    if (wait.length) {
+      wait[0] = last
+      let i = 0
+      for (;;) {
+        const l = 2 * i + 1
+        let m = i
+        if (l < wait.length && before(wait[l], wait[m])) m = l
+        if (l + 1 < wait.length && before(wait[l + 1], wait[m])) m = l + 1
+        if (m === i) break
+        ;[wait[i], wait[m]] = [wait[m], wait[i]]
+        i = m
+      }
+    }
+    return top
+  }
+  // 可以入住的户：按 key 排好（同 key 先来的在前），ready[head] 之前的已经处理过；已入住、已关闭的留到下次合并时再去掉
   let ready: Group[] = []
+  let head = 0
   const step = o.step ?? 1.03
   for (let t = o.from; ; t = Math.min(o.until, t * step)) {
     // 1. 开始的形态：整片的当下建成；民居形态等第一户入住时才开张（见 open）
@@ -267,17 +304,38 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
       if (f.whole) {
         open(f, t)
         for (const g of f.groups) for (const x of g.pieces) bear(x, t, f.patch)
-      } else for (const g of f.groups) waiting.push(g)
+      } else for (const g of f.groups) waitPush(g)
     }
     // 2. 住户补足
-    const due = waiting.filter((g) => g.avail <= t && !g.form.closed)
-    if (due.length) {
-      const set = new Set(due)
-      for (let k = waiting.length - 1; k >= 0; k--) if (set.has(waiting[k])) waiting.splice(k, 1)
-      ready.push(...due)
-      ready.sort((a, b) => a.key - b.key)
+    const due: Group[] = []
+    while (wait.length && wait[0].avail <= t) {
+      const g = waitPop()
+      if (!g.form.closed && !g.entered) due.push(g)
     }
-    ready = ready.filter((g) => !g.form.closed)
+    if (due.length) {
+      // 新到的按 key 排好，与原有的归并（同 key 原有的在前，与整表稳定排序一样）
+      due.sort((a, b) => a.key - b.key || a.seq! - b.seq!)
+      const merged: Group[] = []
+      let i = head
+      let j = 0
+      while (i < ready.length || j < due.length) {
+        if (i < ready.length) {
+          const g = ready[i]
+          if (g.entered || g.form.closed) {
+            i++
+            continue
+          }
+          if (j >= due.length || g.key <= due[j].key) {
+            merged.push(g)
+            i++
+            continue
+          }
+        }
+        merged.push(due[j++])
+      }
+      ready = merged
+      head = 0
+    }
     const need = o.demand(t)
     // 一户入住：拆掉压住的旧东西（同一片区之前形态的）；拆掉的旧房原处若有这个形态里还没入住的户，一起入住
     //（翻建时院墙、棚屋先压到旧房，旧房原处的新房却排在后面，中间会空出几帧）
@@ -289,8 +347,17 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
         const f = g.form
         open(f, t)
         const own = aliveOf(f.patch)
-        for (const x of [...own]) {
-          if (formOf.get(x) === f) continue
+        // 这一户所有部件的包围盒：与它不相交的一定压不到（overlaps 先比包围盒），先筛掉
+        const gb: BBox = [Infinity, Infinity, -Infinity, -Infinity]
+        for (const y of g.pieces) {
+          gb[0] = Math.min(gb[0], y.box[0])
+          gb[1] = Math.min(gb[1], y.box[1])
+          gb[2] = Math.max(gb[2], y.box[2])
+          gb[3] = Math.max(gb[3], y.box[3])
+        }
+        for (const x of own) {
+          if (!boxHit(gb, x.box)) continue
+          if (x.form === f) continue
           if (!g.pieces.some((y) => overlaps(y, x))) continue
           kill(x, t, f.patch)
           if (x.units > 0 || x.key === 'buildings')
@@ -302,13 +369,17 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
         for (const x of g.pieces) bear(x, t, f.patch)
       }
     }
-    let k = 0
+    let k = head
     while (supply < need && k < ready.length) {
       const g = ready[k++]
-      if (!g.entered) enter(g)
+      if (!g.entered && !g.form.closed) enter(g)
     }
-    ready = ready.slice(k).filter((g) => !g.entered)
-    for (let q = waiting.length - 1; q >= 0; q--) if (waiting[q].entered) waiting.splice(q, 1)
+    head = k
+    // 处理过的前段积多了再一次去掉
+    if (head > 4096 && head * 2 > ready.length) {
+      ready = ready.slice(head)
+      head = 0
+    }
     if (t >= o.until) break
   }
   return life

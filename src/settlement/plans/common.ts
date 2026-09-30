@@ -2,6 +2,7 @@ import type { Ctx } from '../ctx'
 import { pointInPoly, type P, type Poly } from '../geom'
 import type { WardType } from '../types'
 import type { PlanZone } from './types'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 形制通用的积木：方形 / 圆形规划区、方格站点、沿轴出城。
@@ -36,7 +37,7 @@ export function gridSites(z: PlanZone, bu: number, bv: number, keep: (i: number,
  * 从城心沿轴走到规划区边上（边上就是城门）。offset 让路线在轴旁错开半格，走在街坊之间的街上。
  */
 export function axisExit(z: PlanZone, dir: number, offset: [number, number] = [0, 0]): P[] {
-  const d: P = [Math.cos(dir), Math.sin(dir)]
+  const d: P = [dmath.cos(dir), dmath.sin(dir)]
   const [du, dv] = z.toUV([z.c[0] + d[0], z.c[1] + d[1]])
   const alongU = Math.abs(du) >= Math.abs(dv)
   const s = alongU ? Math.sign(du) || 1 : Math.sign(dv) || 1

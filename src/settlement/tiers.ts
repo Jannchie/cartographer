@@ -11,6 +11,7 @@ import { placeMosque } from './plans/medina'
 import { park } from './parks'
 import { villageShrine } from './styles/wa'
 import { addWall, connectDoor } from './walls'
+import * as dmath from '../gen/dmath'
 
 /**
  * 地标的规模档（见 types.ts 的 Tier）：神社、寺观、教堂、园林、城堡都可大可小。
@@ -459,7 +460,7 @@ function microBuild(ctx: Ctx, b: Building, c: P, d: P, kind: MicroKind, outside 
       ctx.occ.add(circlePoly(c, 2, 8))
       for (let k = 0; k < 3; k++) {
         const a = hashAt(ctx, c, 'tiers.garden.tree', k) * Math.PI * 2
-        plantTree(ctx, add(c, [Math.cos(a), Math.sin(a)], clamp(room * 0.5, 3, 6)), 2.2)
+        plantTree(ctx, add(c, [dmath.cos(a), dmath.sin(a)], clamp(room * 0.5, 3, 6)), 2.2)
       }
       return true
     }

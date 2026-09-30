@@ -1,12 +1,12 @@
-import { Biome, type World } from '../../../gen/types'
+import { Biome, reliefKm, type World } from '../../../gen/types'
 import { blur } from '../../../gen/util'
 import { ATLAS, atlasSea, ramp, type RGB } from '../../palette'
 import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
-import { drawOverlays, fieldsFor, marginOf } from '../index'
+import { drawMapLabels, drawMapOverlays, fieldsFor, marginOf, type Reserved } from '../index'
 import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type StyleId } from '../styles'
 import { contourGrid, contours, pathData, type ContourGrid } from './contour'
-import { DisplayList, type Fill, type Stroke } from './displayList'
+import { DisplayList, type Fill, type Segment, type Stroke } from './displayList'
 import { Recorder } from './recorder'
 
 const FONT_CSS =
@@ -70,9 +70,21 @@ class Layers {
   }
 }
 
-/** 预计算的格点场 */
-function fieldsOf(world: World) {
-  const { W, H, elevation: e, biome, temperature: T, kmPerCell: km } = world
+/**
+ * 预计算的格点场（与风格无关，按世界缓存：切换风格不重算）。
+ * 缓存的数组各风格共用，只读：追踪等值线不写场，要改的场（色带等）各风格自己另建
+ */
+type Fields = ReturnType<typeof computeFields>
+const fieldsCache = new WeakMap<World, Fields>()
+function fieldsOf(world: World): Fields {
+  let F = fieldsCache.get(world)
+  if (!F) fieldsCache.set(world, (F = computeFields(world)))
+  return F
+}
+
+function computeFields(world: World) {
+  const { W, H, elevation: e, biome, temperature: T } = world
+  const km = reliefKm(world)
   const N = W * H
   const land = new Float32Array(N)
   const depth = new Float32Array(N)
@@ -115,12 +127,18 @@ function fieldsOf(world: World) {
   return { land, depth, lake, dark, light, ice, snow }
 }
 
-/** 群系指示场（羽化） */
-function biomeField(world: World, pred: (b: number) => boolean) {
+/** 群系指示场（羽化）；按世界与 key（同一个 key 必须对应同一个 pred）缓存，只读 */
+const biomeCache = new WeakMap<World, Map<number | string, Float32Array>>()
+function biomeField(world: World, key: number | string, pred: (b: number) => boolean) {
+  let byKey = biomeCache.get(world)
+  if (!byKey) biomeCache.set(world, (byKey = new Map()))
+  let f = byKey.get(key)
+  if (f) return f
   const { W, H, biome, elevation: e } = world
-  const f = new Float32Array(W * H)
+  f = new Float32Array(W * H)
   for (let i = 0; i < f.length; i++) f[i] = e[i] > 0 && pred(biome[i]) ? 1 : 0
   blur(f, W, H, 1, 1)
+  byKey.set(key, f)
   return f
 }
 
@@ -133,11 +151,11 @@ function biomeLayers(L: Layers, world: World, palette: Record<number, RGB>, opac
   const order = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([b]) => b)
   for (const b of order) {
     const c = transform ? transform(palette[b]) : palette[b]
-    L.fill(biomeField(world, (x) => x === b), 0.5, rgb(c), opacity, { tol: 0.4, minArea: 3 })
+    L.fill(biomeField(world, b, (x) => x === b), 0.5, rgb(c), opacity, { tol: 0.4, minArea: 3 })
   }
 }
 
-function hillshade(L: Layers, F: ReturnType<typeof fieldsOf>, ink: string, darkOp: number, lightOp: number, o: LayerOpt = {}) {
+function hillshade(L: Layers, F: Fields, ink: string, darkOp: number, lightOp: number, o: LayerOpt = {}) {
   for (const t of [0.07, 0.16, 0.26, 0.38, 0.5]) L.fill(F.dark, t, ink, darkOp, { ...o, tol: 0.45, minArea: 2.5 })
   if (lightOp > 0) for (const t of [0.04, 0.08]) L.fill(F.light, t, '#ffffff', lightOp, { ...o, tol: 0.45, minArea: 2.5 })
 }
@@ -149,7 +167,7 @@ function ripples(L: Layers, world: World, dists: number[], color: string, opacit
 
 // —————————————————————————— 各风格的矢量底图 ——————————————————————————
 
-function physical(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, opts: AtlasOpts) {
+function physical(L: Layers, world: World, F: Fields, opts: AtlasOpts) {
   L.rect(rgb(atlasSea(0.1)))
   const levels = [0.2, 1, 2, 3.2, 4.2]
   for (const lv of levels) L.fill(F.depth, lv, rgb(atlasSea(lv + 0.3)))
@@ -165,7 +183,7 @@ function physical(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, opts:
   L.line(F.land, 0, 'rgb(58,66,70)', 1.7, 0.92)
 }
 
-function fantasy(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
+function fantasy(L: Layers, world: World, F: Fields) {
   const C = FANTASY_COLORS
   const SEPIA = rgb(C.sepia)
   const N = world.W * world.H
@@ -186,7 +204,7 @@ function fantasy(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
   L.line(F.land, 0, SEPIA, 2.6, 0.95)
 }
 
-function nautical(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
+function nautical(L: Layers, world: World, F: Fields) {
   const N = world.W * world.H
   L.rect('rgb(244,241,232)')
   // 浅海分层：越浅越蓝
@@ -206,7 +224,7 @@ function nautical(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
   L.line(F.land, 0, 'rgb(30,30,30)', 1.9, 0.92)
 }
 
-function teyvat(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, S: number) {
+function teyvat(L: Layers, world: World, F: Fields, S: number) {
   const C = TEYVAT
   const N = world.W * world.H
   const cd = world.coastDist
@@ -261,7 +279,7 @@ function teyvat(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, S: numb
   L.line(F.land, 0, rgb(C.coast), 1.4, 0.7)
 }
 
-function ink(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, S: number) {
+function ink(L: Layers, world: World, F: Fields, S: number) {
   const k = S / 2
   const RICE = hex('#ede6d3')
   const INK = 'rgb(43,42,39)'
@@ -309,13 +327,13 @@ function ink(L: Layers, world: World, F: ReturnType<typeof fieldsOf>, S: number)
   L.line(F.land, 0, INK, 2.2, 0.9, undefined, { filter: 'brush' })
 }
 
-function topo(L: Layers, world: World, F: ReturnType<typeof fieldsOf>) {
+function topo(L: Layers, world: World, F: Fields) {
   L.rect('#d6e8ef')
   for (const lv of [0.2, 1, 2, 3, 4]) L.line(F.depth, lv, 'rgb(80,140,185)', 0.8, 0.45)
   L.fill(F.ice, 0, 'rgb(248,250,252)')
   L.fill(F.land, 0, rgb(ramp(HYPSO_STOPS, 0.1)))
   for (let lv = 0.25; lv < 6.5; lv += 0.25) L.fill(F.land, lv, rgb(ramp(HYPSO_STOPS, lv + 0.12)), 1, { tol: 0.4, minArea: 2 })
-  L.fill(biomeField(world, (b) => FOREST.has(b)), 0.5, 'rgb(196,222,180)', 0.7, { tol: 0.4, minArea: 3 })
+  L.fill(biomeField(world, 'forest', (b) => FOREST.has(b)), 0.5, 'rgb(196,222,180)', 0.7, { tol: 0.4, minArea: 3 })
   L.fill(F.snow, 1, 'rgb(248,250,252)')
   hillshade(L, F, 'rgb(40,40,40)', 0.07, 0.1)
   for (let lv = 0.1; lv < 9; lv += 0.1) {
@@ -363,10 +381,30 @@ function noiseTile(size: number, cell: number, rgb: number[], alpha: number, see
 }
 
 /**
+ * 不含地图注记的纸图：注记插在 cut 处（地图叠加层之后、图框之前）。
+ * 区域改动只影响注记，按它重录注记即可（见 withLabels），底图与图框的指令原样共用
+ */
+export interface AtlasBase {
+  list: DisplayList
+  cut: number
+  reserved: Reserved[]
+  theme: StyleId
+  S: number
+  world: World
+  opts: AtlasOpts
+  measurer: CanvasRenderingContext2D
+}
+
+/**
  * 构建矢量纸图的显示列表：底色、色带、晕渲分级、等值线由格点场追踪成路径，
  * 河流、符号、注记、罗盘、图框复用位图渲染的绘制代码（经 Recorder 录制）。
  */
 export function buildAtlasVector(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): DisplayList {
+  return withLabels(buildAtlasBase(world, rivers, id, opts, measurer, S), opts.areas)
+}
+
+/** 不含地图注记的部分（见 AtlasBase） */
+export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): AtlasBase {
   const theme = themeById(id)
   const f = fieldsFor(world, S)
   theme.prepare?.(f)
@@ -441,9 +479,40 @@ export function buildAtlasVector(world: World, rivers: SmoothRiver[], id: StyleI
 
   const rec = new Recorder(list, measurer)
   rec.space = 'map'
-  drawOverlays(rec as unknown as CanvasRenderingContext2D, f, theme, rivers, opts, (on) => (list.furniture = on))
+  const reserved = drawMapOverlays(rec as unknown as CanvasRenderingContext2D, f, theme, rivers, opts, (on) => (list.furniture = on))
+  const cut = list.segments.length
   rec.space = 'page'
   drawFrame(rec as unknown as CanvasRenderingContext2D, world, theme, S, M, MW, MH)
+  return { list, cut, reserved, theme: id, S, world, opts, measurer }
+}
+
+/**
+ * 在底图上按 areas 录入地图注记，得到完整的显示列表（新实例：查看器的注记分组等缓存随之作废）。
+ * 底图的段与指令共用、不改动：注记可能并进的最后一段连同末条指令先复制
+ */
+export function withLabels(base: AtlasBase, areas: AtlasOpts['areas']): DisplayList {
+  const { list: src, cut } = base
+  if (!base.opts.labels) return src
+  const list = new DisplayList(src.width, src.height, src.M, src.MW, src.MH)
+  list.head = src.head
+  list.clips = new Map(src.clips)
+  list.patterns = new Map(src.patterns)
+  list.gradients = new Map(src.gradients)
+  list.filters = new Map(src.filters)
+  const pre = src.segments.slice(0, cut)
+  const last = pre[cut - 1]
+  if (last) {
+    const items = last.items.slice()
+    const tail = items[items.length - 1]
+    if (tail) items[items.length - 1] = tail.k === 'path' ? { ...tail, bbox: [...tail.bbox] } : { ...tail }
+    pre[cut - 1] = { ...last, items } as Segment
+  }
+  list.segments = pre
+  const rec = new Recorder(list, base.measurer)
+  rec.space = 'map'
+  const theme = themeById(base.theme)
+  drawMapLabels(rec as unknown as CanvasRenderingContext2D, fieldsFor(base.world, base.S), theme, areas, base.reserved)
+  list.segments.push(...src.segments.slice(cut))
   return list
 }
 

@@ -1,13 +1,15 @@
-import type { World } from '../../gen/types'
+import { isGlobe, type World } from '../../gen/types'
 import { cjkFont, lang, t, worldTitle } from '../../i18n'
 import { hash, type Fields } from './fields'
 import { HYPSO_STOPS, REALM_COLORS, type Theme } from './styles'
+import { labelCtx } from './svg/recorder'
 
 const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
 
-/** 经度：以地图中央为 0°，按中纬度换算每格经度 */
+/** 经度：以地图中央为 0°，按中纬度换算每格经度（全球图横向正好 360°） */
 export function lonScale(world: World) {
   const p = world.params
+  if (isGlobe(p)) return 360 / world.W
   const midLat = (p.latNorth + p.latSouth) / 2
   return world.kmPerCell / (111.32 * Math.cos((midLat * Math.PI) / 180))
 }
@@ -21,7 +23,9 @@ export function drawGraticule(ctx: CanvasRenderingContext2D, world: World, S: nu
   ctx.setLineDash([6 * k, 5 * k])
   const top = p.latNorth
   const bot = p.latSouth
-  for (let lat = Math.ceil(Math.min(top, bot) / 10) * 10; lat <= Math.max(top, bot); lat += 10) {
+  // 全球图 30° 一条（常见世界地图的间隔），其余 10°
+  const gs = isGlobe(p) ? 30 : 10
+  for (let lat = Math.ceil(Math.min(top, bot) / gs) * gs; lat <= Math.max(top, bot); lat += gs) {
     const y = ((lat - top) / (bot - top)) * (H - 1) * S
     ctx.beginPath()
     ctx.moveTo(0, y)
@@ -30,7 +34,7 @@ export function drawGraticule(ctx: CanvasRenderingContext2D, world: World, S: nu
   }
   const ls = lonScale(world)
   const lonHalf = (W / 2) * ls
-  for (let lon = Math.ceil(-lonHalf / 10) * 10; lon <= lonHalf; lon += 10) {
+  for (let lon = Math.ceil(-lonHalf / gs) * gs; lon <= lonHalf; lon += gs) {
     const x = (lon / ls + W / 2) * S
     ctx.beginPath()
     ctx.moveTo(x, 0)
@@ -524,16 +528,22 @@ export function drawRhumbLines(ctx: CanvasRenderingContext2D, centers: [number, 
   ctx.restore()
 }
 
-/** 测深：抖动网格上标注水深（米），近岸密、远洋疏 */
+/**
+ * 测深：抖动网格上标注水深（米，数字的中心就是测点），近岸密、远洋疏。
+ * 在查看器里（矢量记录）按海图的取舍排：放不下时浅的先留（关系航行安全）、深的先省；放大后再补两层更密的测点
+ * （网格减半、再减半，只在近岸），疏密随比例尺变。纸面成品（位图、导出）只有第一层，与原来相同
+ */
 export function drawSoundings(ctx: CanvasRenderingContext2D, f: Fields) {
   const { world, S } = f
   const { W, H, elevation: e, coastDist } = world
   const k = S / 2
+  const rec = labelCtx(ctx)
   ctx.save()
   ctx.fillStyle = 'rgba(40, 60, 80, 0.72)'
   ctx.font = `italic 500 ${9.5 * k}px "Cormorant Garamond", serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
+  const text = (m: number) => (m >= 1000 ? String(Math.round(m / 10) * 10) : String(m))
   const g = 11
   for (let y = 8; y < H - 8; y += g) {
     for (let x = 8; x < W - 8; x += g) {
@@ -546,16 +556,60 @@ export function drawSoundings(ctx: CanvasRenderingContext2D, f: Fields) {
       if (cd > 25 && hash(jx, jy * 3) > 0.3) continue
       if (cd < 1.5) continue
       const m = Math.round(-e[i] * 1000)
-      ctx.fillText(m >= 1000 ? String(Math.round(m / 10) * 10) : String(m), jx * S, jy * S)
+      rec.beginLabel?.(jx * S, jy * S, undefined, undefined, { rank: m, zoom: 0 })
+      ctx.fillText(text(m), jx * S, jy * S)
+      rec.endLabel?.()
+    }
+  }
+  // 加密层：只在矢量记录时（查看器放大后按需出现）。第 t 层网格是 g / 2^t，跳过上一层已有的格点；
+  // 该层相邻测点在屏幕上至少隔 SPACING 个 CSS 像素时才参与
+  if (rec.beginLabel) {
+    const SPACING = 36
+    for (let t = 1; t <= 2; t++) {
+      const step = g / 2 ** t
+      const zoom = SPACING / (step * S)
+      // 越密的层离岸越近才补（远洋的海图测深本来就疏）
+      const reach = t === 1 ? 25 : 12
+      for (let r = 0; ; r++) {
+        const y = 8 + r * step
+        if (y >= H - 8) break
+        for (let c = 0; ; c++) {
+          const x = 8 + c * step
+          if (x >= W - 8) break
+          if (r % 2 === 0 && c % 2 === 0) continue
+          const jx = x + (hash(Math.round(x * 4), Math.round(y * 4) + t) - 0.5) * step * 0.6
+          const jy = y + (hash(Math.round(y * 4) + t, Math.round(x * 4)) - 0.5) * step * 0.6
+          const d = -bilinear(e, W, H, jx, jy)
+          if (d <= 0) continue
+          const cd = -coastDist[Math.round(jy) * W + Math.round(jx)]
+          if (cd < 1.5 || cd > reach) continue
+          const m = Math.round(d * 1000)
+          rec.beginLabel(jx * S, jy * S, undefined, undefined, { rank: t * 1e6 + m, zoom })
+          ctx.fillText(text(m), jx * S, jy * S)
+          rec.endLabel?.()
+        }
+      }
     }
   }
   ctx.restore()
 }
 
+/** 格点场在 (x, y)（格坐标，可带小数）处的双线性插值 */
+function bilinear(a: Float32Array, W: number, H: number, x: number, y: number) {
+  const x0 = Math.max(0, Math.min(W - 2, Math.floor(x)))
+  const y0 = Math.max(0, Math.min(H - 2, Math.floor(y)))
+  const fx = Math.max(0, Math.min(1, x - x0))
+  const fy = Math.max(0, Math.min(1, y - y0))
+  const i = y0 * W + x0
+  return (a[i] * (1 - fx) + a[i + 1] * fx) * (1 - fy) + (a[i + W] * (1 - fx) + a[i + W + 1] * fx) * fy
+}
+
 // ———————————————————————— 图框 ————————————————————————
 
 export function drawFrame(ctx: CanvasRenderingContext2D, world: World, theme: Theme, S: number, M: number, MW: number, MH: number) {
-  drawFrameAt(ctx, world, theme, S, M, M, MW, MH, { ox: M, oy: M, s: S }, 10, 2)
+  // 全球图横跨 360°：注记 30° 一个，免得挤在一起
+  const step = isGlobe(world.params) ? 30 : 10
+  drawFrameAt(ctx, world, theme, S, M, M, MW, MH, { ox: M, oy: M, s: S }, step, step / 5)
 }
 
 /**

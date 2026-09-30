@@ -48,12 +48,17 @@ export function rollback(ctx: Ctx, cp: Checkpoint) {
   for (let i = ctx.dropped.length - 1; i >= cp.dropped; i--) {
     const d = ctx.dropped[i]
     ;(ctx.out[d.key] as unknown[]).splice(d.idx, 0, d.item)
+    // 插回的位置之后的项挪了位：网格索引从这里起重新补登
+    const ix = grids.get(ctx.out[d.key] as unknown[])
+    if (ix) ix.n = Math.min(ix.n, d.idx)
   }
   ctx.dropped.length = cp.dropped
   for (const [k, n] of cp.len) {
     const a = ctx.out[k] as unknown[]
     if (a.length < n) throw new Error(`rollback: out.${k} 在检查点之后被截短了（删除要走 drop）`)
     a.length = n
+    const ix = grids.get(a)
+    if (ix) ix.n = Math.min(ix.n, n)
   }
   ctx.occ.truncate(cp.occ)
   ctx.corridors.truncate(cp.cor)
@@ -89,6 +94,7 @@ export function attempt<T>(ctx: Ctx, f: () => T): T {
 export function drop<K extends OutKey>(ctx: Ctx, key: K, f: (x: Item<K>, k: number) => boolean, from = 0): Item<K>[] {
   const a = ctx.out[key] as Item<K>[]
   const gone: Item<K>[] = []
+  const ix = grids.get(a)
   let w = from
   for (let r = from; r < a.length; r++) {
     const x = a[r]
@@ -96,6 +102,11 @@ export function drop<K extends OutKey>(ctx: Ctx, key: K, f: (x: Item<K>, k: numb
       // 记下删的时候它在哪（前面删掉的已经挪走）
       ctx.dropped.push({ key, idx: w, item: x })
       gone.push(x)
+      // 已登记进网格索引的：从格子里减掉，登记到的位置前移一格
+      if (ix && r < ix.n) {
+        ix.visit(x, -1)
+        ix.shift++
+      }
     } else {
       // 多数时候一个也不删：只读不写
       if (w !== r) a[w] = x
@@ -103,7 +114,80 @@ export function drop<K extends OutKey>(ctx: Ctx, key: K, f: (x: Item<K>, k: numb
     }
   }
   a.length = w
+  if (ix) {
+    ix.n -= ix.shift
+    ix.shift = 0
+  }
   return gone
+}
+
+// —— 树、田的网格索引 ——
+/**
+ * 删树、删田之前先问一句"这个范围里有没有"：大城里有十几万棵树、几万块田，drop 每次都要从头扫一遍，
+ * 而多数调用（地标落在城里、院子里没种树）一样也删不到。
+ *
+ * 每格记登记在格里的项数：树按所在的点（16 米格，地标占地多是三四十米见方，格子粗了就常有树在格里、不在地上），田按包围盒覆盖的格子（48 米格）。只会多记、不会少记，所以格子全是 0 就一定没有，可以跳过扫描：
+ * - 数组下标 [0, n) 的项都已登记；之后追加的在下次查询时补登
+ * - drop 删掉已登记的项时从格子里减掉，n 跟着前移
+ * - rollback 插回、截短时 n 退到受影响的最小下标，之后的重新补登（重复登记只会多记）；多记得太多时整个重建
+ */
+type GridKey = 'trees' | 'fields'
+class OutGrid {
+  n = 0
+  /** drop 进行中已删掉的已登记项数（删完再从 n 里减） */
+  shift = 0
+  cells = new Map<number, number>()
+  entries = 0
+  constructor(
+    private box: (x: never) => BBox,
+    private cell: number,
+  ) {}
+  visit(x: unknown, d: number) {
+    const [x0, y0, x1, y1] = this.box(x as never)
+    const c = this.cell
+    for (let j = Math.floor(y0 / c); j <= Math.floor(y1 / c); j++)
+      for (let i = Math.floor(x0 / c); i <= Math.floor(x1 / c); i++) {
+        const k = j * 65536 + i
+        this.cells.set(k, (this.cells.get(k) ?? 0) + d)
+      }
+    this.entries += d
+  }
+  catchUp(a: unknown[]) {
+    if (this.entries > a.length * 2 + 1000) {
+      this.cells.clear()
+      this.entries = 0
+      this.n = 0
+    }
+    for (; this.n < a.length; this.n++) this.visit(a[this.n], 1)
+  }
+  any([x0, y0, x1, y1]: BBox) {
+    const c = this.cell
+    for (let j = Math.floor(y0 / c); j <= Math.floor(y1 / c); j++)
+      for (let i = Math.floor(x0 / c); i <= Math.floor(x1 / c); i++) if ((this.cells.get(j * 65536 + i) ?? 0) > 0) return true
+    return false
+  }
+}
+const grids = new WeakMap<unknown[], OutGrid>()
+const fieldBoxes = new WeakMap<object, BBox>()
+const GRID_CELL: Record<GridKey, number> = { trees: 16, fields: 48 }
+const GRID_BOX: Record<GridKey, (x: never) => BBox> = {
+  trees: (t: { p: [number, number] }) => [t.p[0], t.p[1], t.p[0], t.p[1]],
+  fields: (f: { poly: Poly }) => {
+    let b = fieldBoxes.get(f)
+    if (!b) fieldBoxes.set(f, (b = bboxOf(f.poly)))
+    return b
+  },
+}
+/**
+ * 树（按所在的点）或田（按包围盒）里可能有落在 bb 里的吗：假的就一定没有。
+ * 调用方的 drop 只删这个范围里的（树的点在 bb 内、田的包围盒与 bb 相交）才能用它跳过
+ */
+export function mayHave(ctx: Ctx, key: GridKey, bb: BBox) {
+  const a = ctx.out[key] as unknown[]
+  let ix = grids.get(a)
+  if (!ix) grids.set(a, (ix = new OutGrid(GRID_BOX[key], GRID_CELL[key])))
+  ix.catchUp(a)
+  return ix.any(bb)
 }
 
 /** 住户（计入人口）的建筑 */
@@ -156,5 +240,7 @@ export function clearYards(ctx: Ctx, poly: Poly, o: { from?: Checkpoint; to?: Ch
   const [g0, g1] = range('greens')
   drop(ctx, 'greens', (g, k) => k < g1 && g.kind !== 'park' && g.kind !== 'cemetery' && touches(g.poly), g0)
   const [t0, t1] = range('trees')
-  drop(ctx, 'trees', (t, k) => k < t1 && pointInPoly(t.p, poly), t0)
+  if (!mayHave(ctx, 'trees', [x0, y0, x1, y1])) return
+  // 先比包围盒：没给起点时要把全城十几万棵树过一遍
+  drop(ctx, 'trees', (t, k) => k < t1 && !(t.p[0] < x0 || t.p[0] > x1 || t.p[1] < y0 || t.p[1] > y1) && pointInPoly(t.p, poly), t0)
 }

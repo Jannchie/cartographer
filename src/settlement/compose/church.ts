@@ -4,6 +4,7 @@ import type { BuildingKind } from '../types'
 import type { SacredKind } from '../names'
 import { addGroup, fit, graves, inside, place, plantTree, scatterTrees, urban } from '../wards'
 import { composer, type Elem, type Preset } from './core'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 西式教堂（主教座堂、修道院教堂、堂区教堂）的平面语法：
@@ -129,7 +130,7 @@ export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boole
     if (eastEnd === 'chevet') {
       // 回廊（半圆）外一圈放射状的小礼拜堂
       core.push([half(at(F, aE, 0), hb), 'temple'])
-      for (const t of [-1.15, -0.4, 0.4, 1.15]) core.push([circlePoly(at(F, aE + Math.cos(t) * hb, Math.sin(t) * hb), wn * 0.34, 10), 'temple'])
+      for (const t of [-1.15, -0.4, 0.4, 1.15]) core.push([circlePoly(at(F, aE + dmath.cos(t) * hb, dmath.sin(t) * hb), wn * 0.34, 10), 'temple'])
     }
     if (eastEnd === 'flat' || eastEnd === 'lady') core.push([B(aE, aE + wn * 1.3, -wn * 0.9, wn * 0.9), 'temple'])
     if (eastEnd === 'lady') core.push([B(aE + wn * 1.3 - 0.3, aE + wn * 2.6, -wn * 0.6, wn * 0.6), 'temple'])
@@ -257,7 +258,7 @@ function close(ctx: Ctx, block: Poly, reserve: Poly[], abbey = false) {
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i]
     const b = ring[(i + 1) % ring.length]
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1])
+    const L = dmath.hypot(b[0] - a[0], b[1] - a[1])
     if (L < 16) continue
     const u: P = [(b[0] - a[0]) / L, (b[1] - a[1]) / L]
     const c = centroid(zone)

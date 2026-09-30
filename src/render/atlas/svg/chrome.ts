@@ -57,6 +57,8 @@ export function buildAtlasChrome(
   h: number,
   box: Box,
   probe?: AtlasProbe | null,
+  /** 图饰（标题框、指北针、图例）；图框、经纬刻度与比例尺照画 */
+  ornaments = true,
 ): DisplayList {
   const theme = themeById(style)
   const list = new DisplayList(w, h, 0, w, h)
@@ -86,12 +88,16 @@ export function buildAtlasChrome(
   // 图框内的几件：与整页排版同样的相对位置，只是贴着当前的内框
   rec.save()
   rec.translate(X, Y)
-  const c = compassSpot(theme, S, FW, FH)
-  drawCompass(ctx, theme, c.cx, c.cy, c.r)
+  if (ornaments) {
+    const c = compassSpot(theme, S, FW, FH)
+    drawCompass(ctx, theme, c.cx, c.cy, c.r)
+  }
   // 比例尺：每屏幕像素的公里数随缩放倍率变
   drawScaleBarAt(ctx, theme, S, world.kmPerCell / geo.s, FW - 150 * S, FH - 24 * S, SCALE_NICE_KM)
-  drawCartouche(ctx, world, theme, S, FW)
-  drawLegend(ctx, world, theme, S, FH)
+  if (ornaments) {
+    drawCartouche(ctx, world, theme, S, FW)
+    drawLegend(ctx, world, theme, S, FH)
+  }
   rec.restore()
   // 水墨风格的题名竖排在右上角，读数卡放左上；其余放右上
   if (probe) probeCard(list, theme, measurer, probe, theme.cartouche === 'ink' ? X + 18 * k : null, X + FW - 18 * k, Y + 18 * k)

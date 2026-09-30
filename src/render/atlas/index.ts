@@ -115,6 +115,15 @@ export function compassSpot(theme: Theme, S: number, MW: number, MH: number) {
  * furniture(on)：标题、指北针、比例尺、图例这几件图廓件画之前 / 之后各调一次（矢量列表据此把它们单独分段）
  */
 export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Theme, rivers: SmoothRiver[], opts: AtlasOpts, furniture?: (on: boolean) => void) {
+  const reserved = drawMapOverlays(ctx, f, theme, rivers, opts, furniture)
+  if (opts.labels) drawMapLabels(ctx, f, theme, opts.areas, reserved)
+}
+
+/** 注记要让开的范围（地图框坐标） */
+export type Reserved = Parameters<LabelLayer['reserve']>[0]
+
+/** 注记以外的叠加层；返回注记要让开的范围（图名、图例、指北针、比例尺） */
+export function drawMapOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Theme, rivers: SmoothRiver[], opts: AtlasOpts, furniture?: (on: boolean) => void): Reserved[] {
   const { world, S, MW, MH, W } = f
   const k = S / 2
   const { r: compassR, cx, cy } = compassSpot(theme, S, MW, MH)
@@ -132,13 +141,17 @@ export function drawOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme: Th
   const title = drawCartouche(ctx, world, theme, S, MW)
   const legend = drawLegend(ctx, world, theme, S, MH)
   furniture?.(false)
-  if (opts.labels) {
-    const layer = new LabelLayer(ctx, world, S, theme)
-    layer.reserve(title)
-    if (legend) layer.reserve(legend)
-    const cr = compassR * (theme.compass === 'nautical' ? 1.4 : 1.1)
-    if (theme.compass !== 'none') layer.reserve({ x0: cx - cr, y0: cy - cr - 12 * k, x1: cx + cr, y1: cy + cr })
-    layer.reserve({ x0: MW - 300 * k, y0: MH - 50 * k, x1: MW, y1: MH })
-    layer.all()
-  }
+  const out: Reserved[] = [title]
+  if (legend) out.push(legend)
+  const cr = compassR * (theme.compass === 'nautical' ? 1.4 : 1.1)
+  if (theme.compass !== 'none') out.push({ x0: cx - cr, y0: cy - cr - 12 * k, x1: cx + cr, y1: cy + cr })
+  out.push({ x0: MW - 300 * k, y0: MH - 50 * k, x1: MW, y1: MH })
+  return out
+}
+
+/** 地图里的注记（叠加层的最后一步）：区域改动后只需重排这一步 */
+export function drawMapLabels(ctx: CanvasRenderingContext2D, f: Fields, theme: Theme, areas: AtlasOpts['areas'], reserved: Reserved[]) {
+  const layer = new LabelLayer(ctx, f.world, f.S, theme, areas)
+  for (const b of reserved) layer.reserve(b)
+  layer.all()
 }

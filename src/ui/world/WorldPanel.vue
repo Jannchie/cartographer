@@ -2,12 +2,12 @@
 import { computed } from 'vue'
 import type { EditTool, EditView } from '../../editor/editor'
 import type { Label, WorldParams } from '../../gen/types'
-import { DEFAULT_PARAMS } from '../../gen/types'
+import { DEFAULT_PARAMS, isGlobe } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
 import { DEFAULT_TIME, fmtTime } from '../../render/aerial/daylight'
-import { t } from '../i18n'
+import { langRef, t } from '../i18n'
 import Dropdown from '../kit/Dropdown.vue'
 import Field from '../kit/Field.vue'
 import Fold from '../kit/Fold.vue'
@@ -16,6 +16,7 @@ import Scale from '../kit/Scale.vue'
 import Section from '../kit/Section.vue'
 import Seg from '../kit/Seg.vue'
 import Swatches from '../kit/Swatches.vue'
+import AreaPanel from './AreaPanel.vue'
 import * as W from './world'
 import { latFmt, pct, ws } from './world'
 
@@ -23,7 +24,7 @@ const p = ws.params
 const x100 = (v: number) => v.toFixed(2)
 const signed = (d: number) => (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(d)}`
 
-type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming' | 'width' | 'height'>
+type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming' | 'width' | 'height' | 'globe' | 'earth'>
 const worldScales: { key: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; inputScale?: number }[] = [
   { key: 'landRatio', label: '陆地比例', min: 0.12, max: 0.65, step: 0.01, fmt: pct, inputScale: 100 },
   { key: 'plates', label: '板块数量', min: 4, max: 30, step: 1, fmt: (v) => String(v) },
@@ -40,14 +41,10 @@ const RES = [
   { value: '1024x640', label: '标准', title: '1024 × 640' },
   { value: '1536x960', label: '精细', title: '1536 × 960' },
 ]
+// 分辨率只定宽度，高度随之推导（全球图还随纬度范围，见 normalizeParams）
 const res = computed({
-  get: () => `${p.width}x${p.height}`,
-  set: (v: string) => {
-    const [w, h] = v.split('x').map(Number)
-    p.width = w
-    p.height = h
-    W.markDirty()
-  },
+  get: () => `${p.width}x${Math.round(p.width * 0.625)}`,
+  set: (v: string) => W.setParam('width', Number(v.split('x')[0])),
 })
 
 const v = ws.view3d
@@ -79,6 +76,7 @@ const atlasToggles = computed(() => [
   { label: '注记', on: ws.atlasOpts.labels },
   { label: '等高线', on: ws.atlasOpts.contours },
   { label: '经纬网', on: ws.atlasOpts.graticule },
+  { label: '图饰', on: ws.ornaments, title: '标题框、指北针与图例（导出的图总是带着）' },
 ])
 const atlasKeys = ['labels', 'contours', 'graticule'] as const
 
@@ -124,7 +122,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
 
 <template>
   <div class="panel-body">
-    <Section title="生成">
+    <Section v-show="ws.tab === 'gen'">
       <div class="seed">
         <input
           :value="p.seed"
@@ -137,30 +135,35 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         />
         <button type="button" class="dice" :title="t('随机种子并生成（R）')" @click="W.randomSeed()">{{ t('随机') }}</button>
       </div>
-      <Field label="地形预设" title="一键换一类世界（会重新生成）">
+      <Field label="地形预设" title="一键换一类世界的参数，点「生成」后生效">
         <Dropdown :options="W.PRESETS.map((x, i) => ({ value: i, label: x.name, desc: x.desc }))" :model-value="ws.preset" placeholder="自定义" @update:model-value="W.applyPreset" />
       </Field>
       <Field label="命名" title="地名的世界观：同一个地名在中英日三种语言里意思一致">
-        <Dropdown :options="NAMING_STYLES.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => { p.naming = n; W.generate(true) }" />
+        <Dropdown :options="NAMING_STYLES.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => W.setParam('naming', n)" />
       </Field>
-      <button type="button" class="primary" :class="{ dirty: ws.dirty }" :disabled="ws.busy" @click="W.generate()">
-        {{ t(ws.dirty ? '按新参数生成' : '生成世界') }}
-      </button>
       <Fold label="高级参数" id="advanced">
         <Field label="分辨率"><Seg v-model="res" :options="RES" /></Field>
+        <Legend
+          :items="[
+            { label: '全球图', on: isGlobe(p), title: '横跨 360° 经度的世界全图：比例尺按赤道，高度随纬度范围' },
+            { label: '地球底图', on: !!p.earth, title: '大陆、山脉与海深取自真实地球（ETOPO1）；陆地比例、板块数不再起作用' },
+          ]"
+          @toggle="(i) => (i ? W.setParam('earth', !p.earth) : W.setParam('globe', !isGlobe(p)))"
+        />
         <Scale
           v-for="s in worldScales"
           :key="s.key"
           v-bind="s"
           :model-value="p[s.key]"
-          :reset="DEFAULT_PARAMS[s.key]"
+          :reset="(ws.applied ?? DEFAULT_PARAMS)[s.key]"
+          reset-tip="双击回到当前生成的值"
           @update:model-value="(x) => W.setParam(s.key, x)"
         />
         <button type="button" class="link" @click="W.resetParams()">{{ t('恢复默认参数') }}</button>
       </Fold>
     </Section>
 
-    <div v-if="ws.info" class="cartouche">
+    <div v-if="ws.info" v-show="ws.tab === 'stats'" class="cartouche">
       <div class="cartouche-title">
         <span>{{ ws.info.title }}</span><small>{{ ws.info.time }}</small>
       </div>
@@ -169,7 +172,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </dl>
     </div>
 
-    <Section v-if="ws.mode === '3d'" title="沙盘">
+    <Section v-if="ws.mode === '3d'" v-show="ws.tab === 'view'">
       <Legend :items="toggles3d" @toggle="(i) => W.set3d({ [toggleKeys[i]]: !v[toggleKeys[i]] })" />
       <Scale label="垂直夸张" :min="4" :max="60" :step="1" :reset="28" :fmt="(x) => `×${x}`" :model-value="v.exaggeration" @update:model-value="(x) => W.set3d({ exaggeration: x })" />
       <Scale
@@ -201,7 +204,8 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </Field>
       <Scale label="阴影柔和" :min="0" :max="10" :step="0.5" :reset="3" :fmt="(x) => x.toFixed(1)" :model-value="v.shadowSoftness" @update:model-value="(x) => W.set3d({ shadowSoftness: x })" />
       <Fold label="滤镜" id="lookOpen">
-        <Seg :cols="4" :options="LOOKS.map((l) => ({ value: l.id, label: l.name }))" :model-value="ws.lookId" @update:model-value="W.pickLook" />
+        <!-- 滤镜名称：中文四列放得下，英文、日文的长名称（Cine tungsten、シネ タングステン）用两列 -->
+        <Seg :cols="langRef === 'zh' ? 4 : 2" :options="LOOKS.map((l) => ({ value: l.id, label: l.name }))" :model-value="ws.lookId" @update:model-value="W.pickLook" />
         <Scale
           v-for="s in lookScales"
           :key="s.key"
@@ -213,12 +217,16 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </Fold>
     </Section>
 
-    <Section v-if="ws.mode === '2d'" title="纸图风格">
+    <Section v-if="ws.mode === '2d'" v-show="ws.tab === 'view'">
       <Swatches :items="atlasSwatches" :model-value="ws.atlasStyle" @update:model-value="W.setAtlasStyle" />
-      <Legend :items="atlasToggles" @toggle="(i) => W.setAtlasOpt(atlasKeys[i], !ws.atlasOpts[atlasKeys[i]])" />
+      <Legend :items="atlasToggles" @toggle="(i) => (i < atlasKeys.length ? W.setAtlasOpt(atlasKeys[i], !ws.atlasOpts[atlasKeys[i]]) : W.setOrnaments(!ws.ornaments))" />
     </Section>
 
-    <Section v-if="ws.mode === 'edit'" title="编辑">
+    <Section v-if="ws.mode === 'areas'" v-show="ws.tab === 'view'">
+      <AreaPanel />
+    </Section>
+
+    <Section v-if="ws.mode === 'edit'" v-show="ws.tab === 'view'">
       <Seg :cols="3" :options="TOOLS" :model-value="ws.tool" @update:model-value="W.setTool" />
       <Field label="底图">
         <Dropdown :options="EDIT_VIEWS" :model-value="ws.editView" @update:model-value="W.setEditView" />

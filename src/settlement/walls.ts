@@ -6,6 +6,7 @@ import type { Road, Wall } from './types'
 import { addRoad, nearestRoad, through } from './roads'
 import { touchesSea, type TerrainResult } from './terrain'
 import { demolish, drop, removable } from './undo'
+import * as dmath from '../gen/dmath'
 
 export const toF32 = (line: P[]) => Float32Array.from(line.flat())
 /** 闭合环的 Douglas–Peucker 简化（结果不重复首点） */
@@ -107,7 +108,7 @@ export function bastioned(loop: P[], scale = 1): P[] {
     const o2: P = ccw ? [e2[1], -e2[0]] : [-e2[1], e2[0]]
     let nx = o1[0] + o2[0]
     let ny = o1[1] + o2[1]
-    const nl = Math.hypot(nx, ny) || 1
+    const nl = dmath.hypot(nx, ny) || 1
     nx /= nl
     ny /= nl
     const f1: P = [v[0] - e1[0] * a, v[1] - e1[1] * a]
@@ -132,11 +133,11 @@ export function insetLoop(loop: P[], d: number): P[] {
     const q = loop[(i + 1) % n]
     const e1 = [v[0] - p[0], v[1] - p[1]]
     const e2 = [q[0] - v[0], q[1] - v[1]]
-    const l1 = Math.hypot(e1[0], e1[1]) || 1
-    const l2 = Math.hypot(e2[0], e2[1]) || 1
+    const l1 = dmath.hypot(e1[0], e1[1]) || 1
+    const l2 = dmath.hypot(e2[0], e2[1]) || 1
     const nx = (-e1[1] / l1 - e2[1] / l2) * s
     const ny = (e1[0] / l1 + e2[0] / l2) * s
-    const nl = Math.hypot(nx, ny) || 1
+    const nl = dmath.hypot(nx, ny) || 1
     return [v[0] + (nx / nl) * d, v[1] + (ny / nl) * d] as P
   })
 }
@@ -282,7 +283,7 @@ export function wallFromLoop(
       if (!solid[hit.k] || gates.some((g) => dist(g.p, gp) < 20)) return
       loop.splice(hit.k + 1, 0, gp)
       solid.splice(hit.k + 1, 0, solid[hit.k])
-      gates.push({ p: gp, angle: Math.atan2(road[s + 1][1] - road[s][1], road[s + 1][0] - road[s][0]), road: ri })
+      gates.push({ p: gp, angle: dmath.atan2(road[s + 1][1] - road[s][1], road[s + 1][0] - road[s][0]), road: ri })
       return
     }
   })
@@ -309,8 +310,8 @@ export function wallFromLoop(
       tryTower(cur, 4)
       continue
     }
-    const a1 = Math.atan2(cur[1] - prev[1], cur[0] - prev[0])
-    const a2 = Math.atan2(next[1] - cur[1], next[0] - cur[0])
+    const a1 = dmath.atan2(cur[1] - prev[1], cur[0] - prev[0])
+    const a2 = dmath.atan2(next[1] - cur[1], next[0] - cur[0])
     let turn = Math.abs(a2 - a1)
     if (turn > Math.PI) turn = Math.PI * 2 - turn
     if (turn > (kind === 'stone' ? 0.2 : 0.45)) corners.push({ p: cur, turn })
@@ -347,7 +348,7 @@ export function wallFromLoop(
   const wall = addWall(ctx, { loop, solid, towers, gates: gates.map(({ p, angle }) => ({ p, angle })), kind, thickness }, 'city')
   // 城门名按它在城的哪一面（相对墙圈中心的方位），不按穿墙那段路的走向（路可能斜着进城）
   const wc = loop.reduce((a, q) => [a[0] + q[0] / loop.length, a[1] + q[1] / loop.length], [0, 0] as P)
-  for (const g of gates) ctx.out.landmarks.push({ p: g.p, name: ctx.namer.gate(Math.atan2(g.p[1] - wc[1], g.p[0] - wc[0])), kind: 'gate' })
+  for (const g of gates) ctx.out.landmarks.push({ p: g.p, name: ctx.namer.gate(dmath.atan2(g.p[1] - wc[1], g.p[0] - wc[0])), kind: 'gate' })
   // 瓮城：按干道先后给城门加，放不下的城门跳过
   const withBarbican: P[] = []
   if (kind === 'stone') {
@@ -396,7 +397,7 @@ function moatOf(ctx: Ctx, wall: Wall, barbicans: P[]): Wall['moat'] {
     let q = e
     for (let k = 0; k < 20; k++) {
       const g = T.waterGrad(q)
-      const L = Math.hypot(g[0], g[1]) || 1
+      const L = dmath.hypot(g[0], g[1]) || 1
       const nq: P = [q[0] - (g[0] / L) * 3, q[1] - (g[1] / L) * 3]
       if (crossesWall(q, nq)) return []
       pts.push(nq)
@@ -497,7 +498,7 @@ function barbican(ctx: Ctx, gp: P, loop: P[], road: P[], thickness: number): boo
   const outline: P[] = round
     ? Array.from({ length: 11 }, (_, k) => {
         const th = Math.PI * (1 - k / 10)
-        return at(Math.cos(th) * hw, Math.sin(th) * d)
+        return at(dmath.cos(th) * hw, dmath.sin(th) * d)
       })
     : [at(-hw, 0), at(-hw, d), at(hw, d), at(hw, 0)]
   // 两端要落在实心墙上、整圈在陆上，也不能压到别的瓮城
@@ -514,7 +515,7 @@ function barbican(ctx: Ctx, gp: P, loop: P[], road: P[], thickness: number): boo
       const dd = dist(p, gp)
       if (dd < best && dd > d * 0.5) {
         best = dd
-        gate = { k, p, angle: Math.atan2(road[s + 1][1] - road[s][1], road[s + 1][0] - road[s][0]) }
+        gate = { k, p, angle: dmath.atan2(road[s + 1][1] - road[s][1], road[s + 1][0] - road[s][0]) }
       }
     }
   // 外门离两端太近（贴着城墙）就不像样了
@@ -766,7 +767,7 @@ export function connectGates(ctx: Ctx, walls: Wall[]) {
 function buildAccess(ctx: Ctx, w: Wall, g: Wall['gates'][number], r: GateRoute) {
   if (dist(g.p, r.p) > 0.5) {
     g.p = r.p
-    g.angle = Math.atan2(r.n[1], r.n[0])
+    g.angle = dmath.atan2(r.n[1], r.n[0])
     w.towers = w.towers.filter((t) => dist(t, r.p) > 8)
   }
   if (!w.loop.some((v) => dist(v, g.p) < 0.5)) {

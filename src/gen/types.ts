@@ -1,3 +1,4 @@
+import type { Area } from './areas'
 export interface WorldParams {
   seed: string
   width: number
@@ -19,8 +20,43 @@ export interface WorldParams {
   latSouth: number
   /** 海岸破碎度 0 ~ 1 */
   coastRoughness: number
+  /**
+   * 全球图：横向覆盖 360° 经度（等经纬度格子，比例尺按赤道），高度由纬度范围定（见 globeHeight）。
+   * 不开时地图宽 6000 公里，经度按中纬度换算
+   */
+  globe?: boolean
+  /** 地球底图：大陆与海深取自真实地球（ETOPO1），只在全球图下有效；陆地比例、板块数这些不再起作用 */
+  earth?: boolean
   /** 命名世界观（auto 按种子挑） */
   naming: NamingStyle
+}
+
+/** 区域图的宽度（公里）；全球图按赤道一周 */
+export const MAP_KM = 6000
+export const EQUATOR_KM = 40075
+
+/**
+ * 晕渲、3D 高度换算用的每格公里数（垂直夸张）：全球图每格几十公里，按真实坡度晕渲几乎看不出起伏。
+ * 像小比例尺地图那样放大起伏，但不放到区域图那么强（那样整张世界图显得过于崎岖）：
+ * 每格公里数超出区域图的部分只按四次方根计入（全球图约放大 4 倍）；区域图就是真实比例
+ */
+export const reliefKm = (world: Pick<World, 'W' | 'kmPerCell'>) => {
+  const ref = MAP_KM / world.W
+  return world.kmPerCell <= ref ? world.kmPerCell : ref * Math.sqrt(Math.sqrt(world.kmPerCell / ref))
+}
+
+/** 是不是全球图（地球底图总是全球图） */
+export const isGlobe = (p: Pick<WorldParams, 'globe' | 'earth'>) => !!(p.globe || p.earth)
+
+/** 全球图的高度：宽度对应 360° 经度，高度对应纬度范围（等经纬度格子）；不是全球图时宽高比 1.6 */
+export function globeHeight(p: Pick<WorldParams, 'width' | 'latNorth' | 'latSouth' | 'globe' | 'earth'>) {
+  return isGlobe(p) ? Math.max(64, Math.round((p.width * Math.abs(p.latNorth - p.latSouth)) / 360)) : Math.round(p.width * 0.625)
+}
+
+/** 参数里可以推导的部分就地补齐：地球底图总是全球图；高度由宽度（全球图再加纬度范围）定。改动 width、纬度、globe、earth 之后调用 */
+export function normalizeParams(p: WorldParams) {
+  if (p.earth) p.globe = true
+  p.height = globeHeight(p)
 }
 
 export type NamingStyle = 'auto' | 'fantasy' | 'epic' | 'eastern' | 'wa'
@@ -38,6 +74,8 @@ export const DEFAULT_PARAMS: WorldParams = {
   latNorth: 64,
   latSouth: 14,
   coastRoughness: 0.55,
+  globe: false,
+  earth: false,
   naming: 'auto',
 }
 
@@ -153,6 +191,8 @@ export interface WorldEdits {
   worldNameJa?: string
   /** 地形编辑的版本号：变了才需要重算侵蚀 */
   terrainRev?: number
+  /** 有名字的区域（区域视图里改过就存完整的列表，替换自动推断的；见 gen/areas.ts）。不影响地形，不发给生成线程 */
+  areas?: Area[]
 }
 
 export interface World {

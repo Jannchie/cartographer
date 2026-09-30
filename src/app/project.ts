@@ -1,3 +1,4 @@
+import type { Area } from '../gen/areas'
 import type { Label, WorldEdits, WorldParams } from '../gen/types'
 
 /**
@@ -19,6 +20,7 @@ export interface ProjectDoc {
       worldName?: string
       worldNameZh?: string
       worldNameJa?: string
+      areas?: Area[]
     }
   }
 }
@@ -51,6 +53,7 @@ export async function serializeProject(params: WorldParams, edits: WorldEdits): 
   e.worldName = edits.worldName
   e.worldNameZh = edits.worldNameZh
   e.worldNameJa = edits.worldNameJa
+  if (edits.areas) e.areas = edits.areas
   return JSON.stringify(doc)
 }
 
@@ -71,6 +74,7 @@ export async function parseProject(text: string): Promise<{ params: WorldParams;
   edits.worldName = e.worldName
   edits.worldNameZh = e.worldNameZh
   edits.worldNameJa = e.worldNameJa
+  if (e.areas) edits.areas = e.areas
   return { params: doc.world.params, edits }
 }
 
@@ -106,11 +110,12 @@ export function resampleEdits(edits: WorldEdits, W0: number, H0: number, W: numb
     worldNameZh: edits.worldNameZh,
     worldNameJa: edits.worldNameJa,
     terrainRev: (edits.terrainRev ?? 0) + 1,
+    areas: edits.areas?.map((a) => ({ ...a, poly: a.poly.map(([x, y]) => [x * sx, y * sy] as [number, number]), at: [a.at[0] * sx, a.at[1] * sy] as [number, number] })),
   }
 }
 
 export function hasEdits(e: WorldEdits) {
-  return !!(e.terrain || e.temp || e.rain || e.labels || e.regions)
+  return !!(e.terrain || e.temp || e.rain || e.labels || e.regions || e.areas)
 }
 
 /** 撤销用的快照（数组复制一份） */
@@ -126,6 +131,7 @@ export function snapshotEdits(e: WorldEdits): WorldEdits {
     worldNameZh: e.worldNameZh,
     worldNameJa: e.worldNameJa,
     terrainRev: e.terrainRev,
+    areas: e.areas?.map((a) => ({ ...a, poly: a.poly.map((p) => [p[0], p[1]] as [number, number]), at: [a.at[0], a.at[1]] as [number, number] })),
   }
 }
 

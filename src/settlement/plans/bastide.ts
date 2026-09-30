@@ -4,6 +4,7 @@ import type { Ward, WardType } from '../types'
 import { addBuilding, addGroup, scatterTrees } from '../wards'
 import { buildable, rectOutline as box, RESIDENTIAL, uvLine } from './common'
 import type { CityPlan, PlanRoad, PlanZone } from './types'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 方格新城（bastide，13~14 世纪法国西南部的设防新镇，如 Monpazier，缩到地图的尺度）：
@@ -97,7 +98,7 @@ function makeGrid(ctx: Ctx, z: Pick<PlanZone, 'R' | 'fromUV' | 'shift'>): Grid {
     const [v0, v1] = span(j, PV / 2, BV)
     const uc = (u0 + u1) / 2
     const vc = (v0 + v1) / 2
-    if ((Math.abs(uc - su) / U1) ** 4 + (Math.abs(vc - sv) / V1) ** 4 > 1) return 0
+    if (dmath.pow(Math.abs(uc - su) / U1, 4) + dmath.pow(Math.abs(vc - sv) / V1, 4) > 1) return 0
     const pts = [
       z.fromUV(uc, vc),
       z.fromUV(u0 * 0.7 + u1 * 0.3, v0 * 0.7 + v1 * 0.3),
@@ -309,7 +310,7 @@ export const bastide: CityPlan = {
   },
   exit(_ctx, z, dir) {
     // 从广场的角上起，沿最接近原方向的那条大街出城
-    const [du, dv] = z.toUV([z.c[0] + Math.cos(dir), z.c[1] + Math.sin(dir)])
+    const [du, dv] = z.toUV([z.c[0] + dmath.cos(dir), z.c[1] + dmath.sin(dir)])
     const su = Math.sign(du) || 1
     const sv = Math.sign(dv) || 1
     const alongU = Math.abs(du) >= Math.abs(dv)
@@ -326,7 +327,7 @@ export const bastide: CityPlan = {
       const [a, b] = cellOf(z, l.site)
       return a === i && b === j && z.contains(l.site)
     })
-    const c = lots.find((l) => Math.hypot(l.uv[0], l.uv[1]) < 1)
+    const c = lots.find((l) => dmath.hypot(l.uv[0], l.uv[1]) < 1)
     if (c && c.type !== 'market' && c.type !== 'magic') c.type = 'plaza'
     // 教堂：广场斜对角的一个街坊，后殿朝东（街坊的长边沿 u）
     const east = z.toUV([z.c[0] + 1, z.c[1]])
@@ -380,7 +381,7 @@ function wallLoop(ctx: Ctx, outline: P[]): P[] {
   // 各边的外法向（局部坐标）
   const nrm = outline.map((a, k) => {
     const b = outline[(k + 1) % n]
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    const L = dmath.hypot(b[0] - a[0], b[1] - a[1]) || 1
     const d: P = [(b[0] - a[0]) / L, (b[1] - a[1]) / L]
     return (s > 0 ? [d[1], -d[0]] : [-d[1], d[0]]) as P
   })
@@ -396,8 +397,8 @@ function wallLoop(ctx: Ctx, outline: P[]): P[] {
     const b = off[(k + 1) % n]
     const cross = (q[0] - a[0]) * (b[1] - q[1]) - (q[1] - a[1]) * (b[0] - q[0])
     const convex = cross * s > 0
-    const la = Math.hypot(q[0] - a[0], q[1] - a[1])
-    const lb = Math.hypot(b[0] - q[0], b[1] - q[1])
+    const la = dmath.hypot(q[0] - a[0], q[1] - a[1])
+    const lb = dmath.hypot(b[0] - q[0], b[1] - q[1])
     const c = Math.min(14, la * 0.3, lb * 0.3)
     if (convex && c > 3) {
       out.push([q[0] + ((a[0] - q[0]) / la) * c, q[1] + ((a[1] - q[1]) / la) * c])
@@ -472,7 +473,7 @@ function square(ctx: Ctx, z: PlanZone, trade: boolean) {
   // 摊位：棚外的空场上，靠着棚的两端
   const stalls = (ctx.p.size === 'city' ? 10 : 6) * (trade ? 2 : 1)
   const rng = ctx.rng
-  const axis: P = [Math.cos(z.angle), Math.sin(z.angle)]
+  const axis: P = [dmath.cos(z.angle), dmath.sin(z.angle)]
   const room = h - ARCADE - hu / 2 - 7
   if (room > 0)
     for (let m = 0, t = 0; m < stalls && t < stalls * 6; t++) {

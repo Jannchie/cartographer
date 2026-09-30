@@ -7,14 +7,15 @@ import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type H
 import { nameRealms, realmMap, type RealmMap } from './realms'
 import { Noise } from './noise'
 import { RNG, hashString } from './rng'
-import { buildTerrain } from './terrain'
-import { Biome, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
+import { buildEarthTerrain, buildTerrain } from './terrain'
+import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
+import { Biome, EQUATOR_KM, isGlobe, MAP_KM, reliefKm, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
 import { blur, edt, neighbors8 } from './util'
+import * as dmath from './dmath'
 
 export type Progress = (stage: string, frac: number) => void
 
 /** 地图物理宽度（km） */
-const MAP_KM = 6000
 
 /** 侵蚀调参（离线脚本可覆盖） */
 export const TUNE = { cBase: 1.3, cIters: 80, ckf: 0.14, cUplift: 0.07, cDiff: 0.02, spIters: 6, kf: 0.0028, uplift: 0.012, diffusion: 0.015, drops: 0.45 }
@@ -38,7 +39,7 @@ export interface WorldCache {
 
 /** 影响地形阶段的参数与地形编辑版本 */
 export function terrainKey(p: WorldParams, edits?: WorldEdits) {
-  return JSON.stringify([p.seed, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, edits?.terrain ? edits.terrainRev ?? 1 : 0])
+  return JSON.stringify([p.seed, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, !!p.globe, !!p.earth, edits?.terrain ? edits.terrainRev ?? 1 : 0])
 }
 
 export function generateWorld(p: WorldParams, progress: Progress = () => {}, edits: WorldEdits = {}, cache?: WorldCache): World {
@@ -46,7 +47,8 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   const W = p.width
   const H = p.height
   const N = W * H
-  const kmPerCell = MAP_KM / W
+  // 全球图：宽度是赤道一周
+  const kmPerCell = (isGlobe(p) ? EQUATOR_KM : MAP_KM) / W
   const rng = new RNG(hashString(p.seed))
   const rTerrain = rng.fork()
   const rErode = rng.fork()
@@ -81,10 +83,12 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   const pk = gk + '|' + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
   let places = cache?.places?.key === pk ? cache.places : undefined
   if (!places) {
+    // 国界、道路的坡度代价按晕渲同样的夸张比例算：全球图每格几十公里，真实坡度太缓，道路会直接翻山
+    const slopeKm = reliefKm({ W, kmPerCell })
     progress('划分政区', 0.96)
-    const map = realmMap(elev, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W), rPlace.fork())
+    const map = realmMap(elev, hydro.flow, labels, W, H, slopeKm, riverThreshold(W), rPlace.fork())
     progress('道路与航线', 0.97)
-    const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, kmPerCell, riverThreshold(W))
+    const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, slopeKm, riverThreshold(W))
     places = { key: pk, map, roads }
     if (cache) cache.places = places
   }
@@ -189,7 +193,7 @@ function groundStage(
   const precipitation = precipitationField(p, elev, temperature, W, H, kmPerCell, rClimate.fork())
   // 气候编辑：气温偏移、降水倍率
   if (edits.temp && edits.temp.length === N) for (let i = 0; i < N; i++) temperature[i] += edits.temp[i]
-  if (edits.rain && edits.rain.length === N) for (let i = 0; i < N; i++) precipitation[i] *= Math.exp(edits.rain[i])
+  if (edits.rain && edits.rain.length === N) for (let i = 0; i < N; i++) precipitation[i] *= dmath.exp(edits.rain[i])
 
   // —— 水文 ——
   progress('汇流、湖泊与内流盆地', 0.82)
@@ -200,7 +204,7 @@ function groundStage(
     const e = pet(temperature[i])
     // Budyko 型径流：干旱区几乎全部蒸发
     const aridity = e / pr
-    const ratio = Math.pow(1 + Math.pow(aridity, 2.2), -1 / 2.2)
+    const ratio = dmath.pow(1 + dmath.pow(aridity, 2.2), -1 / 2.2)
     runoff[i] = elev[i] > 0 ? (pr * ratio) / 1000 : 0
     lakeEvap[i] = (Math.max(0, e * 1.05 - pr * 0.9)) / 1000
   }
@@ -244,7 +248,7 @@ function groundStage(
     for (const c of lk.dryCells) if (elev[c] < lk.level + 0.12) saltSet[c] = 1
   }
   const flowNear = new Float32Array(N)
-  for (let i = 0; i < N; i++) flowNear[i] = Math.log1p(hydro.flow[i])
+  for (let i = 0; i < N; i++) flowNear[i] = dmath.log1p(hydro.flow[i])
   blur(flowNear, W, H, 2, 2)
   for (let i = 0; i < N; i++) {
     const h = elev[i]
@@ -285,7 +289,7 @@ function terrainStage(
 ): TerrainStage {
   const N = W * H
   progress('板块运动与造山', 0.02)
-  const terr = buildTerrain(p, rTerrain, kmPerCell)
+  const terr = p.earth ? buildEarthTerrain(p, rTerrain) : buildTerrain(p, rTerrain, kmPerCell)
   const elev = terr.elev
   // 地形编辑：在侵蚀之前叠加"意图"，抬高的地方同时获得构造抬升，侵蚀后仍能保持山体
   if (edits.terrain && edits.terrain.length === N) {
@@ -301,7 +305,8 @@ function terrainStage(
   progress('填平噪声洼地', 0.18)
   fillSmallDepressions(elev, W, H, 60, 0.06)
 
-  const cIters = Math.round(TUNE.cIters * Math.min(1.5, p.erosion))
+  // 地球底图已是真实地形：不做会整体改形的粗尺度抬升侵蚀，只做后面的细部侵蚀
+  const cIters = p.earth ? 0 : Math.round(TUNE.cIters * Math.min(1.5, p.erosion))
   if (cIters > 0) {
     // 整个大陆都在缓慢抬升（均衡），造山带抬升更快
     const up = new Float32Array(N)
@@ -390,7 +395,7 @@ function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number)
       const i = y * W + x
       const gx = (elev[i + 1] - elev[i - 1]) / (2 * kmPerCell)
       const gy = (elev[i + W] - elev[i - W]) / (2 * kmPerCell)
-      s[i] = Math.hypot(gx, gy)
+      s[i] = dmath.hypot(gx, gy)
     }
   }
   return s
@@ -398,7 +403,7 @@ function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number)
 
 /** 河流阈值：以 1024 宽为基准的汇流量 */
 export function riverThreshold(W: number) {
-  return 90 * (W / 1024) ** 2
+  return 90 * dmath.pow(W / 1024, 2)
 }
 
 /** 从汇流场提取河流折线：从每个源头向下游追踪，直到入海、入湖或汇入已有河道 */
@@ -528,7 +533,7 @@ function carveRivers(elev: Float32Array, hydro: HydroResult, W: number, H: numbe
   const cut = new Float32Array(N)
   for (let i = W + 1; i < N - W - 1; i++) {
     if (elev[i] <= 0 || lakeId[i] >= 0 || flow[i] < thr) continue
-    const d = Math.min(0.06, 0.012 * Math.log(flow[i] / thr + 1))
+    const d = Math.min(0.06, 0.012 * dmath.log(flow[i] / thr + 1))
     cut[i] = Math.max(cut[i], d)
     for (let k = 0; k < 8; k++) cut[i + off[k]] = Math.max(cut[i + off[k]], d * 0.45)
   }
@@ -605,7 +610,7 @@ function makeLabels(
       syy += y * y
       sxy += x * y
     }
-    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy)
+    const ang = 0.5 * dmath.atan2(2 * sxy, sxx - syy)
     const tr = (sxx + syy) / cells.length
     const det = (sxx * syy - sxy * sxy) / (cells.length * cells.length)
     const l1 = tr / 2 + Math.sqrt(Math.max(0, (tr * tr) / 4 - det))
@@ -662,7 +667,7 @@ function makeLabels(
     const x = s.i % W
     const y = Math.floor(s.i / W)
     const minSep = Math.max(90, s.d * 3.2)
-    if (chosenSea.some((c) => Math.hypot(c.x - x, c.y - y) < Math.max(minSep, c.d * 3))) continue
+    if (chosenSea.some((c) => dmath.hypot(c.x - x, c.y - y) < Math.max(minSep, c.d * 3))) continue
     chosenSea.push({ x, y, d: s.d })
     if (chosenSea.length >= 6) break
   }
@@ -679,10 +684,8 @@ function makeLabels(
   })
 
   // —— 山脉：高海拔区域的连通块，沿主轴标注 ——
-  const hi = new Float32Array(N)
-  for (let i = 0; i < N; i++) hi[i] = elev[i] > 0 ? elev[i] : 0
-  blur(hi, W, H, 3, 2)
-  const ranges = components((i) => hi[i] > 1.35)
+  const hi = highlandField(elev, W, H)
+  const ranges = components((i) => hi[i] > RANGE_HI)
   ranges.sort((a, b) => b.length - a.length)
   for (const cells of ranges.slice(0, 10)) {
     if (cells.length < 180) break
@@ -691,7 +694,7 @@ function makeLabels(
     let best = cells[0]
     let bd = Infinity
     for (const c of cells) {
-      const d = (c % W - mx) ** 2 + (Math.floor(c / W) - my) ** 2
+      const d = dmath.pow(c % W - mx, 2) + dmath.pow(Math.floor(c / W) - my, 2)
       if (d < bd) {
         bd = d
         best = c
@@ -715,7 +718,7 @@ function makeLabels(
   }
 
   // —— 沙漠与大森林 ——
-  const deserts = components((i) => biome[i] === Biome.HotDesert || biome[i] === Biome.ColdDesert || biome[i] === Biome.SaltFlat)
+  const deserts = components((i) => isDesertBiome(biome[i]))
   deserts.sort((a, b) => b.length - a.length)
   for (const cells of deserts.slice(0, 4)) {
     if (cells.length < 700) break
@@ -723,7 +726,7 @@ function makeLabels(
     const c = nearestIn(cells, mx, my, W)
     labels.push({ kind: 'desert', ...tri(namer.name('desert')), x: c % W, y: Math.floor(c / W), angle: 0, weight: cells.length * 0.4, span: major })
   }
-  const forests = components((i) => biome[i] === Biome.TropicalRainforest || biome[i] === Biome.TemperateRainforest || biome[i] === Biome.Taiga)
+  const forests = components((i) => isForestBiome(biome[i]))
   forests.sort((a, b) => b.length - a.length)
   for (const cells of forests.slice(0, 3)) {
     if (cells.length < 1500) break
@@ -768,13 +771,13 @@ function makeLabels(
       const t = T[i]
       const pr = P[i]
       let s = 0
-      s += Math.exp(-(((t - 15) / 9) ** 2)) * 2
+      s += dmath.exp(-dmath.pow((t - 15) / 9, 2)) * 2
       s += Math.min(1, pr / 700) - Math.max(0, (pr - 2600) / 2000)
       s -= h * 0.8
       const lat = Math.abs(latitudeOf(p, y, H))
       s -= Math.max(0, lat - 55) * 0.05
       // 河流、海港、湖岸加分
-      if (hydro.flow[i] > thr) s += 0.9 + 0.25 * Math.log(hydro.flow[i] / thr)
+      if (hydro.flow[i] > thr) s += 0.9 + 0.25 * dmath.log(hydro.flow[i] / thr)
       if (coastDist[i] > 0 && coastDist[i] < 2.2) s += 1.1
       let nearLake = false
       for (let k = 0; k < 8; k++) if (hydro.lakeId[i + off[k] * 2] >= 0) nearLake = true
@@ -782,7 +785,7 @@ function makeLabels(
       // 平坦
       const gx = elev[i + 1] - elev[i - 1]
       const gy = elev[i + W] - elev[i - W]
-      s -= Math.hypot(gx, gy) * 6
+      s -= dmath.hypot(gx, gy) * 6
       score[i] = s + rng.next() * 0.35
     }
   }
@@ -798,7 +801,7 @@ function makeLabels(
   for (const i of cand) {
     const x = i % W
     const y = Math.floor(i / W)
-    if (cities.some((c) => (c.x - x) ** 2 + (c.y - y) ** 2 < minSep * minSep)) continue
+    if (cities.some((c) => dmath.pow(c.x - x, 2) + dmath.pow(c.y - y, 2) < minSep * minSep)) continue
     const lid = landIdOf[i]
     const capital = !capitalOf.has(lid) && lid >= 0 && lands[lid].length > 1500
     if (capital) capitalOf.add(lid)
@@ -813,7 +816,7 @@ function nearestIn(cells: number[], mx: number, my: number, W: number) {
   let best = cells[0]
   let bd = Infinity
   for (const c of cells) {
-    const d = (c % W - mx) ** 2 + (Math.floor(c / W) - my) ** 2
+    const d = dmath.pow(c % W - mx, 2) + dmath.pow(Math.floor(c / W) - my, 2)
     if (d < bd) {
       bd = d
       best = c

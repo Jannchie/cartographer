@@ -8,6 +8,7 @@ import type { PlanZone } from './types'
 import { garan } from '../compose/wa'
 import { composer, type Elem, type Preset } from '../compose/core'
 import { addWall, connectGates } from '../walls'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 城下町的填法：城堡（堀、石垣、本丸与天守）、武家屋敷、町屋、寺院、枡形。
@@ -107,7 +108,7 @@ export function tenshu(ctx: Ctx, F: Frame, a: number, b: number, s: number, side
   const smalls = form.small.map(([x, y]) => bx(x, y, kh, kw))
   const bases = [main, ...smalls, ...form.extra, ...form.bridges]
   const tone = ctx.rng.next()
-  const ridge = Math.atan2(F.l[1], F.l[0])
+  const ridge = dmath.atan2(F.l[1], F.l[0])
   const tiers: Poly[] = [...bases]
   // 重层：一重比一重小，叠在一起看出层层收分的屋顶（重数随大小：小的天守最多三重）
   const n = Math.min(C.int('tiers', 3, 5), s < 18 ? 3 : 5)
@@ -215,7 +216,7 @@ export function castle(ctx: Ctx, z: PlanZone, L: Layout) {
   const gateSides = [...new Set([s, ...L.exitSides])]
   const outerGates = gateSides.map((k) => {
     const d = dirOf(z, SIDE_UV[k][0], SIDE_UV[k][1])
-    return { edge: k, p: [z.c[0] + d[0] * wo, z.c[1] + d[1] * wo] as P, angle: Math.atan2(d[1], d[0]) }
+    return { edge: k, p: [z.c[0] + d[0] * wo, z.c[1] + d[1] * wo] as P, angle: dmath.atan2(d[1], d[0]) }
   })
   rampart(ctx, sq(wo), outerGates, sq(mo), mw, th)
   // 二之丸的地面
@@ -231,7 +232,7 @@ export function castle(ctx: Ctx, z: PlanZone, L: Layout) {
   const gl = hh * 0.45 * (hashAt(ctx, z.c, 'jokamachi.gateSide') < 0.5 ? 1 : -1)
   const honmaru: P[] = [at(F, H1, -hh), at(F, H1, hh), at(F, H0, hh), at(F, H0, -hh)]
   const ring: P[] = [at(F, H1 + mc, -hh - mc), at(F, H1 + mc, hh + mc), at(F, H0 - mc, hh + mc), at(F, H0 - mc, -hh - mc)]
-  const fAngle = Math.atan2(F.f[1], F.f[0])
+  const fAngle = dmath.atan2(F.f[1], F.f[0])
   rampart(ctx, honmaru, [{ edge: 0, p: at(F, H1, gl), angle: fAngle }], ring, mi, th)
   emitArea(ctx, 'plazas', box(F, H0 + th / 2, H1 - th / 2, -hh + th / 2, hh - th / 2))
   // 登城路：堀端大街 → 大手门（过外堀的桥）→ 二之丸里拐弯 → 过内堀进本丸
@@ -312,8 +313,8 @@ function masugata(ctx: Ctx, z: PlanZone, L: Layout, m: { side: number; t: number
   const gIn = at(F, r0, m.t)
   if (!ctx.out.roads.some((r) => (r.kind === 'main' || r.kind === 'highway') && polylineDist(gIn, r.line) < 3)) return
   if (outline.some((q) => ctx.T.waterAt(q) < 4) || ctx.occ.overlaps(outline)) return
-  const fA = Math.atan2(F.f[1], F.f[0])
-  const lA = Math.atan2(F.l[1] * m.sgn, F.l[0] * m.sgn)
+  const fA = dmath.atan2(F.f[1], F.f[0])
+  const lA = dmath.atan2(F.l[1] * m.sgn, F.l[0] * m.sgn)
   // 边：0 内侧（r0，t0→t1）、1 横向 t1 边、2 外侧、3 横向 t0 边
   const corners = [at(F, r0, t0), at(F, r0, t1), at(F, r1, t1), at(F, r1, t0)]
   const gOut = at(F, r0 + MASU.turn, m.sgn > 0 ? t1 : t0)

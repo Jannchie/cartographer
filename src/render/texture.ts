@@ -1,4 +1,4 @@
-import { Biome, type World } from '../gen/types'
+import { Biome, reliefKm, type World } from '../gen/types'
 import { PHYSICAL, seabed } from './palette'
 import { drawRivers, type SmoothRiver } from './rivers'
 
@@ -13,11 +13,40 @@ function hash(x: number, y: number) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296
 }
 
+/** 地表贴图的像素（RGBA）：不依赖 DOM，可在生成 Worker 里算好再转移给主线程 */
+export interface TexturePixels {
+  width: number
+  height: number
+  color: Uint8ClampedArray
+  roughness: Uint8ClampedArray
+}
+
 /**
  * 写实地表贴图：群系底色（格间平滑过渡）+ 海拔/坡度/气温决定的岩石与积雪 +
  * 凹凸度暗化（谷暗脊亮）+ 细颗粒噪声。另输出一张粗糙度贴图：河流光滑反光。
  */
 export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale = 2) {
+  return textureCanvases(world, rivers, physicalTexturePixels(world, scale), scale)
+}
+
+/** 像素写进画布，再叠上河谷（主线程） */
+export function textureCanvases(world: World, rivers: SmoothRiver[], px: TexturePixels, scale = 2) {
+  const canvas = document.createElement('canvas')
+  canvas.width = px.width
+  canvas.height = px.height
+  const ctx = canvas.getContext('2d')!
+  ctx.putImageData(new ImageData(px.color as Uint8ClampedArray<ArrayBuffer>, px.width, px.height), 0, 0)
+  const rough = document.createElement('canvas')
+  rough.width = px.width
+  rough.height = px.height
+  rough.getContext('2d')!.putImageData(new ImageData(px.roughness as Uint8ClampedArray<ArrayBuffer>, px.width, px.height), 0, 0)
+  // 河流：只留一道很淡的湿润河谷，河道本身由 3D 河流几何绘制
+  drawRivers(ctx, rivers, world.W, scale, 'rgba(40, 60, 45, 0.25)', 1.4, 2.5)
+  return { color: canvas, roughness: rough }
+}
+
+/** 贴图像素（纯计算） */
+export function physicalTexturePixels(world: World, scale = 2): TexturePixels {
   const { W, H, elevation: e, biome, temperature: T, water } = world
   const N = W * H
   const cr = new Float32Array(N)
@@ -49,19 +78,9 @@ export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale 
 
   const TW = W * scale
   const TH = H * scale
-  const canvas = document.createElement('canvas')
-  canvas.width = TW
-  canvas.height = TH
-  const ctx = canvas.getContext('2d')!
-  const img = ctx.createImageData(TW, TH)
-  const d = img.data
-  const rough = document.createElement('canvas')
-  rough.width = TW
-  rough.height = TH
-  const rctx = rough.getContext('2d')!
-  const rimg = rctx.createImageData(TW, TH)
-  const rd = rimg.data
-  const km = world.kmPerCell
+  const d = new Uint8ClampedArray(TW * TH * 4)
+  const rd = new Uint8ClampedArray(TW * TH * 4)
+  const km = reliefKm(world)
 
   const bil = (a: Float32Array, x0: number, y0: number, fx: number, fy: number) => {
     const i = y0 * W + x0
@@ -118,12 +137,7 @@ export function buildPhysicalTexture(world: World, rivers: SmoothRiver[], scale 
       rd[o + 3] = 255
     }
   }
-  ctx.putImageData(img, 0, 0)
-  rctx.putImageData(rimg, 0, 0)
-
-  // 河流：只留一道很淡的湿润河谷，河道本身由 3D 河流几何绘制
-  drawRivers(ctx, rivers, W, scale, 'rgba(40, 60, 45, 0.25)', 1.4, 2.5)
-  return { color: canvas, roughness: rough }
+  return { width: TW, height: TH, color: d, roughness: rd }
 }
 
 /** 归一化卷积：只用 mask=1 的格求加权平均，并外推到 mask=0 的格 */

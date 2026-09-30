@@ -31,6 +31,7 @@ import { composer } from '../compose/core'
 import { MOSQUE_PRESETS, mosqueForm, mosqueParts, plainMosque, type MosqueForm } from '../compose/islamic'
 import { addWall, connectGates } from '../walls'
 import { planPopOf } from '../scale'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 麦地那（伊斯兰传统城市：非斯、突尼斯、大马士革老城，缩到地图的尺度）。规划不在方格，而在结构与街巷的层级：
@@ -72,7 +73,7 @@ interface State {
 
 function fresh(ctx: Ctx, c: P, S = ctx.cfg.patch * 1.35, m = c, loop: P[] = []): State {
   const qa = hashAt(ctx, c, 'medina.fresh') * Math.PI * 2
-  const s: State = { S, m, loop, exits: [], qibla: [Math.cos(qa), Math.sin(qa)], bathAt: [], tanneries: 0, madrasas: 0, khans: 0, great: 0, palaces: 0 }
+  const s: State = { S, m, loop, exits: [], qibla: [dmath.cos(qa), dmath.sin(qa)], bathAt: [], tanneries: 0, madrasas: 0, khans: 0, great: 0, palaces: 0 }
   ctx.memo.set('medina', s)
   return s
 }
@@ -105,14 +106,14 @@ function wallLoop(ctx: Ctx, c: P, m: P, R: number, S: number): P[] {
   const river = (q: P) => !!T.river && polylineDist(q, T.river.line) < 60
   let rs = Array.from({ length: N }, (_, i) => {
     const a = (i / N) * Math.PI * 2
-    const d: P = [Math.cos(a), Math.sin(a)]
-    const r0 = R * (1 + amp.reduce((s, m, k) => s + m * Math.sin((k + 2) * a + ph[k]), 0))
+    const d: P = [dmath.cos(a), dmath.sin(a)]
+    const r0 = R * (1 + amp.reduce((s, m, k) => s + m * dmath.sin((k + 2) * a + ph[k]), 0))
     let best = r0
     let bs = -Infinity
     for (let f = 0.85; f <= 1.151; f += 0.05) {
       const r = r0 * f
       const q = add(m, d, r)
-      const s = (T.heightAt(q) - h0) * 0.05 - ((r - r0) / R) ** 2 * 8 - (T.slopeAt(q) > 0.35 ? 1 : 0)
+      const s = (T.heightAt(q) - h0) * 0.05 - dmath.pow((r - r0) / R, 2) * 8 - (T.slopeAt(q) > 0.35 ? 1 : 0)
       if (s > bs) {
         bs = s
         best = r
@@ -128,15 +129,15 @@ function wallLoop(ctx: Ctx, c: P, m: P, R: number, S: number): P[] {
   const cm: P = [c[0] - m[0], c[1] - m[1]]
   const need = rs.map((_, i) => {
     const a = (i / N) * Math.PI * 2
-    const t = cm[0] * Math.cos(a) + cm[1] * Math.sin(a)
-    const e2 = cm[0] ** 2 + cm[1] ** 2 - t * t
+    const t = cm[0] * dmath.cos(a) + cm[1] * dmath.sin(a)
+    const e2 = dmath.pow(cm[0], 2) + dmath.pow(cm[1], 2) - t * t
     return e2 < keep * keep ? t + Math.sqrt(keep * keep - e2) : 0
   })
   rs = rs.map((r, i) => Math.max(r, need[i]))
   for (let pass = 0; pass < 3; pass++) rs = rs.map((r, i) => Math.max(need[i], Math.min(r, rs[(i + N - 1) % N] * 0.25 + r * 0.5 + rs[(i + 1) % N] * 0.25)))
   return rs.map((r, i) => {
     const a = (i / N) * Math.PI * 2
-    return add(m, [Math.cos(a), Math.sin(a)], r)
+    return add(m, [dmath.cos(a), dmath.sin(a)], r)
   })
 }
 
@@ -192,9 +193,9 @@ export const medina: CityPlan = {
    */
   exit(ctx, z, dir) {
     const s = st(ctx)
-    const near = s.exits.find((e) => Math.abs(Math.atan2(Math.sin(e.dir - dir), Math.cos(e.dir - dir))) < 0.6)
+    const near = s.exits.find((e) => Math.abs(dmath.atan2(dmath.sin(e.dir - dir), dmath.cos(e.dir - dir))) < 0.6)
     if (near) return near.line
-    const d0: P = [Math.cos(dir), Math.sin(dir)]
+    const d0: P = [dmath.cos(dir), dmath.sin(dir)]
     const key = add(z.c, d0, 100)
     const ph = [0, 1, 2].map((k) => hashAt(ctx, key, 'medina.lanePhase', k) * Math.PI * 2)
     const lam = [55 + hashAt(ctx, key, 'medina.laneLam', 0) * 30, 24 + hashAt(ctx, key, 'medina.laneLam', 1) * 14]
@@ -202,8 +203,8 @@ export const medina: CityPlan = {
     const step = 8
     for (let t = 0; t < z.R * 4; t += step) {
       const ramp = Math.min(1, t / s.S)
-      const a = dir + ramp * (0.5 * Math.sin(t / lam[0] + ph[0]) + 0.28 * Math.sin(t / lam[1] + ph[1]))
-      const q = add(line[line.length - 1], [Math.cos(a), Math.sin(a)], step)
+      const a = dir + ramp * (0.5 * dmath.sin(t / lam[0] + ph[0]) + 0.28 * dmath.sin(t / lam[1] + ph[1]))
+      const q = add(line[line.length - 1], [dmath.cos(a), dmath.sin(a)], step)
       line.push(q)
       if (!z.contains(q)) break
     }
@@ -233,7 +234,7 @@ export const medina: CityPlan = {
       for (let t = S * 0.45; t < L; t += S * 0.85) {
         const { p: q, angle } = pointAt(e.line, t)
         if (!z.contains(q)) break
-        const n: P = [-Math.sin(angle), Math.cos(angle)]
+        const n: P = [-dmath.sin(angle), dmath.cos(angle)]
         for (const sg of [-1, 1]) {
           const p = add(q, n, sg * S * 0.45)
           if (dist(p, z.c) > S * 0.98 && free(p, S * 0.55)) out.push(p)
@@ -477,7 +478,7 @@ export function derbs(ctx: Ctx, block: Poly, spacing: number) {
       if (pts.length >= 4 && rng.next() < 0.45) {
         const m = 2 + Math.floor(rng.next() * (pts.length - 3))
         const d: P = [pts[m][0] - pts[m - 1][0], pts[m][1] - pts[m - 1][1]]
-        const dl = Math.hypot(d[0], d[1]) || 1
+        const dl = dmath.hypot(d[0], d[1]) || 1
         const side = rng.next() < 0.5 ? -1 : 1
         const br = add(pts[m], [(-d[1] / dl) * side, (d[0] / dl) * side], 7 + rng.next() * 6)
         if (ok(pts[m], br)) {
@@ -747,7 +748,7 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
     const a = curtain[i]
     const e = curtain[(i + 1) % curtain.length]
     const m: P = [(a[0] + e[0]) / 2 - c[0], (a[1] + e[1]) / 2 - c[1]]
-    const s = (m[0] * toC[0] + m[1] * toC[1]) / (Math.hypot(...m) || 1)
+    const s = (m[0] * toC[0] + m[1] * toC[1]) / (dmath.hypot(...m) || 1)
     if (s > gd && dist(a, e) > 12) {
       gd = s
       gi = i
@@ -769,7 +770,7 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
       loop: curtain,
       solid: curtain.map(() => true),
       towers,
-      gates: [{ p: [(ga[0] + gb[0]) / 2, (ga[1] + gb[1]) / 2], angle: Math.atan2(gb[1] - ga[1], gb[0] - ga[0]) + Math.PI / 2 }],
+      gates: [{ p: [(ga[0] + gb[0]) / 2, (ga[1] + gb[1]) / 2], angle: dmath.atan2(gb[1] - ga[1], gb[0] - ga[0]) + Math.PI / 2 }],
       kind: 'stone',
       thickness: 3,
     },
@@ -799,7 +800,7 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
   if (court.length < 3) return true
   const b = obb(court)
   // 总督府：离门远的一侧
-  const away: P = [-toC[0] / (Math.hypot(...toC) || 1), -toC[1] / (Math.hypot(...toC) || 1)]
+  const away: P = [-toC[0] / (dmath.hypot(...toC) || 1), -toC[1] / (dmath.hypot(...toC) || 1)]
   const ps = Math.min(34, Math.sqrt(area(court)) * 0.45)
   const pal = fit(
     court,

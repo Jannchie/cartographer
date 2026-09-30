@@ -1,6 +1,7 @@
 import { RNG } from './rng'
 import { priorityFlood } from './hydrology'
 import { neighbors8 } from './util'
+import * as dmath from './dmath'
 
 /**
  * 河流侵蚀：流水功率定律 dh/dt = U - K·A^m·S （Braun & Willett 2013 的隐式解法）。
@@ -82,7 +83,7 @@ export function streamPowerErosion(
       const i = stack[q]
       const r = rec[i]
       if (r === i) continue
-      const f = (kf * (sqrtM ? Math.sqrt(area[i]) : Math.pow(area[i], m))) / recD[i]
+      const f = (kf * (sqrtM ? Math.sqrt(area[i]) : dmath.pow(area[i], m))) / recD[i]
       const hi = elev[i] + upliftRate * uplift[i]
       const hr = elev[r]
       elev[i] = (hi + f * hr) / (1 + f)
@@ -145,7 +146,7 @@ export function dropletErosion(
   let wsum = 0
   for (let y = -radius; y <= radius; y++) {
     for (let x = -radius; x <= radius; x++) {
-      const d = Math.hypot(x, y)
+      const d = dmath.hypot(x, y)
       if (d > radius) continue
       const w = radius - d + 0.2
       bOffA.push(y * W + x)
@@ -203,8 +204,8 @@ export function dropletErosion(
       const len = Math.sqrt(dirX * dirX + dirY * dirY)
       if (len < 1e-9) {
         const a = rng.next() * Math.PI * 2
-        dirX = Math.cos(a)
-        dirY = Math.sin(a)
+        dirX = dmath.cos(a)
+        dirY = dmath.sin(a)
       } else {
         dirX /= len
         dirY /= len

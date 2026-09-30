@@ -2,6 +2,9 @@ import { Noise } from './noise'
 import { RNG } from './rng'
 import type { WorldParams } from './types'
 import { edt, quantile, smoothstep, clamp } from './util'
+import * as dmath from './dmath'
+import { earthElevation } from './earth/index'
+import { latitudeOf } from './climate'
 
 interface Plate {
   x: number
@@ -46,7 +49,7 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       const x = rng.range(-0.1, A + 0.1)
       const y = rng.range(-0.1, 1.1)
       let md = Infinity
-      for (const q of plates) md = Math.min(md, (q.x - x) ** 2 + (q.y - y) ** 2)
+      for (const q of plates) md = Math.min(md, dmath.pow(q.x - x, 2) + dmath.pow(q.y - y, 2))
       if (md > bestD) {
         bestD = md
         best = { x, y }
@@ -54,10 +57,15 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
     }
     const ang = rng.range(0, Math.PI * 2)
     const sp = rng.range(0.25, 1)
-    plates.push({ x: best.x, y: best.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, bias: 0, continental: false })
+    plates.push({ x: best.x, y: best.y, vx: dmath.cos(ang) * sp, vy: dmath.sin(ang) * sp, bias: 0, continental: false })
   }
-  // 挑选大陆板块：数量与陆地比例相当
-  const order = plates.map((_, i) => i).sort(() => rng.next() - 0.5)
+  // 挑选大陆板块：数量与陆地比例相当。先把板块洗牌（Fisher–Yates：只取决于随机数序列；
+  // 用 sort 配随机比较函数的话，结果与抽签次数都随引擎的排序实现而变，同一个种子在不同浏览器里就成了不同的世界）
+  const order = plates.map((_, i) => i)
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rng.next() * (i + 1))
+    ;[order[i], order[j]] = [order[j], order[i]]
+  }
   const nc = Math.max(1, Math.round(K * clamp(p.landRatio * 1.15, 0.1, 0.8)))
   for (let i = 0; i < K; i++) {
     const pl = plates[order[i]]
@@ -127,7 +135,9 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       let i2 = 1
       for (let k = 0; k < K; k++) {
         const pl = plates[k]
-        d2[k] = (pl.x - qu) ** 2 + (pl.y - qv) ** 2
+        const ex = pl.x - qu
+        const ey = pl.y - qv
+        d2[k] = ex * ex + ey * ey
       }
       if (d2[1] < d2[0]) {
         i1 = 1
@@ -145,7 +155,7 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       for (let k = 0; k < K; k++) {
         const dd = d2[k] - d2[i1]
         if (dd > softCut) continue
-        const w = Math.exp(-dd / 0.012)
+        const w = dmath.exp(-dd / 0.012)
         bs += w * plates[k].bias
         ws += w
       }
@@ -165,20 +175,26 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
 
       // 汇聚边界 → 造山带
       const bw = 0.04 * (0.75 + 0.5 * (lf[4] * 0.5 + 0.5))
-      const g = Math.exp(-((bd / bw) ** 2))
-      const gw = Math.exp(-((bd / (bw * 3.2)) ** 2))
+      // dmath.pow(x, 2) 即 x * x，此处直接展开
+      const bg = bd / bw
+      const bgw = bd / (bw * 3.2)
+      const g = dmath.exp(-(bg * bg))
+      const gw = dmath.exp(-(bgw * bgw))
       const up = smoothstep(0.05, 1.1, conv)
       const chain = 0.35 + 0.65 * smoothstep(-0.35, 0.45, lf[5])
-      const r = nMnt.ridged(su * 7, sv * 7, 7)
+      // 离散边界：陆上裂谷、洋底洋中脊
+      const div = smoothstep(0.1, 1, -conv)
+      // ridged ≥ 0：权重恰为 0 的噪声项不求值，结果逐位不变
+      const r = g * up !== 0 || (div !== 0 && landF <= 0.5) ? nMnt.ridged(su * 7, sv * 7, 7) : 0
       let t = g * up * chain * (0.3 + 0.7 * landF) * (0.25 + 1.05 * r)
       // 造山带后方的高原
       t += gw * up * landF * 0.16 * chain
-      // 离散边界：陆上裂谷、洋底洋中脊
-      const div = smoothstep(0.1, 1, -conv)
-      const rg = Math.exp(-((bd / 0.022) ** 2)) * div
+      const br = bd / 0.022
+      const rg = dmath.exp(-(br * br)) * div
       t += rg * (landF > 0.5 ? -0.1 : 0.08 * (0.5 + r))
       // 板块内部的古老褶皱山地（如阿巴拉契亚）
-      const old = nDet.ridged(su * 5, sv * 5, 5) * smoothstep(0.15, 0.55, lf[6]) * 0.3 * landF
+      const oldM = smoothstep(0.15, 0.55, lf[6])
+      const old = oldM === 0 || landF === 0 ? 0 : nDet.ridged(su * 5, sv * 5, 5) * oldM * 0.3 * landF
       t += old
       t *= mStr
 
@@ -186,7 +202,7 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       // 丘陵高地：内陆的脊状起伏，远离海岸更明显，交给侵蚀雕刻成水系
       const inland = smoothstep(0.02, 0.4, cont)
       const upMask = smoothstep(-0.3, 0.4, lf[7])
-      const upland = nDet.ridged(su * 9, sv * 9, 5) * 0.16 * inland * (0.25 + 0.75 * upMask)
+      const upland = inland === 0 ? 0 : nDet.ridged(su * 9, sv * 9, 5) * 0.16 * inland * (0.25 + 0.75 * upMask)
 
       const i = y * W + x
       // 边缘渐沉入海
@@ -204,7 +220,7 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
   const uplift = new Float32Array(N)
   for (let i = 0; i < N; i++) {
     const h = raw[i] - sea
-    elev[i] = h > 0 ? 4.4 * Math.pow(h, 1.25) : 4.8 * h
+    elev[i] = h > 0 ? 4.4 * dmath.pow(h, 1.25) : 4.8 * h
     uplift[i] = Math.max(0, tect[i]) * 4.4
   }
 
@@ -217,7 +233,7 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
     const i = y * W + x
     if (elev[i] < 0.3 || raw[i] - sea < 0.25) continue
     const r = rng.range(0.05, 0.1) * H
-    if (basins.some((q) => Math.hypot(q.x - x, q.y - y) < (q.r + r) * 1.4)) continue
+    if (basins.some((q) => dmath.hypot(q.x - x, q.y - y) < (q.r + r) * 1.4)) continue
     basins.push({ x, y, r })
     b++
   }
@@ -233,10 +249,10 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
         const i = y * W + x
         if (elev[i] <= 0) continue
         const u = x / H, v = y / H
-        let d = Math.hypot(x - b.x, y - b.y) / b.r
+        let d = dmath.hypot(x - b.x, y - b.y) / b.r
         d *= 1 + 0.35 * nB.fbm(u * 6, v * 6, 3)
         const inner = 1 - smoothstep(0.55, 1.0, d)
-        const ring = Math.exp(-(((d - 1.1) / 0.28) ** 2))
+        const ring = dmath.exp(-dmath.pow((d - 1.1) / 0.28, 2))
         const rr = nB.ridged(u * 9, v * 9, 5)
         const floorH = floor + 0.08 * nB.fbm(u * 14, v * 14, 3)
         elev[i] = elev[i] + (floorH - elev[i]) * inner + rim * ring * (0.35 + 0.9 * rr)
@@ -262,10 +278,10 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       const shelfW = (60 + 170 * (nS.fbm(u * 2.5, v * 2.5, 3) * 0.5 + 0.5)) * (1 - 0.75 * act[i])
       const abyss = 4.3 + 0.6 * nS.fbm(u * 3 + 7, v * 3, 4)
       let depth: number
-      if (dk < shelfW) depth = 0.015 + 0.13 * Math.pow(dk / shelfW, 1.6)
-      else depth = 0.145 + (abyss - 0.145) * (1 - Math.exp(-(dk - shelfW) / 260))
+      if (dk < shelfW) depth = 0.015 + 0.13 * dmath.pow(dk / shelfW, 1.6)
+      else depth = 0.145 + (abyss - 0.145) * (1 - dmath.exp(-(dk - shelfW) / 260))
       // 海沟：主动边缘外侧
-      depth += act[i] * 2.2 * Math.exp(-(((dk - shelfW - 120) / 90) ** 2))
+      depth += act[i] * 2.2 * dmath.exp(-dmath.pow((dk - shelfW - 120) / 90, 2))
       const relief = uplift[i] * smoothstep(0, 1, dk / (shelfW + 140))
       let h = -depth + relief + 0.06 * nS.fbm(u * 20, v * 20, 3)
       if (dist[i] <= 1.5 && h > -0.004) h = -0.004
@@ -287,27 +303,76 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
     for (let k = 0; k < n; k++) {
       const age = k / n
       const rad = rng.range(2.5, 5.5) * (1 + age * 0.6)
-      const summit = lerpN(rng.range(0.4, 2.2), -0.6 - age * 1.2, Math.pow(age, 0.9))
+      const summit = lerpN(rng.range(0.4, 2.2), -0.6 - age * 1.2, dmath.pow(age, 0.9))
       const x0 = Math.max(0, Math.floor(px - rad * 3)), x1 = Math.min(W - 1, Math.ceil(px + rad * 3))
       const y0 = Math.max(0, Math.floor(py - rad * 3)), y1 = Math.min(H - 1, Math.ceil(py + rad * 3))
       for (let yy = y0; yy <= y1; yy++) {
         for (let xx = x0; xx <= x1; xx++) {
           const i = yy * W + xx
-          const r = Math.hypot(xx - px, yy - py) / rad
+          const r = dmath.hypot(xx - px, yy - py) / rad
           const base = elev[i]
-          const cone = base + (summit - base) * Math.exp(-Math.pow(r, 1.4))
+          const cone = base + (summit - base) * dmath.exp(-dmath.pow(r, 1.4))
           // 老火山顶被削平（平顶海山）
           const c = age > 0.5 ? Math.min(cone, summit - 0.05) : cone
           if (c > elev[i]) elev[i] = c
         }
       }
-      px += Math.cos(ang + rng.normal() * 0.25) * step
-      py += Math.sin(ang + rng.normal() * 0.25) * step
+      px += dmath.cos(ang + rng.normal() * 0.25) * step
+      py += dmath.sin(ang + rng.normal() * 0.25) * step
       if (px < 0 || py < 0 || px >= W || py >= H) break
     }
   }
 
   return { elev, uplift, active: act, basins }
+}
+
+/**
+ * 地球底图的地形：按每格的经纬度（全球图，横向 360°）从 ETOPO 网格插值出高程，再补上网格分辨不出的细节——
+ * 海平面附近的分形起伏（海岸线不是插值出的光滑曲线）、山地的脊状起伏与低地的小丘（交给侵蚀雕刻成水系）。
+ * 抬升量按海拔给：侵蚀之后山体仍保持原来的高度。没有盆地记录、主动边缘（海沟已在海深数据里）
+ */
+export function buildEarthTerrain(p: WorldParams, rng: RNG): TerrainResult {
+  const { width: W, height: H } = p
+  const N = W * H
+  const nDet = new Noise(rng.fork())
+  const nCoast = new Noise(rng.fork())
+  const elev = new Float32Array(N)
+  const uplift = new Float32Array(N)
+  for (let y = 0; y < H; y++) {
+    const lat = latitudeOf(p, y, H)
+    for (let x = 0; x < W; x++) elev[y * W + x] = earthElevation(lat, -180 + ((x + 0.5) * 360) / W)
+  }
+  // 离海岸线的格数（陆地量到海、海量到陆地）：海岸的分形起伏只加在岸边，内陆低地（亚马孙、西西伯利亚）不会被扰动到海平面以下
+  const land = new Uint8Array(N)
+  const sea = new Uint8Array(N)
+  for (let i = 0; i < N; i++) {
+    land[i] = elev[i] > 0 ? 1 : 0
+    sea[i] = 1 - land[i]
+  }
+  const toLand = edt(land, W, H)
+  const toSea = edt(sea, W, H)
+  for (let y = 0; y < H; y++) {
+    const v = y / H
+    for (let x = 0; x < W; x++) {
+      const u = x / H
+      const i = y * W + x
+      let h = elev[i]
+      const d = land[i] ? toSea[i] : toLand[i]
+      const near = 1 - smoothstep(1, 4, d)
+      // 噪声只在权重非零处求值（离岸远、海拔低的格占大多数）
+      if (near > 0) h += near * 0.12 * (0.4 + p.coastRoughness) * nCoast.fbm(u * 14, v * 14, 5)
+      if (land[i]) {
+        const mt = smoothstep(0.4, 2.5, h)
+        // 山地的脊状起伏（只在高处，不会低于海面）；低地的小丘只往上加
+        if (mt > 0) h += (nDet.ridged(u * 10, v * 10, 5) - 0.45) * 0.5 * mt * p.mountains
+        h += (nDet.fbm(u * 24, v * 24, 4) * 0.5 + 0.5) * 0.05
+        if (near === 0) h = Math.max(h, 0.002)
+        uplift[i] = Math.max(0, h - 0.3) * 0.5 * p.mountains
+      } else h += 0.04 * nDet.fbm(u * 20 + 3, v * 20, 3)
+      elev[i] = h
+    }
+  }
+  return { elev, uplift, active: new Float32Array(N), basins: [] }
 }
 
 function lerpN(a: number, b: number, t: number) {

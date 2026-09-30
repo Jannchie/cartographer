@@ -6,8 +6,9 @@ import { PLAN_INFO, planLabel } from '../../settlement/plans'
 import { CULTURE_INFO, CULTURES, planFits } from '../../settlement/culture'
 import { POP_MAX, POP_MIN, sizeLabel } from '../../settlement/scale'
 import { LAND_USES } from '../../settlement/landuse'
-import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type SettlementParams } from '../../settlement/types'
-import { t } from '../i18n'
+import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
+import { placeName } from '../../i18n'
+import { langRef, t } from '../i18n'
 import Counter from '../kit/Counter.vue'
 import Dropdown from '../kit/Dropdown.vue'
 import Field from '../kit/Field.vue'
@@ -17,10 +18,13 @@ import Scale from '../kit/Scale.vue'
 import Section from '../kit/Section.vue'
 import Seg from '../kit/Seg.vue'
 import Swatches from '../kit/Swatches.vue'
+import RegionPanel from './RegionPanel.vue'
 import * as S from './settlement'
 import { ss } from './settlement'
 
 const p = ss.params
+/** 当前这座城生成时的参数：生成参数的滑杆双击回到这里 */
+const gen = computed(() => ss.applied ?? DEFAULT_SETTLEMENT)
 const CULTURE_OPTS = CULTURES.map((c) => ({ value: c, label: CULTURE_INFO[c].name[0], title: CULTURE_INFO[c].desc }))
 // 形制跟着文明：只列本文明的
 const planOpts = computed(() =>
@@ -62,8 +66,14 @@ const groups = computed(() =>
   GROUPS.map((g) => ({ ...g, items: FEATURES.filter((f) => f.group === g.id) })).filter((g) => g.items.length),
 )
 const manualCount = computed(() => Object.values(p.counts).filter((v) => v !== null && v !== undefined).length)
-// 世界地点：第一项是"不继承"，其余是世界地图上的城镇（地名本身不翻译）
-const places = computed(() => [{ value: -1, label: t('不继承（独立生成）') }, ...ss.places.map((pl) => ({ value: pl.i, label: pl.label }))])
+// 世界地点：第一项是"不继承"，其余是世界地图上的城镇。地名按界面语言写，中文、日文界面后面附原名（便于与英文地图对照）
+const places = computed(() => [
+  { value: -1, label: t('不继承（独立生成）') },
+  ...ss.places.map((pl) => {
+    const name = placeName(pl, langRef.value)
+    return { value: pl.i, label: `${pl.capital ? '★ ' : ''}${name}${name !== pl.name ? ` · ${pl.name}` : ''}` }
+  }),
+])
 const swatches = SETTLE_THEMES.map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: th.ground, ink: th.ink }))
 const RANDOM_MODE = [
   { value: 'all', label: '全部参数', title: '种子、规模、文明、功效、布局与环境都随机' },
@@ -73,10 +83,11 @@ const RANDOM_TERRAIN = [
   { value: 'random', label: '随机地形', title: '山、河、海岸跟着新种子变' },
   { value: 'fixed', label: '固定地形', title: '保持现在的山、河、海岸，只换上面的城' },
 ] as const
-const optKeys = ['labels', 'contours'] as const
+const optKeys = ['labels', 'contours', 'ornaments'] as const
 const opts = computed(() => [
   { label: '注记', on: ss.opts.labels },
   { label: '等高线', on: ss.opts.contours },
+  { label: '图饰', on: ss.opts.ornaments, title: '标题框、指北针与区划图例（导出的图总是带着）' },
 ])
 const VIEWS = [
   { value: 'map', label: '地图' },
@@ -105,7 +116,7 @@ const zoningLegend = computed(() =>
 
 <template>
   <div class="panel-body">
-    <Section title="生成">
+    <Section v-show="ss.tab === 'gen'">
       <div class="seed">
         <input
           v-model="p.seed"
@@ -135,17 +146,17 @@ const zoningLegend = computed(() =>
         :step="1"
         log
         :fmt="popFmt"
-        :reset="DEFAULT_SETTLEMENT.population"
+        :reset="gen.population"
+        reset-tip="双击回到当前生成的值"
         :model-value="p.population"
-        @update:model-value="(v) => ((p.population = v), S.runLive())"
-        @change="S.run()"
+        v-model="p.population"
       />
       <Field label="功效" title="城市的主要功能：改变各要素的默认数量与城墙样式">
         <Dropdown :options="FUNCTIONS.map((f) => ({ value: f.id, label: f.name, desc: f.desc }))" :model-value="p.function" @update:model-value="(v) => S.setParam('function', v)" />
       </Field>
       <Field label="文明"><Seg :options="CULTURE_OPTS" :model-value="p.culture" @update:model-value="(v) => S.setCulture(v)" /></Field>
       <Field label="布局" title="有机生长、方格、放射三种街道格局的混合比例（与文明无关）">
-        <LayoutPicker :regularity="p.regularity" :radial="p.radial" :reset="LAYOUT_DEFAULT" @update="S.setLayout" @change="S.run()" />
+        <LayoutPicker :regularity="p.regularity" :radial="p.radial" :reset="{ regularity: gen.regularity, radial: gen.radial }" @update="S.setLayout" />
       </Field>
       <Field label="形制" title="城市的规划形制：规划的核心按形制铺开，外面照旧有机生长">
         <Dropdown :options="planOpts" :model-value="p.plan ?? 'organic'" @update:model-value="(v) => S.setParam('plan', v)" />
@@ -158,10 +169,10 @@ const zoningLegend = computed(() =>
         :max="1"
         :step="0.05"
         :fmt="(x) => `${Math.round(x * 100)}%`"
-        :reset="DEFAULT_SETTLEMENT.planStrength"
+        :reset="gen.planStrength ?? DEFAULT_SETTLEMENT.planStrength"
+        reset-tip="双击回到当前生成的值"
         :model-value="p.planStrength ?? 0.6"
         @update:model-value="(v) => (p.planStrength = v)"
-        @change="S.run()"
       />
       <Scale
         v-if="subCount > 0"
@@ -171,9 +182,9 @@ const zoningLegend = computed(() =>
         :max="1"
         :step="0.05"
         :fmt="spreadFmt"
-        :reset="DEFAULT_SETTLEMENT.spread"
+        :reset="gen.spread"
+        reset-tip="双击回到当前生成的值"
         v-model="p.spread"
-        @change="S.run()"
       />
       <Field label="奇幻"><Seg :options="MAGIC" :model-value="p.magic" @update:model-value="(x) => S.setParam('magic', x)" /></Field>
       <Field label="城防"><Seg :options="WALLS" :model-value="p.walls" @update:model-value="(x) => S.setParam('walls', x)" /></Field>
@@ -185,25 +196,19 @@ const zoningLegend = computed(() =>
         :max="1"
         :step="0.05"
         :fmt="(x) => `${Math.round(x * 100)}%`"
-        :reset="DEFAULT_SETTLEMENT.wallBend"
+        :reset="gen.wallBend"
+        reset-tip="双击回到当前生成的值"
         v-model="p.wallBend"
-        @change="S.run()"
       />
       <Legend :items="envToggles" @toggle="(i) => S.setParam(envKeys[i], !p[envKeys[i]])" />
-      <Scale v-if="p.farms" label="农田范围" title="城外农田铺多远：少则城边一圈，多则一直到地图边缘；其余是草地与林地" :min="0" :max="1" :step="0.05" :fmt="(x) => `${Math.round(x * 100)}%`" :reset="DEFAULT_SETTLEMENT.farmland" v-model="p.farmland" @change="S.run()" />
-      <Scale label="地形起伏" :min="0" :max="1" :step="0.05" :fmt="(x) => x.toFixed(2)" v-model="p.relief" @change="S.run()" />
+      <Scale v-if="p.farms" label="农田范围" title="城外农田铺多远：少则城边一圈，多则一直到地图边缘；其余是草地与林地" :min="0" :max="1" :step="0.05" :fmt="(x) => `${Math.round(x * 100)}%`" :reset="gen.farmland" reset-tip="双击回到当前生成的值" v-model="p.farmland" />
+      <Scale label="地形起伏" :min="0" :max="1" :step="0.05" :fmt="(x) => x.toFixed(2)" :reset="gen.relief" reset-tip="双击回到当前生成的值" v-model="p.relief" />
       <Field label="世界地点" title="从当前世界地图选一座城镇：继承名字、规模、河流、海岸、山地与气候">
         <Dropdown raw :options="places" :model-value="ss.from" @open="S.refreshPlaces()" @update:model-value="S.inheritFrom" />
       </Field>
-      <div class="gen-row">
-        <button type="button" class="primary" @click="S.run()">{{ t('生成聚落') }}</button>
-        <button type="button" class="grow" :class="{ on: ss.growing }" :title="t('从几十人一路长到当前的目标人口')" @click="S.playGrowth()">
-          {{ t(ss.growing ? '停止' : '成长') }}
-        </button>
-      </div>
     </Section>
 
-    <div v-if="ss.info" class="cartouche">
+    <div v-if="ss.info" v-show="ss.tab === 'stats'" class="cartouche">
       <div class="cartouche-title">
         <span>{{ ss.info.title }}</span><small>{{ ss.info.sub }}</small>
       </div>
@@ -227,7 +232,7 @@ const zoningLegend = computed(() =>
       </div>
     </div>
 
-    <Section title="要素">
+    <Section v-show="ss.tab === 'features'">
       <div v-for="g in groups" :key="g.id" class="feature-group">
         <h3>{{ t(g.name) }}</h3>
         <template v-for="f in g.items" :key="f.id">
@@ -248,7 +253,11 @@ const zoningLegend = computed(() =>
       <button v-if="manualCount" type="button" class="link" @click="S.resetCounts()">{{ t('全部恢复自动') }}（{{ manualCount }}）</button>
     </Section>
 
-    <Section title="绘图风格">
+    <Section v-if="ss.mode === 'areas'" v-show="ss.tab === 'areas'">
+      <RegionPanel />
+    </Section>
+
+    <Section v-show="ss.tab === 'style'">
       <Field label="视图" title="普通地图，或按用地性质给片区着色的区划图">
         <Seg :options="[...VIEWS]" :model-value="ss.opts.view" @update:model-value="(v) => S.setView(v)" />
       </Field>

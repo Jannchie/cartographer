@@ -46,6 +46,7 @@ import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Cros
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 import { calibrateTrades, perHome, residentsOf } from './people'
 import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, statsOf, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
+import * as dmath from '../gen/dmath'
 
 /**
  * 规模与画幅：规模档位由人口推出，结构参数按人口连续插值；地图范围按要住下的人口铺开。
@@ -159,6 +160,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     seedHash: hashString(`${p.seed}|${p.culture}`),
     style: STYLES[p.culture],
     memo: new Map(),
+    density: new Map(),
     uncounted: false,
     estate: false,
     cores: [],
@@ -380,7 +382,7 @@ function pickCenter(ctx: Ctx): P {
   for (let k = 0; k < 500; k++) {
     const a = rng.next() * Math.PI * 2
     const r = Math.sqrt(rng.next()) * R * 0.32
-    const q: P = [MW / 2 + Math.cos(a) * r, MH / 2 + Math.sin(a) * r]
+    const q: P = [MW / 2 + dmath.cos(a) * r, MH / 2 + dmath.sin(a) * r]
     const w = T.waterAt(q)
     if (w < ctx.cfg.patch * 0.45) continue
     let s = T.slopeAt(q) * 40 + (r / R) * 2.5
@@ -397,8 +399,8 @@ function pickCenter(ctx: Ctx): P {
 
 function borderPoint(ctx: Ctx, a: number): P {
   const { MW, MH, center: c } = ctx
-  const dx = Math.cos(a)
-  const dy = Math.sin(a)
+  const dx = dmath.cos(a)
+  const dy = dmath.sin(a)
   let t = Infinity
   if (dx > 1e-6) t = Math.min(t, (MW - 2 - c[0]) / dx)
   if (dx < -1e-6) t = Math.min(t, (2 - c[0]) / dx)
@@ -487,7 +489,7 @@ function routeArterialsRaw(ctx: Ctx): { roads: P[][]; slots: number[] } {
     const stops: P[] = [ctx.center]
     for (const r of WAYPOINTS) {
       if (r >= reach - 60) break
-      stops.push(dryNear(ctx, [ctx.center[0] + Math.cos(dir) * r, ctx.center[1] + Math.sin(dir) * r]))
+      stops.push(dryNear(ctx, [ctx.center[0] + dmath.cos(dir) * r, ctx.center[1] + dmath.sin(dir) * r]))
     }
     stops.push(target)
     let raw: P[] = []
@@ -524,10 +526,10 @@ const WAYPOINTS = [120, 250, 500, 1000, 2000, 4000]
 function dryNear(ctx: Ctx, q: P): P {
   const c = ctx.center
   const r = dist(q, c)
-  const a0 = Math.atan2(q[1] - c[1], q[0] - c[0])
+  const a0 = dmath.atan2(q[1] - c[1], q[0] - c[0])
   for (let k = 0; k < 24; k++) {
     const a = a0 + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 0.06
-    const p: P = [c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r]
+    const p: P = [c[0] + dmath.cos(a) * r, c[1] + dmath.sin(a) * r]
     if (ctx.T.waterAt(p) > 12) return p
   }
   return q
@@ -563,7 +565,7 @@ interface WallStage {
 const WALL_SLACK = 1.12
 const WALL_SLACK_SMALL = 1.5
 /** 隔多久扩墙：小城长到约 2.2 倍才扩，大城长得慢一些就扩（1.45 倍） */
-const wallNext = (pop: number) => Math.min(2.25, Math.max(1.45, 2.25 - 0.36 * Math.log2(pop / 1200)))
+const wallNext = (pop: number) => Math.min(2.25, Math.max(1.45, 2.25 - 0.36 * dmath.log2(pop / 1200)))
 function wallStages(p: SettlementParams): WallStage[] {
   if (p.walls === 'none') return []
   const fort = p.function === 'fortress'
@@ -630,13 +632,13 @@ function pickSubcenters(ctx: Ctx, arterials: P[][], n: number, birth = (k: numbe
         const q = road[i]
         const d = dist(q, c)
         if (d < d0 || d > d1 || !good(q)) continue
-        const along = Math.atan2(road[i + 1][1] - road[i - 1][1], road[i + 1][0] - road[i - 1][0])
-        cands.push({ p: q, a: Math.atan2(q[1] - c[1], q[0] - c[0]), angle: fold(along), score: 1 + hashAt(ctx, q, 'sub.road', k) * 0.3 })
+        const along = dmath.atan2(road[i + 1][1] - road[i - 1][1], road[i + 1][0] - road[i - 1][0])
+        cands.push({ p: q, a: dmath.atan2(q[1] - c[1], q[0] - c[0]), angle: fold(along), score: 1 + hashAt(ctx, q, 'sub.road', k) * 0.3 })
       }
     for (let i = 0; i < 48; i++) {
       const a = (i / 48) * Math.PI * 2
       const r = (d0 + d1) / 2
-      const q: P = [c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r]
+      const q: P = [c[0] + dmath.cos(a) * r, c[1] + dmath.sin(a) * r]
       if (good(q)) cands.push({ p: q, a, angle: fold(hashAt(ctx, q, 'sub.ring.angle') * Math.PI), score: hashAt(ctx, q, 'sub.ring', k) * 0.3 })
     }
     // 与已有副中心的方位差越大越好，其次偏好干道上的点
@@ -668,7 +670,7 @@ function linkSubcenters(ctx: Ctx, arterials: P[][]): P[][] {
   const subs = ctx.cores
     .slice(1)
     .map((k) => k.c)
-    .sort((a, b) => Math.atan2(a[1] - ctx.center[1], a[0] - ctx.center[0]) - Math.atan2(b[1] - ctx.center[1], b[0] - ctx.center[0]))
+    .sort((a, b) => dmath.atan2(a[1] - ctx.center[1], a[0] - ctx.center[0]) - dmath.atan2(b[1] - ctx.center[1], b[0] - ctx.center[0]))
   if (subs.length < 2) return []
   // 10 米一格：与地图中心（世界原点）对齐，各规模下标记位置一致
   const cell = 10
@@ -681,8 +683,8 @@ function linkSubcenters(ctx: Ctx, arterials: P[][]): P[][] {
     if (subs.length === 2 && i === 1) break
     const a = subs[i]
     const b = subs[(i + 1) % subs.length]
-    const aa = Math.atan2(a[1] - ctx.center[1], a[0] - ctx.center[0])
-    const ab = Math.atan2(b[1] - ctx.center[1], b[0] - ctx.center[0])
+    const aa = dmath.atan2(a[1] - ctx.center[1], a[0] - ctx.center[0])
+    const ab = dmath.atan2(b[1] - ctx.center[1], b[0] - ctx.center[0])
     let da = Math.abs(aa - ab)
     if (da > Math.PI) da = Math.PI * 2 - da
     if (da > Math.PI * 0.75) continue
@@ -823,7 +825,7 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
       if (j < 0 || history[j].L === undefined) return
       const h = history[j]
       const prev = history[j - 1]
-      const t = !prev ? (h.x * (k + 1)) / h.L! : prev.x * Math.pow(h.x / prev.x, (k + 1 - prev.L!) / Math.max(1, h.L! - prev.L!))
+      const t = !prev ? (h.x * (k + 1)) / h.L! : prev.x * dmath.pow(h.x / prev.x, (k + 1 - prev.L!) / Math.max(1, h.L! - prev.L!))
       joinPop.set(i, t)
     })
     ctx.cores.forEach((_, k) => joinPop.set(seeds[k], k ? subBirth(ctx.p, k - 1, seeds.length - 1) : 0))
@@ -843,7 +845,7 @@ function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[
  * 在 6000 ~ 16000 人之间按对数人口连续收窄：一刀切的话，跨过分界时要的城区突然变小，外围的片区整片消失
  */
 function growMargin(pop: number) {
-  const t = (a: number, b: number) => Math.min(1, Math.max(0, Math.log(pop / a) / Math.log(b / a)))
+  const t = (a: number, b: number) => Math.min(1, Math.max(0, dmath.log(pop / a) / dmath.log(b / a)))
   return 1.35 - 0.05 * t(1500, 6000) - 0.24 * t(6000, 16000)
 }
 
@@ -936,14 +938,21 @@ const LIVED = new Set<FeatureId>(['merchant', 'craft', 'slum'])
 
 /** 片区的密度档：年龄、离对外干道多近、平滑噪声（见 scale.ts 的 densityOf） */
 function densityAt(ctx: Ctx, q: P, age: number, arterials: P[][], pop = ctx.p.population): { d: Density; s: number } {
-  // 离干道多近与位置噪声只看位置：记下来，按历代人口重估密度时不必重算
-  const key = `density:${q[0]},${q[1]}`
-  let f = ctx.memo.get(key) as [number, number] | undefined
+  // 离干道多近与位置噪声只看位置：记下来，按历代人口重估密度时不必重算。
+  // 不放 ctx.memo：memo 每次检查点都要整张遍历、回滚时还要复制，这张表在大城里有上千项
+  // 先按站点数组本身查，查不到再按坐标串（坐标相同的另一个数组）
+  const bySite = (ctx.densityBySite ??= new WeakMap())
+  let f = bySite.get(q)
   if (!f) {
-    let gap = Infinity
-    for (const r of arterials) gap = Math.min(gap, polylineDist(q, r))
-    f = [Math.exp(-gap / (ctx.cfg.patch * 0.8)), smoothNoise(ctx, q, 240, 'density')]
-    ctx.memo.set(key, f)
+    const key = `${q[0]},${q[1]}`
+    f = ctx.density.get(key)
+    if (!f) {
+      let gap = Infinity
+      for (const r of arterials) gap = Math.min(gap, polylineDist(q, r))
+      f = [dmath.exp(-gap / (ctx.cfg.patch * 0.8)), smoothNoise(ctx, q, 240, 'density')]
+      ctx.density.set(key, f)
+    }
+    bySite.set(q, f)
   }
   const s = densityScore(age, f[0], f[1])
   return { d: densityTier(pop, s), s }
@@ -984,7 +993,7 @@ function layoutDist(ctx: Ctx, arterials: P[][]) {
   // 大片的起伏（越往外越明显，大城的外围起伏大）：轮廓有凸有凹，不是一个圆。
   // 按距离而不按人口放大：同一块地的远近在任何规模下都一样，城区生长的先后才不随现在的人口重排
   const r8 = rinFor(ctx.p, 8000)
-  const wobAt = (d: number) => 0.35 + 0.35 * Math.min(1, Math.max(0, Math.log2(Math.max(1, d / r8)) / 1.5))
+  const wobAt = (d: number) => 0.35 + 0.35 * Math.min(1, Math.max(0, dmath.log2(Math.max(1, d / r8)) / 1.5))
   const shape = ctx.plan ? planShape(ctx.plan.z) : null
   return (q: P, cores = frames.length) => {
     let d = Infinity
@@ -996,11 +1005,11 @@ function layoutDist(ctx: Ctx, arterials: P[][]) {
       }
       const [u, v] = f.toUV(q)
       const cheb = Math.max(Math.abs(u), Math.abs(v)) * 1.12
-      d = Math.min(d, (Math.hypot(u, v) * (1 - sq) + cheb * sq) * k)
+      d = Math.min(d, (dmath.hypot(u, v) * (1 - sq) + cheb * sq) * k)
     })
     let gap = Infinity
     for (const r of arterials) gap = Math.min(gap, polylineDist(q, r))
-    return d * (1 - pull * Math.exp(-gap / reach)) * (1 + (smoothNoise(ctx, q, 260, 'layout.shape') - 0.5) * wobAt(d))
+    return d * (1 - pull * dmath.exp(-gap / reach)) * (1 + (smoothNoise(ctx, q, 260, 'layout.shape') - 0.5) * wobAt(d))
   }
 }
 
@@ -1013,7 +1022,7 @@ function planShape(z: PlanZone): (q: P) => number {
   const rim: number[] = []
   for (let k = 0; k < N; k++) {
     const a = (k / N) * Math.PI * 2
-    const far: P = [z.c[0] + Math.cos(a) * 1e5, z.c[1] + Math.sin(a) * 1e5]
+    const far: P = [z.c[0] + dmath.cos(a) * 1e5, z.c[1] + dmath.sin(a) * 1e5]
     let r = 0
     for (let i = 0; i < z.poly.length; i++) {
       const hit = segIntersect(z.c, far, z.poly[i], z.poly[(i + 1) % z.poly.length])
@@ -1025,11 +1034,11 @@ function planShape(z: PlanZone): (q: P) => number {
   return (q) => {
     const dx = q[0] - z.c[0]
     const dy = q[1] - z.c[1]
-    const t = (((Math.atan2(dy, dx) / (Math.PI * 2)) % 1) + 1) % 1 * N
+    const t = (((dmath.atan2(dy, dx) / (Math.PI * 2)) % 1) + 1) % 1 * N
     const k0 = Math.floor(t) % N
     const f = t - Math.floor(t)
     const r = rim[k0] * (1 - f) + rim[(k0 + 1) % N] * f
-    return (Math.hypot(dx, dy) * Req) / Math.max(1, r)
+    return (dmath.hypot(dx, dy) * Req) / Math.max(1, r)
   }
 }
 
@@ -1056,7 +1065,7 @@ function smoothNoise(ctx: Ctx, q: P, scale: number, tag: string) {
 function layoutDistances(ctx: Ctx, patches: Patch[]): number[] {
   const ld = layoutDist(ctx, ctx.out.roads.filter((r) => r.kind === 'main' || r.kind === 'highway').map((r) => r.line))
   // 城越大，边缘的起伏越大
-  const wob = ctx.env.big ? 0.5 + 0.3 * Math.min(1, Math.log2(Math.max(1, ctx.p.population / 8000)) / 3) : 0.5
+  const wob = ctx.env.big ? 0.5 + 0.3 * Math.min(1, dmath.log2(Math.max(1, ctx.p.population / 8000)) / 3) : 0.5
   return patches.map((pa) => ld(pa.site) * (1 + (smoothNoise(ctx, pa.site, 220, 'occupancy') - 0.5) * wob) + (hashAt(ctx, pa.site, 'occupancy.jitter') - 0.5) * ctx.cfg.patch)
 }
 
@@ -1091,7 +1100,7 @@ function innerAt(ctx: Ctx, patches: Patch[], g: Growth, pop: number, arterials: 
  */
 function morphWall(ctx: Ctx, loop: P[], core: Core, shared: boolean): P[] {
   // 几个核心连成一片的城市圈不是一个整齐的方城或圆城：变形减弱，免得把别的核心的城区切到墙外
-  const w = Math.pow(ctx.p.regularity, 1.3) * (shared ? 0.35 : 1)
+  const w = dmath.pow(ctx.p.regularity, 1.3) * (shared ? 0.35 : 1)
   if (w < 0.02) return loop
   const g = ctx.p.radial
   const c = core.c
@@ -1105,7 +1114,7 @@ function morphWall(ctx: Ctx, loop: P[], core: Core, shared: boolean): P[] {
     const [u, v] = grid.toUV(q)
     hu += Math.abs(u)
     hv += Math.abs(v)
-    rr += Math.hypot(u, v)
+    rr += dmath.hypot(u, v)
   }
   hu = (hu / dense.length) * 1.25
   hv = (hv / dense.length) * 1.25
@@ -1113,7 +1122,7 @@ function morphWall(ctx: Ctx, loop: P[], core: Core, shared: boolean): P[] {
   const out = dense.map((v) => {
     const dx = v[0] - c[0]
     const dy = v[1] - c[1]
-    const L = Math.hypot(dx, dy) || 1
+    const L = dmath.hypot(dx, dy) || 1
     const [gu, gv] = grid.toUV(v)
     const u = gu / L
     const vv = gv / L
@@ -1297,7 +1306,7 @@ function bendLoop(a: P[], b: P[], t: number): P[] {
   const out: P[] = []
   for (let k = 0; k < N; k++) {
     const ang = (k / N) * Math.PI * 2
-    const d: P = [Math.cos(ang), Math.sin(ang)]
+    const d: P = [dmath.cos(ang), dmath.sin(ang)]
     const ra = far(a, d)
     const rb = far(b, d) || ra
     const r = ra + (rb - ra) * t
@@ -1316,7 +1325,7 @@ function smoothLoop(loop: P[]): P[] {
   const rs: number[] = []
   for (let k = 0; k < N; k++) {
     const a = (k / N) * Math.PI * 2
-    const d: P = [Math.cos(a), Math.sin(a)]
+    const d: P = [dmath.cos(a), dmath.sin(a)]
     let far = 0
     for (let i = 0; i < loop.length; i++) {
       const hit = segIntersect(c, [c[0] + d[0] * 1e5, c[1] + d[1] * 1e5], loop[i], loop[(i + 1) % loop.length])
@@ -1332,11 +1341,11 @@ function smoothLoop(loop: P[]): P[] {
       let sa = 0
       rs.forEach((r, k) => {
         const t = (k / N) * Math.PI * 2 * h
-        ca += r * Math.cos(t)
-        sa += r * Math.sin(t)
+        ca += r * dmath.cos(t)
+        sa += r * dmath.sin(t)
       })
       const t = (j / N) * Math.PI * 2 * h
-      v += ((2 * ca) / N) * Math.cos(t) + ((2 * sa) / N) * Math.sin(t)
+      v += ((2 * ca) / N) * dmath.cos(t) + ((2 * sa) / N) * dmath.sin(t)
     }
     return Math.max(1, v)
   })
@@ -1350,7 +1359,7 @@ function smoothLoop(loop: P[]): P[] {
     const k = (i / n) * N
     const k0 = Math.floor(k) % N
     const r = (low[k0] * (1 - (k - Math.floor(k))) + low[(k0 + 1) % N] * (k - Math.floor(k))) * f
-    return [c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r] as P
+    return [c[0] + dmath.cos(a) * r, c[1] + dmath.sin(a) * r] as P
   })
 }
 
@@ -1484,8 +1493,8 @@ function coastShift(ctx: Ctx, f: ReturnType<typeof gridFrame>, R: number): P {
   const need = { u: [0, 0], v: [0, 0] }
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2
-    const du = Math.round(Math.cos(a) * 1e6) / 1e6
-    const dv = Math.round(Math.sin(a) * 1e6) / 1e6
+    const du = Math.round(dmath.cos(a) * 1e6) / 1e6
+    const dv = Math.round(dmath.sin(a) * 1e6) / 1e6
     const far = R * (k % 2 ? 1.42 : 1)
     let t = Infinity
     for (let s = 0; s < far; s += 10)
@@ -1522,7 +1531,7 @@ function planArterials(ctx: Ctx, arterials: P[][]) {
     const raw = arterials[a]
     const k = raw.findIndex((q) => !z.contains(q))
     if (k < 0) continue
-    const dir = Math.atan2(raw[k][1] - z.c[1], raw[k][0] - z.c[0])
+    const dir = dmath.atan2(raw[k][1] - z.c[1], raw[k][0] - z.c[0])
     // 形制按原方向给出城路线；下了海（城临海、规划区一角在海上）就依次换左、右、反方向的城门
     let trunk: P[] = []
     for (const turn of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
@@ -1909,7 +1918,7 @@ function joinRoadEnds(ctx: Ctx) {
       const uy = e[1] - prev[1]
       const vx = best[0] - e[0]
       const vy = best[1] - e[1]
-      if (ux * vx + uy * vy < -0.5 * Math.hypot(ux, uy) * Math.hypot(vx, vy)) continue
+      if (ux * vx + uy * vy < -0.5 * dmath.hypot(ux, uy) * dmath.hypot(vx, vy)) continue
       if (!clear(e, best)) continue
       if (head) r.line.unshift(best)
       else r.line.push(best)
@@ -2337,7 +2346,7 @@ function palaceZone(ctx: Ctx, arterials: P[][]): { sites: P[]; keepOut: (q: P) =
   // 朝向：东方坐北朝南（横向是东西）；西式、别的正面朝城心（进深沿着离开城心的方向，楼后是纵深的园林）
   const axes = (dir: number): [P, P] => {
     const a = south ? 0 : dir + Math.PI / 2
-    const u: P = [Math.cos(a), Math.sin(a)]
+    const u: P = [dmath.cos(a), dmath.sin(a)]
     return [u, [-u[1], u[0]]]
   }
   // 候选方向：东方先北（地图 y 向下），其余按位置哈希排
@@ -2354,8 +2363,8 @@ function palaceZone(ctx: Ctx, arterials: P[][]): { sites: P[]; keepOut: (q: P) =
     for (const t of [0.8, 1.05, 1.35, 1.7, 2.1])
       for (const dir of order) {
         const [u, v] = axes(dir)
-        const r = t * Math.hypot(W, D) * 0.5
-        const c: P = [ctx.center[0] + Math.cos(dir) * r, ctx.center[1] + Math.sin(dir) * r]
+        const r = t * dmath.hypot(W, D) * 0.5
+        const c: P = [ctx.center[0] + dmath.cos(dir) * r, ctx.center[1] + dmath.sin(dir) * r]
         const grow = growConvex(rect(c, u, W, D), 12)
         if (ctx.cores.some((co) => pointInPoly(co.c, grow))) continue
         // 整块干燥；山坡可以铲平，但太陡的山头不选（平均坡度不超过 0.2，最陡处不超过 0.35）
@@ -2566,7 +2575,7 @@ function palaceSite(ctx: Ctx, patches: Patch[], seed: number, royal = true): Pol
   for (const r of ctx.out.roads) if (cut.includes(r) || r.line.some(nearBy)) roadCorridor(ctx, r)
   // 东方的大寺、大社按方格朝向摆（院落坐北朝南，见 eastCompound 的 northOf）；别的顺着合成片区的长轴
   const east = CULTURE_INFO[ctx.p.culture].palaceSouth
-  const axis: P = royal && east ? [1, 0] : !royal && east ? [Math.cos(ctx.gridAngle), Math.sin(ctx.gridAngle)] : obb(U).axis
+  const axis: P = royal && east ? [1, 0] : !royal && east ? [dmath.cos(ctx.gridAngle), dmath.sin(ctx.gridAngle)] : obb(U).axis
   const n: P = [-axis[1], axis[0]]
   let [u0, u1, v0, v1] = [Infinity, -Infinity, Infinity, -Infinity]
   for (const q of U) {
@@ -2741,19 +2750,54 @@ function villageLanes(ctx: Ctx, patches: Patch[], arterials: P[][], wanted: (i: 
     cost.set(k, bd)
     if (bd > cfg.main / 2 + 1) spur.set(k, best)
   }
-  // Dijkstra（图很小，直接线性取最小）
+  // Dijkstra。代价相同时先取先登记进 cost 的角点（按 cost 的插入顺序编号），与逐个比较取最小的写法选出同一个点
   const prev = new Map<string, string>()
   const done = new Set<string>()
-  for (;;) {
-    let u: string | null = null
-    for (const [k, c] of cost) if (!done.has(k) && (u === null || c < cost.get(u)!)) u = k
-    if (u === null) break
+  const ord = new Map<string, number>()
+  for (const k of cost.keys()) ord.set(k, ord.size)
+  const heap: [number, number, string][] = []
+  const less = (a: [number, number, string], b: [number, number, string]) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1])
+  const push = (e: [number, number, string]) => {
+    let i = heap.length
+    heap.push(e)
+    while (i > 0) {
+      const up = (i - 1) >> 1
+      if (!less(e, heap[up])) break
+      heap[i] = heap[up]
+      i = up
+    }
+    heap[i] = e
+  }
+  const pop = () => {
+    const top = heap[0]
+    const last = heap.pop()!
+    if (heap.length) {
+      let i = 0
+      for (;;) {
+        let c = 2 * i + 1
+        if (c >= heap.length) break
+        if (c + 1 < heap.length && less(heap[c + 1], heap[c])) c++
+        if (!less(heap[c], last)) break
+        heap[i] = heap[c]
+        i = c
+      }
+      heap[i] = last
+    }
+    return top
+  }
+  for (const [k, c] of cost) push([c, ord.get(k)!, k])
+  while (heap.length) {
+    const [cu, , u] = pop()
+    // 过期的条目（之后又找到了更近的路）跳过
+    if (done.has(u) || cu !== cost.get(u)) continue
     done.add(u)
     for (const { to, L } of adj.get(u) ?? []) {
-      const c = cost.get(u)! + L
+      const c = cu + L
       if (c < (cost.get(to) ?? Infinity)) {
+        if (!ord.has(to)) ord.set(to, ord.size)
         cost.set(to, c)
         prev.set(to, u)
+        push([c, ord.get(to)!, to])
       }
     }
   }
@@ -2814,12 +2858,12 @@ function plantAvenue(ctx: Ctx, r: Road, mains: Road[]) {
     gates.some((g) => {
       const dx = q[0] - g.p[0]
       const dy = q[1] - g.p[1]
-      const along = dx * Math.cos(g.angle) + dy * Math.sin(g.angle)
-      return Math.abs(along) < 40 && Math.abs(dy * Math.cos(g.angle) - dx * Math.sin(g.angle)) < 14
+      const along = dx * dmath.cos(g.angle) + dy * dmath.sin(g.angle)
+      return Math.abs(along) < 40 && Math.abs(dy * dmath.cos(g.angle) - dx * dmath.sin(g.angle)) < 14
     })
   for (let s = 6; s < L - 6; s += 9) {
     const { p, angle } = pointAt(r.line, s)
-    const n: P = [-Math.sin(angle), Math.cos(angle)]
+    const n: P = [-dmath.sin(angle), dmath.cos(angle)]
     for (const side of [-1, 1]) {
       const q: P = [p[0] + n[0] * off * side, p[1] + n[1] * off * side]
       if (ctx.T.waterAt(q) < 3 || ctx.occ.hitsPoint(q, 1.6) || fronting(q)) continue
@@ -2837,7 +2881,7 @@ function jetties(ctx: Ctx) {
   for (let r = 20; r < ctx.Rin * 3; r += 8)
     for (let k = 0; k < 48; k++) {
       const a = (k / 48) * Math.PI * 2
-      const q: P = [center[0] + Math.cos(a) * r, center[1] + Math.sin(a) * r]
+      const q: P = [center[0] + dmath.cos(a) * r, center[1] + dmath.sin(a) * r]
       const w = T.waterAt(q)
       if (w > 1 && w < 4 && T.seaAt([q[0] - T.waterGrad(q)[0] * 30, q[1] - T.waterGrad(q)[1] * 30])) cands.push(q)
     }
@@ -2855,7 +2899,7 @@ function jetties(ctx: Ctx) {
     const n: P = [-g[1], g[0]]
     for (const s of [-1, 1]) {
       const len = 7 + rng.next() * 4
-      if (rng.next() < 0.7) addBoat(ctx, [end[0] + g[0] * L * 0.3 + n[0] * (2.8 + len * 0.18) * s, end[1] + g[1] * L * 0.3 + n[1] * (2.8 + len * 0.18) * s], Math.atan2(-g[1], -g[0]), len)
+      if (rng.next() < 0.7) addBoat(ctx, [end[0] + g[0] * L * 0.3 + n[0] * (2.8 + len * 0.18) * s, end[1] + g[1] * L * 0.3 + n[1] * (2.8 + len * 0.18) * s], dmath.atan2(-g[1], -g[0]), len)
     }
     ctx.out.roads.push({ line: route, width: ctx.cfg.lane, kind: 'lane' })
     made.push(q)
@@ -2889,7 +2933,7 @@ function villageGreen(ctx: Ctx, block: Poly) {
   ctx.out.landmarks.push({ p: c, kind: 'well' })
   for (let k = 0; k < 3; k++) {
     const a = ctx.rng.next() * Math.PI * 2
-    const t: P = [c[0] + Math.cos(a) * r * 0.6, c[1] + Math.sin(a) * r * 0.6]
+    const t: P = [c[0] + dmath.cos(a) * r * 0.6, c[1] + dmath.sin(a) * r * 0.6]
     if (!ctx.corridors.hits(t, 1) && !ctx.occ.hitsPoint(t, 2)) ctx.out.trees.push({ p: t, r: 4 + ctx.rng.next() * 2 })
   }
   const nb = ctx.out.buildings.length
@@ -2913,7 +2957,7 @@ function extraBridges(ctx: Ctx, inside: (q: P) => boolean) {
   for (let s = 0; s < L; s += 12) {
     const { p: q, angle } = pointAt(line, s)
     if (!inside(q) || existing.some((e) => dist(e, q) < gap)) continue
-    const n: P = [-Math.sin(angle), Math.cos(angle)]
+    const n: P = [-dmath.sin(angle), dmath.cos(angle)]
     const hw = T.river.hw[Math.min(T.river.hw.length - 1, Math.round((s / L) * (T.river.hw.length - 1)))]
     const reach = hw + 26
     const a: P = [q[0] - n[0] * reach, q[1] - n[1] * reach]
@@ -3024,7 +3068,7 @@ function magicExtras(ctx: Ctx) {
     for (let k = 0; k < 160; k++) {
       const a = rng.next() * Math.PI * 2
       const r = ctx.Rin * (1 + rng.next() * 1.2)
-      const q: P = [ctx.center[0] + Math.cos(a) * r, ctx.center[1] + Math.sin(a) * r]
+      const q: P = [ctx.center[0] + dmath.cos(a) * r, ctx.center[1] + dmath.sin(a) * r]
       if (q[0] < ir * 2 || q[1] < ir * 2 || q[0] > MW - ir * 2 || q[1] > MH - ir * 2) continue
       let g = Infinity
       for (const b of blds) g = Math.min(g, dist(b, q))
@@ -3047,9 +3091,9 @@ function magicExtras(ctx: Ctx) {
     const b = b0 + (n * Math.PI) / Math.max(1, counts.leyline)
     const pts: P[] = []
     for (let k = -12; k <= 12; k++) {
-      const s = (k / 12) * Math.hypot(MW, MH) * 0.6
-      const wob = Math.sin(k * 0.7 + rng.next()) * 30
-      pts.push([m[0] + Math.cos(b) * s - Math.sin(b) * wob, m[1] + Math.sin(b) * s + Math.cos(b) * wob])
+      const s = (k / 12) * dmath.hypot(MW, MH) * 0.6
+      const wob = dmath.sin(k * 0.7 + rng.next()) * 30
+      pts.push([m[0] + dmath.cos(b) * s - dmath.sin(b) * wob, m[1] + dmath.sin(b) * s + dmath.cos(b) * wob])
     }
     ctx.out.wonders.push({ p: m, r: 0, kind: 'leyline', line: chaikin(pts, 3) })
   }

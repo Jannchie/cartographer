@@ -10,6 +10,7 @@ import { isVillage } from '../scale'
 import type { BuildingKind, Road, Ward } from '../types'
 import { addBuilding, addGroup, eastCompound, inside, place, plantTree, scatterTrees, urban } from '../wards'
 import { drop } from '../undo'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 和风：有机生长的日本城镇（城下町规划区以外、或不用规划的城）也按日本的样子盖——
@@ -482,7 +483,7 @@ function shiro(ctx: Ctx, block: Poly): boolean {
   const corners = [at(F, A0, B0), at(F, A0, B1), at(F, A1, B1), at(F, A1, B0)]
   const mo = mw / 2 + 0.5
   const ring = moat ? [at(F, R.a0 + mo, R.b0 + mo), at(F, R.a0 + mo, R.b1 - mo), at(F, R.a1 - mo, R.b1 - mo), at(F, R.a1 - mo, R.b0 + mo)] : null
-  const fA = Math.atan2(-F.f[1], -F.f[0])
+  const fA = dmath.atan2(-F.f[1], -F.f[0])
   rampart(ctx, corners, [{ edge: 0, p: at(F, A0, gl), angle: fA }], ring, mw, th)
   // 本丸的地面与登城路（街 → 桥 → 大手门 → 门内的枡形空地）
   const court = box(F, A0 + th / 2, A1 - th / 2, B0 + th / 2, B1 - th / 2)
@@ -790,8 +791,8 @@ function ikeniwa(ctx: Ctx, K: Kit, r: Rc) {
   const pond: Poly = []
   for (let i = 0; i < 20; i++) {
     const t = (i / 20) * Math.PI * 2
-    const k = 1 + 0.16 * Math.sin(3 * t + ph) + 0.08 * Math.cos(5 * t - ph)
-    pond.push(at(K.F, ca + Math.cos(t) * ra * k, cb + Math.sin(t) * rb * k))
+    const k = 1 + 0.16 * dmath.sin(3 * t + ph) + 0.08 * dmath.cos(5 * t - ph)
+    pond.push(at(K.F, ca + dmath.cos(t) * ra * k, cb + dmath.sin(t) * rb * k))
   }
   if (Math.min(ra, rb) > 3) {
     emitArea(ctx, 'plazas', pond)
@@ -801,7 +802,7 @@ function ikeniwa(ctx: Ctx, K: Kit, r: Rc) {
     const loop: P[] = []
     for (let i = 0; i <= 24; i++) {
       const t = (i / 24) * Math.PI * 2
-      loop.push(at(K.F, ca + Math.cos(t) * (ra * 1.28 + 2), cb + Math.sin(t) * (rb * 1.28 + 2)))
+      loop.push(at(K.F, ca + dmath.cos(t) * (ra * 1.28 + 2), cb + dmath.sin(t) * (rb * 1.28 + 2)))
     }
     ctx.out.roads.push({ line: loop, width: 1.6, kind: 'path' })
     // 池边一圈树
@@ -809,7 +810,7 @@ function ikeniwa(ctx: Ctx, K: Kit, r: Rc) {
     for (let i = 0; i < n; i++) {
       const t = (i / n) * Math.PI * 2 + K.h(ca, cb, 'pond.treeA', i) * 0.4
       const s = 1.12 + K.h(ca, cb, 'pond.treeR', i) * 0.1
-      K.tree(ca + Math.cos(t) * ra * s, cb + Math.sin(t) * rb * s, 2 + K.h(ca, cb, 'pond.treeS', i) * 1.8)
+      K.tree(ca + dmath.cos(t) * ra * s, cb + dmath.sin(t) * rb * s, 2 + K.h(ca, cb, 'pond.treeS', i) * 1.8)
     }
     // 池畔的茶屋
     const ts = clamp(Math.min(d, w) * 0.08, 3, 7)
@@ -852,8 +853,8 @@ function gosho(ctx: Ctx, block: Poly): boolean {
   const bm = (B0 + B1) / 2
   const D = A1 - A0
   const corners = [at(F, A0, B0), at(F, A0, B1), at(F, A1, B1), at(F, A1, B0)]
-  const fA = Math.atan2(F.f[1], F.f[0])
-  const lA = Math.atan2(F.l[1], F.l[0])
+  const fA = dmath.atan2(F.f[1], F.f[0])
+  const lA = dmath.atan2(F.l[1], F.l[0])
   // 築地塀：建礼门（南）、建春门（东）、朔平门（北）、宜秋门（西）
   rampart(
     ctx,

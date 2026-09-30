@@ -3,7 +3,7 @@ import { imperialPalace, royalPalace } from './palaces'
 import { eastCompound } from './compose/chinese'
 import { westChurch } from './compose/church'
 import { westCastle } from './compose/castle'
-import { emitArea, clearOf, clipWater, hashAt, isFree, mark, northOf, placeable, rngAt, type CorridorTag, type Ctx } from './ctx'
+import { emitArea, clearOf, clipWater, hashAt, isFree, keyOf, mark, mix, northOf, placeable, rngAt, type CorridorTag, type Ctx } from './ctx'
 import { addRoad } from './roads'
 import { chord, clipConvex,
   area,
@@ -27,6 +27,7 @@ import { chord, clipConvex,
 import { householdsOf, institutionOf } from './people'
 import { dwelling } from './undo'
 import type { Building, BuildingKind, Ward } from './types'
+import * as dmath from '../gen/dmath'
 
 /** 地块细分参数 */
 interface Dens {
@@ -122,7 +123,7 @@ export function subdivide(ctx: Ctx, block: Poly, o: Dens): Lot[] {
     const gap = a > o.maxA * 5 && rng.next() < o.alleyP ? o.alley : 0
     const [p1, p2] = splitConvex(poly, c, dir, gap)
     if (gap > 0) {
-      const L = Math.hypot(dir[0], dir[1])
+      const L = dmath.hypot(dir[0], dir[1])
       const n: P = [-dir[1] / L, dir[0] / L]
       fronts.push(...edgesOnLine(p1, [c[0] - n[0] * gap / 2, c[1] - n[1] * gap / 2], n))
       fronts.push(...edgesOnLine(p2, [c[0] + n[0] * gap / 2, c[1] + n[1] * gap / 2], n))
@@ -173,7 +174,7 @@ function frontOf(lot: Lot): Front | null {
   const c = centroid(poly)
   const dx = b[0] - a[0]
   const dy = b[1] - a[1]
-  const L = Math.hypot(dx, dy)
+  const L = dmath.hypot(dx, dy)
   let nx = -dy / L
   let ny = dx / L
   if ((c[0] - a[0]) * nx + (c[1] - a[1]) * ny < 0) {
@@ -276,7 +277,7 @@ function record(ctx: Ctx, poly: Poly, kind: BuildingKind, extra?: Partial<Buildi
   // 民居记下各户的营生与口数（不算城里人口的 units 为 0，没有住户）；寺院的僧房、兵营与城堡的厅堂住集体户
   let households = extra?.households
   if (!households) households = dwelling(kind) && (extra?.units ?? 1) > 0 ? householdsOf(ctx, poly, extra?.units ?? 1, extra?.floors ?? 1) : institutionOf(ctx, poly, kind, extra?.floors ?? 1)
-  ctx.out.buildings.push({ poly, kind, tone: hashAt(ctx, b.center, 'building.tone'), ridge: Math.atan2(b.axis[1], b.axis[0]), ...extra, ...(households.length ? { households } : {}) })
+  ctx.out.buildings.push({ poly, kind, tone: hashAt(ctx, b.center, 'building.tone'), ridge: dmath.atan2(b.axis[1], b.axis[0]), ...extra, ...(households.length ? { households } : {}) })
 }
 
 export function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house', pad = 0, floorCap = Infinity): boolean {
@@ -371,7 +372,7 @@ export function addPier(ctx: Ctx, pier: Poly): boolean {
 
 /** 船：整条船都在水里，不压桥、码头与别的船 */
 export function addBoat(ctx: Ctx, p: P, angle: number, len: number): boolean {
-  const u: P = [Math.cos(angle), Math.sin(angle)]
+  const u: P = [dmath.cos(angle), dmath.sin(angle)]
   const hull = rect(p, u, len, len * 0.36)
   if (hull.some((v) => ctx.T.waterAt(v) > -1)) return false
   if (ctx.corridors.hitsPoly(hull, 1, ['road'])) return false
@@ -611,13 +612,20 @@ export function scatterTrees(ctx: Ctx, poly: Poly, density: number, r0: number, 
   const ox = ctx.MW / 2
   const oy = ctx.MH / 2
   const [x0, y0, x1, y1] = bboxOf(poly)
+  // 与 hashAt(ctx, cell, tag) 相同，只是四个用途的键在循环外算好（大城里这里每格要抽四次签）
+  const kGate = ctx.seedHash ^ keyOf(`${grid}.gate`)
+  const kX = ctx.seedHash ^ keyOf(`${grid}.x`)
+  const kY = ctx.seedHash ^ keyOf(`${grid}.y`)
+  const kR = ctx.seedHash ^ keyOf(`${grid}.r`)
   for (let j = Math.floor((y0 - oy) / s); j <= Math.floor((y1 - oy) / s); j++)
     for (let i = Math.floor((x0 - ox) / s); i <= Math.floor((x1 - ox) / s); i++) {
       const cell: P = [ox + i * s, oy + j * s]
-      if (hashAt(ctx, cell, `${grid}.gate`) >= p0) continue
-      const p: P = [cell[0] + hashAt(ctx, cell, `${grid}.x`) * s, cell[1] + hashAt(ctx, cell, `${grid}.y`) * s]
+      const a = Math.round((cell[0] - ctx.MW / 2) * 2)
+      const b = Math.round((cell[1] - ctx.MH / 2) * 2)
+      if (mix(kGate, a, b) >= p0) continue
+      const p: P = [cell[0] + mix(kX, a, b) * s, cell[1] + mix(kY, a, b) * s]
       if (!pointInPoly(p, poly)) continue
-      plantTree(ctx, p, r0 + hashAt(ctx, cell, `${grid}.r`) * (r1 - r0))
+      plantTree(ctx, p, r0 + mix(kR, a, b) * (r1 - r0))
     }
 }
 /** 撒树的网格（米）：最密的撒法（约 0.02 棵 / 平方米）每格也不到一棵 */
@@ -677,7 +685,7 @@ export function plaza(ctx: Ctx, _ward: Ward, block: Poly, stallFactor = 1) {
     for (let k = 0; k < 6; k++) {
       const a = hashAt(ctx, c, 'plaza.statue.a', k) * Math.PI * 2
       const rr = 8 + hashAt(ctx, c, 'plaza.statue.r', k) * 10
-      const q: P = [c[0] + Math.cos(a) * rr, c[1] + Math.sin(a) * rr]
+      const q: P = [c[0] + dmath.cos(a) * rr, c[1] + dmath.sin(a) * rr]
       if (!pointInPoly(q, pave) || ctx.occ.hitsPoint(q, 2) || ctx.corridors.hits(q, 1)) continue
       ctx.out.landmarks.push({ p: q, kind: 'statue' })
       ctx.occ.add(circlePoly(q, 1.4, 8))
@@ -846,7 +854,7 @@ export function harbor(ctx: Ctx, ward: Ward, block: Poly) {
         const len = seaSide ? 12 + rng.next() * 10 : 7 + rng.next() * 3
         const off = (seaSide ? 6 : 4) / 2 + len * 0.18 + 1.2
         const bp: P = [q[0] - g[0] * (L + w) * t + n[0] * off * sd, q[1] - g[1] * (L + w) * t + n[1] * off * sd]
-        addBoat(ctx, bp, Math.atan2(-g[1], -g[0]), len)
+        addBoat(ctx, bp, dmath.atan2(-g[1], -g[0]), len)
       }
   }
   if (placed.length) mark(ctx, placed[0], 'harbor')
@@ -874,7 +882,7 @@ export function magicWard(ctx: Ctx, _ward: Ward, block: Poly) {
   // 围绕的石柱
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2
-    addBuilding(ctx, circlePoly([mc[0] + Math.cos(a) * r * 1.12, mc[1] + Math.sin(a) * r * 1.12], 1.2, 8), 'shed')
+    addBuilding(ctx, circlePoly([mc[0] + dmath.cos(a) * r * 1.12, mc[1] + dmath.sin(a) * r * 1.12], 1.2, 8), 'shed')
   }
   // 整个魔法阵登记为占地：树与房屋都绕开
   ctx.occ.add(circlePoly(mc, r * 1.2, 16))
@@ -914,7 +922,7 @@ export function siheyuan(ctx: Ctx, lot: Poly) {
       const c = centroid(lot)
       const dx = b[0] - a[0]
       const dy = b[1] - a[1]
-      const L = Math.hypot(dx, dy) || 1
+      const L = dmath.hypot(dx, dy) || 1
       let nx = -dy / L
       let ny = dx / L
       if ((c[0] - a[0]) * nx + (c[1] - a[1]) * ny < 0) {

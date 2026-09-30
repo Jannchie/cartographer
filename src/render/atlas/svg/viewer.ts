@@ -20,6 +20,8 @@ export interface Inset {
  */
 /** 底图的投影（不在图框模式时） */
 const SHADOW = '0 18px 60px rgba(0, 0, 0, 0.45)'
+/** 注记在屏幕上的最小字号（CSS 像素）：缩小看全图时小字不再跟着缩到看不清，放大到这个字号，放不下的暂时隐藏 */
+const MIN_LABEL_PX = 12
 
 export type Chrome = (w: number, h: number, box: Box, k: number) => DisplayList
 
@@ -28,10 +30,15 @@ export type Chrome = (w: number, h: number, box: Box, k: number) => DisplayList
  * - 底图：整张图预先栅格化一次（最长边 ≤ 4096 px），缩放倍率不超过它的精度时直接由 GPU 缩放
  * - 细节层：视口大小的画布，放大到超出底图精度时，停手后只重绘与视口相交的矢量指令
  * 拖动/缩放过程中两层都用 CSS 变换跟随，所以交互始终流畅；停下后细节层按矢量重绘，任意倍率清晰。
+ * - 注记层：地图里的注记不画进前两层，另画在视口大小的画布上，每次视图变化的下一帧重画。
+ *   注记长到设计字号的 labelMax 倍（整图适配若更大，就到适配倍率）之前照常跟着放大；再放大时以锚点为中心缩回，在屏幕上保持这个字号（像地图应用那样）。
+ *   缩小时照常跟着地图变小，不挤成一团。
  */
 export class AtlasViewer {
   private base = document.createElement('canvas')
   private detail = document.createElement('canvas')
+  private labels = document.createElement('canvas')
+  private labelsRaf = 0
   /** 地图层的容器：图框模式下按图框内框裁切 */
   private wrap = document.createElement('div')
   private chromeCanvas = document.createElement('canvas')
@@ -44,12 +51,14 @@ export class AtlasViewer {
   private drawn: { k: number; x: number; y: number } | null = null
   private timer = 0
   view = { x: 0, y: 0, k: 1 }
+  /** 注记最多长到设计字号的几倍（页面 1:1 时是 1 倍）：聚落图的字号设计得小，放大时可以多长一些 */
+  labelMax = 1
 
   constructor(private host: HTMLElement) {
     this.wrap.style.position = 'absolute'
     this.wrap.style.inset = '0'
     host.appendChild(this.wrap)
-    for (const c of [this.base, this.detail]) {
+    for (const c of [this.base, this.detail, this.labels]) {
       c.style.position = 'absolute'
       c.style.left = '0'
       c.style.top = '0'
@@ -58,6 +67,7 @@ export class AtlasViewer {
     }
     this.base.style.boxShadow = SHADOW
     this.detail.style.pointerEvents = 'none'
+    this.labels.style.pointerEvents = 'none'
     const cc = this.chromeCanvas
     cc.style.position = 'absolute'
     cc.style.left = '0'
@@ -68,6 +78,7 @@ export class AtlasViewer {
     new ResizeObserver(() => {
       this.drawChrome()
       this.scheduleDetail(0)
+      this.scheduleLabels()
     }).observe(host)
   }
 
@@ -87,6 +98,7 @@ export class AtlasViewer {
       this.scheduleDetail(0)
     }
     this.drawChrome()
+    this.scheduleLabels()
   }
 
   /** 图廓里的内容变了（悬停读数……）：下一帧重画图廓层 */
@@ -165,6 +177,20 @@ export class AtlasViewer {
     this.detail.style.display = 'none'
     this.drawChrome()
     this.apply()
+    // 换了列表（成长动画逐帧换）要马上换注记，不等下一帧：与底图同一帧出现
+    this.drawLabels()
+  }
+
+  /**
+   * 换成只有地图注记不同的列表（区域改动后重排注记）：底图与细节层都不画地图注记，不必重画，只重画注记层。
+   * 尺寸不同时退回 setList
+   */
+  setLabels(list: DisplayList) {
+    const old = this.list
+    if (list === old) return
+    if (!old || old.width !== list.width || old.height !== list.height || old.M !== list.M) return this.setList(list)
+    this.list = list
+    this.drawLabels()
   }
 
   /** 底图：整张栅格化一次（图框模式下只画地图层，图廓另画） */
@@ -181,7 +207,7 @@ export class AtlasViewer {
     }
     const ctx = this.base.getContext('2d')!
     ctx.clearRect(0, 0, this.base.width, this.base.height)
-    list.render(ctx, this.baseScale, 0, 0, this.chrome ? 'map' : undefined)
+    list.render(ctx, this.baseScale, 0, 0, this.chrome ? 'map' : undefined, false)
     this.base.style.width = list.width + 'px'
     this.base.style.height = list.height + 'px'
   }
@@ -212,6 +238,53 @@ export class AtlasViewer {
     // 比例尺跟着倍率变、缩小时图框跟着地图收拢
     this.refreshChrome()
     this.scheduleDetail(160)
+    this.scheduleLabels()
+  }
+
+  /** 整张地图放进可用区时的倍率 */
+  private fitK() {
+    const list = this.list!
+    if (this.chrome) {
+      const r = this.inner()
+      return Math.min(r.w / list.MW, r.h / list.MH)
+    }
+    return Math.min(this.host.clientWidth / list.width, this.host.clientHeight / list.height)
+  }
+
+  private scheduleLabels() {
+    if (!this.labelsRaf)
+      this.labelsRaf = requestAnimationFrame(() => {
+        this.labelsRaf = 0
+        this.drawLabels()
+      })
+  }
+
+  private drawLabels() {
+    cancelAnimationFrame(this.labelsRaf)
+    this.labelsRaf = 0
+    const list = this.list
+    const w = this.host.clientWidth
+    const h = this.host.clientHeight
+    if (!list || !w || !h) return
+    const dpr = window.devicePixelRatio || 1
+    const c = this.labels
+    const cw = Math.round(w * dpr)
+    const ch = Math.round(h * dpr)
+    if (c.width !== cw || c.height !== ch) {
+      c.width = cw
+      c.height = ch
+      c.style.width = w + 'px'
+      c.style.height = h + 'px'
+    }
+    const ctx = c.getContext('2d')!
+    ctx.clearRect(0, 0, cw, ch)
+    const { x, y, k } = this.view
+    // 注记长到设计字号的 labelMax 倍就不再跟着放大
+    const kRef = Math.max(this.labelMax, this.fitK())
+    // 图框模式下只有图框内框露出来：面状注记挪位时只在这里面找地方
+    const f = this.chrome ? this.frameBox() : null
+    const vis: [number, number, number, number] | undefined = f ? [f.x * dpr, f.y * dpr, (f.x + f.w) * dpr, (f.y + f.h) * dpr] : undefined
+    list.renderLabels(ctx, k * dpr, x * dpr, y * dpr, Math.min(1, kRef / k), vis, MIN_LABEL_PX * dpr, dpr)
   }
 
   private scheduleDetail(delay: number) {
@@ -237,7 +310,7 @@ export class AtlasViewer {
     this.detail.style.height = h + 'px'
     const ctx = this.detail.getContext('2d')!
     ctx.clearRect(0, 0, this.detail.width, this.detail.height)
-    this.list.render(ctx, k * dpr, x * dpr, y * dpr, this.chrome ? 'map' : undefined)
+    this.list.render(ctx, k * dpr, x * dpr, y * dpr, this.chrome ? 'map' : undefined, false)
     this.drawn = { x, y, k }
     this.detail.style.transform = 'none'
     this.detail.style.display = 'block'

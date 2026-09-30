@@ -1,4 +1,5 @@
 import { RNG } from './rng'
+import * as dmath from './dmath'
 
 const F2 = 0.5 * (Math.sqrt(3) - 1)
 const G2 = (3 - Math.sqrt(3)) / 6
@@ -6,8 +7,8 @@ const G2 = (3 - Math.sqrt(3)) / 6
 const GRAD = new Float32Array(24)
 for (let i = 0; i < 12; i++) {
   const a = (i / 12) * Math.PI * 2 + 0.13
-  GRAD[i * 2] = Math.cos(a)
-  GRAD[i * 2 + 1] = Math.sin(a)
+  GRAD[i * 2] = dmath.cos(a)
+  GRAD[i * 2 + 1] = dmath.sin(a)
 }
 
 /** 种子化 2D simplex 噪声及其分形组合。 */

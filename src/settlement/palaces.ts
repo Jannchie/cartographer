@@ -5,6 +5,7 @@ import { addBuilding, addGroup, plantTree, scatterTrees } from './wards'
 import { composer, flanks, rectFrame, type Composer, type Elem, type Preset } from './compose/core'
 import { jin, yard, type Centre, type Yard, type Side } from './compose/chinese'
 import { addWall, connectGates } from './walls'
+import * as dmath from '../gen/dmath'
 
 /**
  * 都城的宫殿（东方的紫禁城式宫城、西式的王宫），铺满宫城地盘里的整个矩形（见 generate.ts 的 palaceSite）。
@@ -26,7 +27,7 @@ const put = (ctx: Ctx, poly: Poly, kind: BuildingKind) => addBuilding(ctx, poly,
 
 /** 成行的树：沿一条线每隔 step 米一棵 */
 function treeLine(ctx: Ctx, a: P, b: P, step: number, r: number) {
-  const L = Math.hypot(b[0] - a[0], b[1] - a[1])
+  const L = dmath.hypot(b[0] - a[0], b[1] - a[1])
   const n = Math.max(1, Math.floor(L / step))
   for (let k = 0; k <= n; k++) {
     const t: P = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]
@@ -40,8 +41,8 @@ function treeLine(ctx: Ctx, a: P, b: P, step: number, r: number) {
  */
 function pond(ctx: Ctx, F: Frame, uc: number, fc: number, ru: number, rd: number, ph: number) {
   const shore = (t: number, s: number): P => {
-    const k = 1 + 0.16 * Math.sin(3 * t + ph) + 0.08 * Math.cos(5 * t - ph)
-    return fat(F, uc + Math.cos(t) * ru * k * s, fc + Math.sin(t) * rd * k * s)
+    const k = 1 + 0.16 * dmath.sin(3 * t + ph) + 0.08 * dmath.cos(5 * t - ph)
+    return fat(F, uc + dmath.cos(t) * ru * k * s, fc + dmath.sin(t) * rd * k * s)
   }
   const poly: Poly = []
   for (let i = 0; i < 22; i++) poly.push(shore((i / 22) * Math.PI * 2, 1))
@@ -252,7 +253,7 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
   const side = C.chance('sideGates', 0.45)
   const P0 = (a: number, b: number) => gat(F, a, b)
   const loop = [P0(0, -W / 2), P0(0, 0), P0(0, W / 2), ...(side ? [P0(as, W / 2)] : []), P0(D, W / 2), P0(D, 0), P0(D, -W / 2), ...(side ? [P0(as, -W / 2)] : [])]
-  const ang = (v: P) => Math.atan2(v[1], v[0])
+  const ang = (v: P) => dmath.atan2(v[1], v[0])
   const { f, l } = F
   const wall = addWall(
     ctx,
@@ -541,7 +542,7 @@ const ROYAL_PRESETS: Preset[] = [
 export function royalPalace(ctx: Ctx, R: Poly): boolean {
   const c = centroid(R)
   const toCity: P = [ctx.center[0] - c[0], ctx.center[1] - c[1]]
-  const L = Math.hypot(toCity[0], toCity[1]) || 1
+  const L = dmath.hypot(toCity[0], toCity[1]) || 1
   const { F, W, D } = rectFrame(R, [toCity[0] / L, toCity[1] / L])
   if (W < 60 || D < 60) return false
   const K = yard(ctx, F)
@@ -783,16 +784,16 @@ function landscapeGarden(ctx: Ctx, F: Frame, W: number, g0: number, g1: number, 
   const loop: P[] = []
   for (let i = 0; i <= 28; i++) {
     const a = (i / 28) * Math.PI * 2
-    const k = 1 + 0.08 * Math.sin(3 * a + V.h('landscape.shore') * 6)
-    loop.push(fat(F, Math.cos(a) * W * 0.38 * k, (g0 + g1) / 2 + (Math.sin(a) * (g1 - g0) * 0.4 * k)))
+    const k = 1 + 0.08 * dmath.sin(3 * a + V.h('landscape.shore') * 6)
+    loop.push(fat(F, dmath.cos(a) * W * 0.38 * k, (g0 + g1) / 2 + (dmath.sin(a) * (g1 - g0) * 0.4 * k)))
   }
   ctx.out.roads.push({ line: loop, width: 2, kind: 'path' })
   lake.trees()
   // 一丛丛的树林：沿园子边缘与路外，楼后留一片开阔的草坪
   for (let k = 0; k < 9; k++) {
     const a = V.h('landscape.clump', k) * Math.PI * 2
-    const u = Math.cos(a) * W * 0.4
-    const f = (g0 + g1) / 2 + Math.sin(a) * (g1 - g0) * 0.42
+    const u = dmath.cos(a) * W * 0.4
+    const f = (g0 + g1) / 2 + dmath.sin(a) * (g1 - g0) * 0.42
     if (f < g0 + (g1 - g0) * 0.2) continue
     const r = 8 + V.h('landscape.clumpR', k) * 12
     scatterTrees(ctx, circlePoly(fat(F, u, f), r, 10), 0.03, 2.4, 4.2)

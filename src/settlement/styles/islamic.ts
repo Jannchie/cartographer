@@ -21,6 +21,7 @@ import { isVillage } from '../scale'
 import type { BuildingKind, Ward } from '../types'
 import { addBuilding, addGroup, fit, inside, place, plantTree, scatterTrees, subdivide } from '../wards'
 import { addWall, connectGates } from '../walls'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 伊斯兰：有机生长的城里（以及麦地那城墙外的关厢）也按伊斯兰城市的样子盖：
@@ -148,7 +149,7 @@ function farmsteads(ctx: Ctx, block: Poly) {
     // 两翼成 L 形，院子朝着地里
     if (!addBuilding(ctx, box(u0, u1, v0, v0 + t), 'house', 0, 1)) continue
     const wingP = box(u0, u0 + t, v0 + t, v1)
-    place(ctx, wingP, 'house', {}, { ridge: Math.atan2(b.axis[1], b.axis[0]) + Math.PI / 2, floors: 1, units: 0 })
+    place(ctx, wingP, 'house', {}, { ridge: dmath.atan2(b.axis[1], b.axis[0]) + Math.PI / 2, floors: 1, units: 0 })
     const yard = insetConvex(q, 0.5)
     if (yard.length >= 3) emitArea(ctx, 'enclosures', yard)
     scatterTrees(ctx, insetConvex(q, 2), 0.004, 2, 3.4)
@@ -225,13 +226,13 @@ function gateEdge(ctx: Ctx, curtain: Poly, c: P) {
     const a = curtain[i]
     const e = curtain[(i + 1) % curtain.length]
     const m: P = [(a[0] + e[0]) / 2 - c[0], (a[1] + e[1]) / 2 - c[1]]
-    const s = (m[0] * toC[0] + m[1] * toC[1]) / (Math.hypot(...m) || 1)
+    const s = (m[0] * toC[0] + m[1] * toC[1]) / (dmath.hypot(...m) || 1)
     if (s > gd && dist(a, e) > 14) {
       gd = s
       gi = i
     }
   }
-  const L = Math.hypot(...toC) || 1
+  const L = dmath.hypot(...toC) || 1
   return { gi, toC: [toC[0] / L, toC[1] / L] as P }
 }
 
@@ -306,7 +307,7 @@ function qasr(ctx: Ctx, block: Poly): boolean {
     const k = Math.floor(dist(a, b) / 22)
     for (let j = 1; j <= k; j++) if (i !== gi) towers.push([a[0] + ((b[0] - a[0]) * j) / (k + 1), a[1] + ((b[1] - a[1]) * j) / (k + 1)])
   })
-  const wall = addWall(ctx, { loop: curtain, solid: curtain.map(() => true), towers, gates: [{ p: gm, angle: Math.atan2(ge[1], ge[0]) + Math.PI / 2 }], kind: 'stone', thickness: 3 }, 'keep')
+  const wall = addWall(ctx, { loop: curtain, solid: curtain.map(() => true), towers, gates: [{ p: gm, angle: dmath.atan2(ge[1], ge[0]) + Math.PI / 2 }], kind: 'stone', thickness: 3 }, 'keep')
   ctx.out.landmarks.push({ p: c, name: ctx.namer.palace(), kind: 'castle' })
 
   const f = axes(e)
@@ -468,7 +469,7 @@ function dry(ctx: Ctx, poly: Poly): Poly | null {
       }
     if (!wp) return out
     const gr = ctx.T.waterGrad(wp)
-    const L = Math.hypot(gr[0], gr[1])
+    const L = dmath.hypot(gr[0], gr[1])
     if (L < 1e-6) return null
     const n: P = [gr[0] / L, gr[1] / L]
     out = clipHalf(out, add(wp, n, 4.5 - ww), [-n[0], -n[1]])

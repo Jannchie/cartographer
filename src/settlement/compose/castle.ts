@@ -5,6 +5,7 @@ import { addWall, connectGates } from '../walls'
 import { addBuilding, fit, inside, place, scatterTrees } from '../wards'
 import { composer, type Elem, type Preset } from './core'
 import { nearestRoad } from '../roads'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 西式城堡的语法：幕墙（顺着地块 / 规整的方院 / 内外两圈的同心城）+ 塔（圆塔 / 方塔，疏密）
@@ -73,7 +74,7 @@ function gateEdge(ctx: Ctx, loop: Poly, c: P, minLen: number) {
     const e = loop[(i + 1) % loop.length]
     const mid: P = [(a[0] + e[0]) / 2, (a[1] + e[1]) / 2]
     const m: P = [mid[0] - c[0], mid[1] - c[1]]
-    const s = ((m[0] * toCenter[0] + m[1] * toCenter[1]) / (Math.hypot(...m) || 1)) * 8 - Math.min(80, nearestRoad(ctx, mid, 80)?.gap ?? Infinity)
+    const s = ((m[0] * toCenter[0] + m[1] * toCenter[1]) / (dmath.hypot(...m) || 1)) * 8 - Math.min(80, nearestRoad(ctx, mid, 80)?.gap ?? Infinity)
     if (s > gd && dist(a, e) > minLen) {
       gd = s
       gi = i
@@ -105,14 +106,14 @@ function curtainWall(poly: Poly, gi: number, spacing: number, thickness: number,
     const i = k <= gi ? k : k - 1
     return solid(i)
   })
-  const wall: Wall = { loop, solid: solids, towers, gates: [{ p: gp, angle: Math.atan2(gb[1] - ga[1], gb[0] - ga[0]) + Math.PI / 2 }], kind: 'stone', thickness }
+  const wall: Wall = { loop, solid: solids, towers, gates: [{ p: gp, angle: dmath.atan2(gb[1] - ga[1], gb[0] - ga[0]) + Math.PI / 2 }], kind: 'stone', thickness }
   // 朝里的法向
   const c = centroid(poly)
   let n: P = [-(gb[1] - ga[1]), gb[0] - ga[0]]
-  const L = Math.hypot(n[0], n[1]) || 1
+  const L = dmath.hypot(n[0], n[1]) || 1
   n = [n[0] / L, n[1] / L]
   if ((c[0] - gp[0]) * n[0] + (c[1] - gp[1]) * n[1] < 0) n = [-n[0], -n[1]]
-  wall.gates[0].angle = Math.atan2(-n[1], -n[0])
+  wall.gates[0].angle = dmath.atan2(-n[1], -n[0])
   return { wall, gp, n, u: [(gb[0] - ga[0]) / (dist(ga, gb) || 1), (gb[1] - ga[1]) / (dist(ga, gb) || 1)] as P }
 }
 

@@ -1,4 +1,4 @@
-import { Biome, type World } from '../../gen/types'
+import { Biome, reliefKm, type World } from '../../gen/types'
 import { blur } from '../../gen/util'
 import { riverThreshold } from '../../gen/world'
 
@@ -83,7 +83,7 @@ export function buildMaterialMask(world: World, exaggeration = 20): Uint8Array {
  * 天空被遮挡得越多越暗——山谷与峡谷因此有深度感。
  */
 function horizonAO(world: World, ex: number): Float32Array {
-  const { W, H, elevation: e, kmPerCell } = world
+  const { W, H, elevation: e } = world
   const N = W * H
   const ao = new Float32Array(N)
   const dirs = [
@@ -97,19 +97,36 @@ function horizonAO(world: World, ex: number): Float32Array {
     [-0.707, -0.707],
   ]
   const steps = [1, 2, 3, 5, 8, 12, 18]
-  const k = ex / kmPerCell
+  const D = dirs.length
+  const S = steps.length
+  // 每个方向、每一步的整数偏移（x 为整数时 round(x + v) = x + round(v)）与下标增量
+  const ox = new Int32Array(D * S)
+  const oy = new Int32Array(D * S)
+  const od = new Int32Array(D * S)
+  for (let d = 0; d < D; d++) {
+    for (let j = 0; j < S; j++) {
+      const m = d * S + j
+      ox[m] = Math.round(dirs[d][0] * steps[j])
+      oy[m] = Math.round(dirs[d][1] * steps[j])
+      od[m] = oy[m] * W + ox[m]
+    }
+  }
+  // 海面以下按 0 计：先统一截断
+  const hp = new Float32Array(N)
+  for (let i = 0; i < N; i++) hp[i] = Math.max(0, e[i])
+  const k = ex / reliefKm(world)
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = y * W + x
-      const h0 = Math.max(0, e[i])
+      const h0 = hp[i]
       let occ = 0
-      for (const [dx, dy] of dirs) {
+      for (let d = 0; d < D; d++) {
         let maxT = 0
-        for (const s of steps) {
-          const xx = Math.round(x + dx * s)
-          const yy = Math.round(y + dy * s)
+        for (let j = 0, m = d * S; j < S; j++, m++) {
+          const xx = x + ox[m]
+          const yy = y + oy[m]
           if (xx < 0 || yy < 0 || xx >= W || yy >= H) break
-          const t = ((Math.max(0, e[yy * W + xx]) - h0) * k) / s
+          const t = ((hp[i + od[m]] - h0) * k) / steps[j]
           if (t > maxT) maxT = t
         }
         // 仰角正弦

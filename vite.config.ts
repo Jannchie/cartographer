@@ -17,11 +17,18 @@ function genHash(): Plugin {
     load(s) {
       if (s !== '\0' + id) return
       const h = createHash('sha1')
-      for (const f of readdirSync(dir).sort()) {
-        const path = join(dir, f)
-        this.addWatchFile(path)
-        h.update(f).update(readFileSync(path))
+      // 连同子目录（地球底图的数据也算生成器的一部分）
+      const walk = (d: string, rel: string) => {
+        for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+          const path = join(d, e.name)
+          if (e.isDirectory()) walk(path, `${rel}${e.name}/`)
+          else {
+            this.addWatchFile(path)
+            h.update(rel + e.name).update(readFileSync(path))
+          }
+        }
       }
+      walk(dir, '')
       return `export default ${JSON.stringify(h.digest('hex').slice(0, 12))}`
     },
     handleHotUpdate({ file, server }) {

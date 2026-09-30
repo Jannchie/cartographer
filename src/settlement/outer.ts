@@ -7,6 +7,7 @@ import type { Density, Field, WardType } from './types'
 import { addBuilding, scatterTrees, subdivide } from './wards'
 import { wetRuns } from './roads'
 import { isVillage } from './scale'
+import * as dmath from '../gen/dmath'
 
 /**
  * 城内外共用的部分：Voronoi 片区剖分、植被、农田、林地与道路过水处理。
@@ -126,8 +127,8 @@ export function radialStreets(ctx: Ctx, core: Core, i: number): P[][] {
     const pts: P[] = []
     for (let k = 0; k <= m; k++) {
       const a = a0 + ((a1 - a0) * k) / m
-      const w = rad + Math.sin((k / m) * Math.PI) * bend
-      pts.push([c[0] + Math.cos(a) * w, c[1] + Math.sin(a) * w])
+      const w = rad + dmath.sin((k / m) * Math.PI) * bend
+      pts.push([c[0] + dmath.cos(a) * w, c[1] + dmath.sin(a) * w])
     }
     return pts
   }
@@ -137,7 +138,7 @@ export function radialStreets(ctx: Ctx, core: Core, i: number): P[][] {
     const step = (Math.PI * 2) / n
     const rad = (k + 0.5) * s
     for (let j = 0; j < n; j++) {
-      const mid: P = [c[0] + Math.cos(j * step) * rad, c[1] + Math.sin(j * step) * rad]
+      const mid: P = [c[0] + dmath.cos(j * step) * rad, c[1] + dmath.sin(j * step) * rad]
       const pick = hashAt(ctx, mid, 'outer.ring.keep', i)
       const bend = (hashAt(ctx, mid, 'outer.ring.bend', i) - 0.5) * s * 0.3 * (1 - r)
       if (pick >= keep) continue
@@ -149,11 +150,11 @@ export function radialStreets(ctx: Ctx, core: Core, i: number): P[][] {
     const st = (Math.PI * 2) / inner.n
     for (let j = 0; j < inner.n; j++) {
       const a = (j + 0.5) * st
-      const at: P = [c[0] + Math.cos(a) * k * s, c[1] + Math.sin(a) * k * s]
+      const at: P = [c[0] + dmath.cos(a) * k * s, c[1] + dmath.sin(a) * k * s]
       const pick = hashAt(ctx, at, 'outer.spoke.keep', i)
       const bend = (hashAt(ctx, at, 'outer.spoke.bend', i) - 0.5) * s * 0.25 * (1 - r)
       if (pick >= keep * 0.85) continue
-      const d: P = [Math.cos(a), Math.sin(a)]
+      const d: P = [dmath.cos(a), dmath.sin(a)]
       const nrm: P = [-d[1], d[0]]
       const r0 = Math.max(s * 0.5, (k - 0.5) * s)
       const r1 = (k + 0.5) * s
@@ -231,7 +232,7 @@ function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extr
       for (let s = dirn > 0 ? s0 : s0 - spacing(ctx, pointAt(line, s0).p) * 0.85; s >= 0 && s < L; ) {
         const { p: q, angle } = pointAt(line, s)
         const sp = spacing(ctx, q)
-        const n: P = [-Math.sin(angle), Math.cos(angle)]
+        const n: P = [-dmath.sin(angle), dmath.cos(angle)]
         const off = hwAt(s) + sp * 0.45
         for (const sg of [-1, 1]) {
           const c: P = [q[0] + n[0] * off * sg, q[1] + n[1] * off * sg]
@@ -248,7 +249,7 @@ function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extr
     for (let s = ctx.cfg.patch * 0.6; s < L; ) {
       const { p: q, angle } = pointAt(road, s)
       const sp = spacing(ctx, q)
-      const n: P = [-Math.sin(angle), Math.cos(angle)]
+      const n: P = [-dmath.sin(angle), dmath.cos(angle)]
       for (const sg of [-1, 1]) {
         const c: P = [q[0] + n[0] * sp * 0.5 * sg, q[1] + n[1] * sp * 0.5 * sg]
         if (T.waterAt(c) > 4 && ok(c, sp)) {
@@ -275,10 +276,10 @@ function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extr
     // 环 + 辐条点（圈数按半径取整，每圈格数按周长）
     const dx = q[0] - center[0]
     const dy = q[1] - center[1]
-    const ring = polarRing(Math.max(1, Math.round(Math.hypot(dx, dy) / s)), s)
+    const ring = polarRing(Math.max(1, Math.round(dmath.hypot(dx, dy) / s)), s)
     const step = (Math.PI * 2) / ring.n
-    const a = Math.round(Math.atan2(dy, dx) / step) * step
-    const gp: P = [center[0] + Math.cos(a) * ring.rr, center[1] + Math.sin(a) * ring.rr]
+    const a = Math.round(dmath.atan2(dy, dx) / step) * step
+    const gp: P = [center[0] + dmath.cos(a) * ring.rr, center[1] + dmath.sin(a) * ring.rr]
     const t: P = [gs[0] + (gp[0] - gs[0]) * g, gs[1] + (gp[1] - gs[1]) * g]
     return [q[0] + (t[0] - q[0]) * r, q[1] + (t[1] - q[1]) * r]
   }
@@ -343,7 +344,7 @@ function canonical(poly: Poly, site: P): Poly {
   let k = 0
   let best = Infinity
   poly.forEach((v, i) => {
-    const a = Math.atan2(v[1] - site[1], v[0] - site[0])
+    const a = dmath.atan2(v[1] - site[1], v[0] - site[0])
     if (a < best) {
       best = a
       k = i
@@ -453,7 +454,7 @@ export function farm(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>, 
   const wet = veg.paddy && slope0 < 0.06 && nearWater < 350
   const terrace = veg.paddy && slope0 >= 0.06 && slope0 < 0.24 && nearWater < 500
   const ang = furlongAngle(ctx, c0, terrace)
-  const dir: P = [Math.cos(ang), Math.sin(ang)]
+  const dir: P = [dmath.cos(ang), dmath.sin(ang)]
   const across: P = [-dir[1], dir[0]]
   // 城墙里（城墙按规划修得比城大，墙根到城区之间空着）：不种大田，是小块的菜园、果园、葡萄园与放牧的公地
   const walled = ctx.cityWalls.length > 0 && inCity(ctx, c0)
@@ -573,7 +574,7 @@ function furlongAngle(ctx: Ctx, c: P, contour: boolean): number {
   if (T.slopeAt(c) > 0.06 || contour) {
     const gx = T.heightAt([c[0] + 6, c[1]]) - T.heightAt([c[0] - 6, c[1]])
     const gy = T.heightAt([c[0], c[1] + 6]) - T.heightAt([c[0], c[1] - 6])
-    if (Math.hypot(gx, gy) > 1e-3) return Math.atan2(gy, gx) + (contour ? Math.PI / 2 : 0)
+    if (dmath.hypot(gx, gy) > 1e-3) return dmath.atan2(gy, gx) + (contour ? Math.PI / 2 : 0)
   }
   let boxes = roadBoxes.get(ctx)
   if (!boxes) {
@@ -603,7 +604,7 @@ function furlongAngle(ctx: Ctx, c: P, contour: boolean): number {
       const d = segDist(c, line[i], line[i + 1]).d
       if (d < best) {
         best = d
-        ang = Math.atan2(line[i + 1][1] - line[i][1], line[i + 1][0] - line[i][0])
+        ang = dmath.atan2(line[i + 1][1] - line[i][1], line[i + 1][0] - line[i][0])
       }
     }
   }
@@ -620,7 +621,7 @@ export function wild(ctx: Ctx, block: Poly, veg: ReturnType<typeof vegetation>) 
   if (veg.trees <= 0.02) return
   const c = centroid(block)
   // 林木成片：按离地图中心（世界原点）的坐标取，地图大小变了，林子还在原地
-  const cluster = 0.5 + 0.5 * Math.sin((c[0] - ctx.MW / 2) * 0.011 + ctx.p.seed.length) * Math.cos((c[1] - ctx.MH / 2) * 0.013)
+  const cluster = 0.5 + 0.5 * dmath.sin((c[0] - ctx.MW / 2) * 0.011 + ctx.p.seed.length) * dmath.cos((c[1] - ctx.MH / 2) * 0.013)
   const slope = T.slopeAt(c)
   const dens = veg.trees * (0.0006 + 0.004 * cluster * cluster + slope * 0.01)
   const g = clipWater(ctx, insetConvex(block, 3), 3)

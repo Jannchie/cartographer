@@ -1,6 +1,7 @@
 import { Biome } from '../../gen/types'
 import { riverThreshold } from '../../gen/world'
 import { hash, type Fields } from './fields'
+import { GlyphBatch, type Pen } from './glyphBatch'
 
 export interface GlyphColors {
   ink: string
@@ -198,32 +199,35 @@ export function drawGlyphs(ctx: CanvasRenderingContext2D, f: Fields, o: GlyphCol
   flatMarks(ctx, f, o, k, wet)
   ctx.restore()
 
-  // —— 按纵坐标绘制遮挡符号 ——
+  // —— 按纵坐标绘制遮挡符号：先逐个录下笔画，再按遮叠分层合批（见 GlyphBatch） ——
   glyphs.sort((a, b) => a.y - b.y)
   ctx.save()
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
+  const pen = new GlyphBatch(ctx)
   for (const g of glyphs) {
+    pen.begin()
     switch (g.kind) {
       case 'mountain':
-        mountain(ctx, g, o, k)
+        mountain(pen, g, o, k)
         break
       case 'hill':
-        hill(ctx, g, o, k)
+        hill(pen, g, o, k)
         break
       case 'conifer':
-        conifer(ctx, g, o, k)
+        conifer(pen, g, o, k)
         break
       case 'acacia':
-        acacia(ctx, g, o, k)
+        acacia(pen, g, o, k)
         break
       case 'bush':
-        bush(ctx, g, o, k)
+        bush(pen, g, o, k)
         break
       default:
-        tree(ctx, g, o, k)
+        tree(pen, g, o, k)
     }
   }
+  pen.flush(ctx, 64 * k)
   ctx.restore()
 }
 
@@ -334,7 +338,7 @@ function flatMarks(ctx: CanvasRenderingContext2D, f: Fields, o: GlyphColors, k: 
 
 // ———————————————————————— 遮挡符号 ————————————————————————
 
-function poly(ctx: CanvasRenderingContext2D, pts: P[], close = true) {
+function poly(ctx: Pen, pts: P[], close = true) {
   ctx.beginPath()
   pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)))
   if (close) ctx.closePath()
@@ -354,7 +358,7 @@ function xAtY(line: P[], y: number) {
  * 山峰：嶙峋的折线轮廓（带肩部与次峰），右侧背光面填暗色并沿坡向排线，
  * 中间一条山脊线分开明暗；高峰加一顶锯齿状雪冠。
  */
-function mountain(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
+function mountain(ctx: Pen, g: G, o: GlyphColors, k: number) {
   const { x, y, s, seed } = g
   const t = g.t ?? 0
   const r = (i: number) => hash(seed, i)
@@ -437,7 +441,7 @@ function mountain(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number
  * 丘陵：与山峰同一套画法（阴坡填色 + 斜排线 + 山脊线），只是更矮更圆；
  * t 越大（起伏越强）顶越尖，向山麓小峰过渡。
  */
-function hill(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
+function hill(ctx: Pen, g: G, o: GlyphColors, k: number) {
   const { x, y, s, seed } = g
   const t = g.t ?? 0
   const r = (i: number) => hash(seed, i)
@@ -502,7 +506,7 @@ function hill(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
 }
 
 /** 阔叶树：分瓣的树冠，先填暗色再向左上偏移叠一层亮色，形成右下的阴影 */
-function tree(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
+function tree(ctx: Pen, g: G, o: GlyphColors, k: number) {
   const { x, y, s, seed } = g
   const jungle = g.kind === 'jungle'
   const r = s * (jungle ? 0.95 : 0.82)
@@ -527,7 +531,7 @@ function tree(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
   ctx.stroke()
 }
 
-function crown(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, lobes: number, rot: number) {
+function crown(ctx: Pen, cx: number, cy: number, r: number, lobes: number, rot: number) {
   ctx.beginPath()
   const pt = (a: number, rr: number): P => [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * 0.92]
   for (let j = 0; j <= lobes; j++) {
@@ -543,7 +547,7 @@ function crown(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number,
 }
 
 /** 针叶树：两到三层下垂的塔形，右半边暗 */
-function conifer(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
+function conifer(ctx: Pen, g: G, o: GlyphColors, k: number) {
   const { x, y, s, seed } = g
   ctx.strokeStyle = o.ink
   ctx.lineWidth = 0.7 * k
@@ -580,7 +584,7 @@ function conifer(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number)
 }
 
 /** 金合欢：分叉的细干 + 扁平的伞状树冠 */
-function acacia(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
+function acacia(ctx: Pen, g: G, o: GlyphColors, k: number) {
   const { x, y, s } = g
   const cy = y - s * 1.25
   ctx.strokeStyle = o.ink
@@ -614,7 +618,7 @@ function acacia(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) 
 }
 
 /** 灌木：贴地的三瓣矮丛 */
-function bush(ctx: CanvasRenderingContext2D, g: G, o: GlyphColors, k: number) {
+function bush(ctx: Pen, g: G, o: GlyphColors, k: number) {
   const { x, y, s } = g
   const shape = () => {
     ctx.beginPath()

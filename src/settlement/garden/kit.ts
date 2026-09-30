@@ -5,6 +5,7 @@ import type { BuildingKind, Building, Culture, ParkPart } from '../types'
 import { inside, place, plantTree } from '../wards'
 import type { Composer, Preset } from '../compose/core'
 import { emitArea } from '../ctx'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 园林的"工具箱"：园子的状态（Garden）、以及各元素共用的小动作（园路、铺装、池、树、石、房子）。
@@ -143,7 +144,7 @@ export function reach(q: Poly, c: P, d: P) {
 /** 池岸（或岛岸）上 angle 方向的点，再往外 out 米 */
 export function shore(q: Poly, angle: number, out = 0): P {
   const c = centroid(q)
-  const d: P = [Math.cos(angle), Math.sin(angle)]
+  const d: P = [dmath.cos(angle), dmath.sin(angle)]
   const r = reach(q, c, d)
   return add(c, d, (Number.isFinite(r) ? r : 0) + out)
 }
@@ -156,8 +157,8 @@ export function blob(F: RectFrame, x: number, y: number, rx: number, ry: number,
   const out: Poly = []
   for (let i = 0; i < n; i++) {
     const t = (i / n) * Math.PI * 2
-    const k = 1 + wob * (0.14 * Math.sin(2 * t + ph) + 0.1 * Math.sin(3 * t + ph * 1.3) + 0.06 * Math.cos(5 * t - ph * 0.7))
-    out.push(at(F, x + Math.cos(t) * rx * k, y + Math.sin(t) * ry * k))
+    const k = 1 + wob * (0.14 * dmath.sin(2 * t + ph) + 0.1 * dmath.sin(3 * t + ph * 1.3) + 0.06 * dmath.cos(5 * t - ph * 0.7))
+    out.push(at(F, x + dmath.cos(t) * rx * k, y + dmath.sin(t) * ry * k))
   }
   return out
 }
@@ -174,7 +175,7 @@ export function fitShape(K: Garden, make: (s: number) => Poly, margin: number): 
 }
 
 /** 正 n 边形（朝向随标架） */
-export const ngon = (F: RectFrame, p: P, r: number, n: number) => circlePoly(p, r, n, Math.atan2(F.f[1], F.f[0]) + Math.PI / n)
+export const ngon = (F: RectFrame, p: P, r: number, n: number) => circlePoly(p, r, n, dmath.atan2(F.f[1], F.f[0]) + Math.PI / n)
 
 // —————————————————————— 落地 ——————————————————————
 
@@ -226,7 +227,7 @@ export function clump(K: Garden, p: P, R: number, n: number, r0: number, r1: num
   for (let k = 0, placed = 0; k < n * 3 && placed < n; k++) {
     const a = rng.next() * Math.PI * 2
     const d = Math.sqrt(rng.next()) * R
-    if (tree(K, [p[0] + Math.cos(a) * d, p[1] + Math.sin(a) * d], r0 + rng.next() * (r1 - r0))) placed++
+    if (tree(K, [p[0] + dmath.cos(a) * d, p[1] + dmath.sin(a) * d], r0 + rng.next() * (r1 - r0))) placed++
   }
 }
 
@@ -262,7 +263,7 @@ export function bld(K: Garden, poly: Poly, kind: BuildingKind, wet = false, extr
 
 /** 一座亭：方亭，或 sides 边的多角亭（音乐亭、小神殿） */
 export function kiosk(K: Garden, p: P, s: number, kind: BuildingKind = 'pagoda', sides = 4, wet = false, d: P = K.f) {
-  const q = sides === 4 ? cbox(frameAt(p, d), 0, 0, s, s) : circlePoly(p, s / 2, sides, Math.atan2(d[1], d[0]) + Math.PI / sides)
+  const q = sides === 4 ? cbox(frameAt(p, d), 0, 0, s, s) : circlePoly(p, s / 2, sides, dmath.atan2(d[1], d[0]) + Math.PI / sides)
   return bld(K, q, kind, wet)
 }
 
@@ -276,7 +277,7 @@ export function rock(K: Garden, p: P, r: number) {
   for (let i = 0; i < n; i++) {
     const a = a0 + (i / n) * Math.PI * 2
     const rr = r * (0.7 + rng.next() * 0.45)
-    q.push([p[0] + Math.cos(a) * rr, p[1] + Math.sin(a) * rr * 0.85])
+    q.push([p[0] + dmath.cos(a) * rr, p[1] + dmath.sin(a) * rr * 0.85])
   }
   part(K, q, 'rock')
   K.ctx.occ.add(q)
@@ -290,7 +291,7 @@ export function rocks(K: Garden, p: P, R: number, n: number, r0: number, r1: num
   for (let k = 0; k < n * 4 && placed < n; k++) {
     const a = rng.next() * Math.PI * 2
     const d = Math.sqrt(rng.next()) * R
-    if (rock(K, [p[0] + Math.cos(a) * d, p[1] + Math.sin(a) * d], r0 + rng.next() * (r1 - r0))) placed++
+    if (rock(K, [p[0] + dmath.cos(a) * d, p[1] + dmath.sin(a) * d], r0 + rng.next() * (r1 - r0))) placed++
   }
   return placed
 }
@@ -379,7 +380,7 @@ export function loop(K: Garden, inset: number, amp: number, w: number): P[] | nu
   const ph = K.C.h('loop.phase') * 6.28
   const pts = resample([...base, base[0]], 8)
     .slice(0, -1)
-    .map((p, i) => offWater(K, add(p, unit(sub(c, p)), amp * (0.5 + 0.5 * Math.sin(i * 1.1 + ph))), w / 2 + 1.5))
+    .map((p, i) => offWater(K, add(p, unit(sub(c, p)), amp * (0.5 + 0.5 * dmath.sin(i * 1.1 + ph))), w / 2 + 1.5))
   const l = chaikin(pts, 3, true)
   const line = [...l, l[0]]
   walk(K, line, w)

@@ -1,4 +1,5 @@
 import { Biome, type Label, type Road } from './types'
+import * as dmath from './dmath'
 
 /**
  * 道路与航线。
@@ -65,7 +66,7 @@ export function buildRoads(
     const dist = (i: number, j: number) => {
       const [ax, ay] = pos(i)
       const [bx, by] = pos(j)
-      return Math.hypot(ax - bx, ay - by)
+      return dmath.hypot(ax - bx, ay - by)
     }
     // 候选：每座城最近的 4 座
     const cand = new Map<string, { a: number; b: number; cost: number }>()
@@ -134,7 +135,7 @@ export function buildRoads(
         for (const i of byComp.get(k)!) {
           const s = nearest(g.sea, CW, CH, cities[i].cell, radius)
           if (s < 0) continue
-          const d = Math.hypot((s % CW) - (cities[i].cell % CW), Math.floor(s / CW) - Math.floor(cities[i].cell / CW))
+          const d = dmath.hypot((s % CW) - (cities[i].cell % CW), Math.floor(s / CW) - Math.floor(cities[i].cell / CW))
           list.push({ city: i, sea: s, d })
         }
         if (list.length) break
@@ -149,7 +150,11 @@ export function buildRoads(
     for (const k of compIds) {
       const src = ports.get(k)!
       if (!src.length) continue
-      sea.run(g.sea, src.map((p) => p.sea))
+      // 只需量到编号更大的陆块的港口：全部落定即可停
+      const tgt: number[] = []
+      for (const k2 of compIds) if (k2 > k) for (const p of ports.get(k2)!) tgt.push(p.sea)
+      if (!tgt.length) continue
+      sea.run(g.sea, src.map((p) => p.sea), tgt)
       for (const k2 of compIds) {
         if (k2 <= k) continue
         let best: { city: number; sea: number } | null = null
@@ -210,8 +215,8 @@ function costGrid(elev: Float32Array, water: Float32Array, biome: Uint8Array, fl
       // 坡度（高差 / 水平距离，都换成 km）
       const hx = elev[at(Math.min(CW - 1, cx + 1), cy)] - elev[at(Math.max(0, cx - 1), cy)]
       const hy = elev[at(cx, Math.min(CH - 1, cy + 1))] - elev[at(cx, Math.max(0, cy - 1))]
-      const s = Math.hypot(hx, hy) / (2 * km)
-      let cost = 1 + Math.min(30, (s / 0.012) ** 2) + Math.max(0, h - 1.4) * 1.5
+      const s = dmath.hypot(hx, hy) / (2 * km)
+      let cost = 1 + Math.min(30, dmath.pow(s / 0.012, 2)) + Math.max(0, h - 1.4) * 1.5
       const b = biome[i]
       if (b === Biome.Wetland) cost += 2
       else if (b === Biome.IceCap) cost += 6
@@ -299,7 +304,8 @@ function graphDist(adj: Map<number, { to: number; w: number }[]>, a: number, b: 
   const heap = new Heap()
   heap.push(a, 0)
   while (heap.size) {
-    const [u, du] = heap.pop()
+    const du = heap.topKey()
+    const u = heap.pop()
     if (u === b) return du
     if (du > limit) break
     if (du > (d.get(u) ?? Infinity)) continue
@@ -365,13 +371,14 @@ class AStar {
     const bx = b % CW
     const by = Math.floor(b / CW)
     const hMul = Math.min(1, roadMul)
-    const h = (c: number) => Math.hypot((c % CW) - bx, Math.floor(c / CW) - by) * hMul
+    const h = (c: number) => dmath.hypot((c % CW) - bx, Math.floor(c / CW) - by) * hMul
     heap.clear()
     g[a] = 0
     seen[a] = st
     heap.push(a, h(a))
     while (heap.size) {
-      const [c, f] = heap.pop()
+      const f = heap.topKey()
+      const c = heap.pop()
       if (c === b) return true
       const gc = g[c]
       if (f - h(c) > gc + 1e-9) continue
@@ -403,6 +410,7 @@ class SeaSearch {
   dist: Float64Array
   private from: Int32Array
   private heap = new Heap()
+  private want: Uint8Array
 
   constructor(
     private CW: number,
@@ -410,20 +418,33 @@ class SeaSearch {
   ) {
     this.dist = new Float64Array(CW * CH)
     this.from = new Int32Array(CW * CH)
+    this.want = new Uint8Array(CW * CH)
   }
 
-  run(cost: Float32Array, sources: number[]) {
-    const { CW, CH, dist, from, heap } = this
+  /** 多源 Dijkstra，targets 全部出堆（距离与回溯链已定）后提前结束 */
+  run(cost: Float32Array, sources: number[], targets: number[]) {
+    const { CW, CH, dist, from, heap, want } = this
     dist.fill(Infinity)
     heap.clear()
+    let left = 0
+    for (const t of targets)
+      if (!want[t]) {
+        want[t] = 1
+        left++
+      }
     for (const s of sources) {
       dist[s] = 0
       from[s] = -1
       heap.push(s, 0)
     }
-    while (heap.size) {
-      const [c, d] = heap.pop()
+    while (heap.size && left) {
+      const d = heap.topKey()
+      const c = heap.pop()
       if (d > dist[c]) continue
+      if (want[c]) {
+        want[c] = 0
+        left--
+      }
       const x = c % CW
       const y = (c - x) / CW
       for (const [dx, dy, len] of DIRS) {
@@ -440,6 +461,8 @@ class SeaSearch {
         }
       }
     }
+    // 有目标不可达时堆会先耗尽，清掉残留标记
+    if (left) for (const t of targets) want[t] = 0
   }
 
   /** 从 c 回溯到出发的港口：返回 [c, …, 港口] */
@@ -479,9 +502,14 @@ class Heap {
     ids[i] = id
     keys[i] = key
   }
-  pop(): [number, number] {
+  /** 堆顶的键；需在 pop 之前读取 */
+  topKey() {
+    return this.keys[0]
+  }
+  /** 弹出堆顶，返回其 id */
+  pop(): number {
     const { ids, keys } = this
-    const top: [number, number] = [ids[0], keys[0]]
+    const top = ids[0]
     const id = ids.pop()!
     const key = keys.pop()!
     const n = ids.length
@@ -571,7 +599,7 @@ function simplify(pts: number[], tol: number) {
     const ay = pts[a * 2 + 1]
     const dx = pts[b * 2] - ax
     const dy = pts[b * 2 + 1] - ay
-    const len = Math.hypot(dx, dy) || 1
+    const len = dmath.hypot(dx, dy) || 1
     let best = -1
     let bd = tol
     for (let k = a + 1; k < b; k++) {

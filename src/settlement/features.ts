@@ -21,6 +21,7 @@ import {
   urban,
 } from './wards'
 import { park } from './parks'
+import * as dmath from '../gen/dmath'
 
 /**
  * 聚落要素注册表：城里"有什么"都在这里声明。
@@ -772,7 +773,7 @@ function observatory(ctx: Ctx, w: Ward, block: Poly) {
   // 圆台上的观测仪：一圈小石墩
   for (let k = 0; k < 6; k++) {
     const a = (k / 6) * Math.PI * 2
-    addBuilding(ctx, circlePoly([q[0] + Math.cos(a) * r * 0.72, q[1] + Math.sin(a) * r * 0.72], 1.4, 6), 'shed')
+    addBuilding(ctx, circlePoly([q[0] + dmath.cos(a) * r * 0.72, q[1] + dmath.sin(a) * r * 0.72], 1.4, 6), 'shed')
   }
   ctx.occ.add(circlePoly(q, r * 1.3, 16))
   mark(ctx, q, 'observatory')

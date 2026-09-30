@@ -90,6 +90,11 @@ const WA: Kinds = {
   capital: [['#kyo', '#京', '#京']],
 }
 
+const BAY: Tpl[] = [
+  ['# Bay', '#湾', '#湾'],
+  ['Gulf of #', '#湾', '#湾'],
+]
+
 const REALM_WESTERN: Tpl[] = [
   ['Kingdom of #', '#王国', '#王国'],
   ['# Empire', '#帝国', '#帝国'],
@@ -254,10 +259,11 @@ export class Namer {
   private rng: RNG
   private used = new Set<string>()
 
-  constructor(p: { seed: string; naming?: NamingStyle }, rNames: RNG) {
+  /** salt：另起一批名字（区域、海湾）时用自己的随机序列，不改动原有地名的抽取顺序 */
+  constructor(p: { seed: string; naming?: NamingStyle }, rNames: RNG, salt = '') {
     this.style = resolveNaming(p)
     this.lang = new Language(rNames)
-    this.rng = new RNG(hashString(`${p.seed}|naming|${this.style}`))
+    this.rng = new RNG(hashString(`${p.seed}|naming|${this.style}${salt}`))
   }
 
   private root(kind: NameKind): Tri {
@@ -313,8 +319,15 @@ export class Namer {
    * 不给就用自己的随机数；西幻沿用调用方原来的随机数，旧种子的名字不变。
    */
   name(kind: NameKind | 'saltLake', variant?: number): Tri {
-    const tpls = this.templates(kind)
-    const baseKind: NameKind = kind === 'saltLake' ? 'lake' : kind
+    return this.pick(kind === 'saltLake' ? 'lake' : kind, this.templates(kind), variant)
+  }
+
+  /** 海湾名：各命名风格一律用"湾"（海的通名模板里未必有） */
+  bay(): Tri {
+    return this.pick('sea', BAY)
+  }
+
+  private pick(baseKind: NameKind, tpls: Tpl[], variant?: number): Tri {
     let out: Tri | undefined
     for (let t = 0; t < 40; t++) {
       const root = this.root(baseKind)

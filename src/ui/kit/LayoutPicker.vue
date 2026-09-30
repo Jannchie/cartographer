@@ -5,7 +5,7 @@ import { t } from '../i18n'
 /**
  * 布局三角：三个角是有机、方格、放射，点的位置就是三者的比例（重心坐标）。
  * 与生成参数的换算：规整度 r = 1 − 有机；放射度 g = 放射 / (方格 + 放射)。
- * 拖动（或方向键）改变位置，松手提交；双击恢复默认。
+ * 拖动（或方向键）改变位置，松手提交；双击回到复位值（当前生成所用的布局）。
  */
 const props = defineProps<{ regularity: number; radial: number; reset: { regularity: number; radial: number } }>()
 const emit = defineEmits<{ update: [r: number, g: number]; change: [] }>()
@@ -104,7 +104,7 @@ function key(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="layout-picker" :class="{ dragging }" :title="t('拖动选择三种布局的混合比例 · 双击恢复默认')" @dblclick.prevent="resetAll">
+  <div class="layout-picker" :class="{ dragging }" :title="t('拖动选择三种布局的混合比例 · 双击回到当前生成的值')" @dblclick.prevent="resetAll">
     <svg
       ref="svg"
       :viewBox="`0 0 ${W} ${H}`"

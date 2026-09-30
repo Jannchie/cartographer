@@ -3,6 +3,7 @@ import { RNG, hashString } from '../gen/rng'
 import { edt } from '../gen/util'
 import { chaikin, dist, pointInPoly, polylineDist, resample, type P } from './geom'
 import type { SettlementParams, Terrain } from './types'
+import * as dmath from '../gen/dmath'
 
 /** 地形网格的格距（米） */
 export const TERRAIN_CELL = 5
@@ -113,7 +114,7 @@ function crop(F: Field, big: [number, number], extent: [number, number]): Terrai
     // 河道只留画框外接圆附近的一段（沿河按 60 米取样，与原先按画框取样的范围一致）
     const cx = big[0] / 2
     const cy = big[1] / 2
-    const reach = (Math.ceil(Math.hypot(MW, MH) / 2 / 60) + 1) * 60
+    const reach = (Math.ceil(dmath.hypot(MW, MH) / 2 / 60) + 1) * 60
     const { line, hw, u } = F.river
     const keep = line.map(([x, y]) => Math.abs((x - cx) * u[0] + (y - cy) * u[1]) <= reach)
     river = { line: line.filter((_, k) => keep[k]).map(([x, y]) => [x - ox, y - oy]), hw: hw.filter((_, k) => keep[k]) }
@@ -139,21 +140,21 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
   const fbm = (x: number, y: number, sx: number, ox: number, oy: number, oct: number) => noise.fbm((x - cx) / sx + ox, (y - cy) / sx + oy, oct)
 
   const coastA = angle(p.coastDir)
-  const cd: P = [Math.cos(coastA), Math.sin(coastA)]
+  const cd: P = [dmath.cos(coastA), dmath.sin(coastA)]
   // 岸线：城心正前方内凹成海湾，湾顶离城心固定的距离；两侧岸线随噪声起伏
   const shoreC = rng.range(90, 200)
   const bay = rng.range(60, 150)
   const bayW = rng.range(200, 380)
   const shoreAt = (x: number, y: number) => {
     const t = -(x - cx) * cd[1] + (y - cy) * cd[0]
-    const open = 1 - Math.exp(-((t / bayW) ** 2))
+    const open = 1 - dmath.exp(-dmath.pow(t / bayW, 2))
     return shoreC + (bay + noise.fbm(t / 520 + 11.3, 3.7, 4) * R * 0.2) * open
   }
 
   let hillA = angle(p.hillDir)
   // 依山又临海时，山在海的对面一侧
   if (p.coast && p.hills && !Number.isFinite(p.hillDir)) hillA = coastA + Math.PI + rng.range(-0.8, 0.8)
-  const hd: P = [Math.cos(hillA), Math.sin(hillA)]
+  const hd: P = [dmath.cos(hillA), dmath.sin(hillA)]
   const hillH = 55 + 110 * p.relief
 
   const height = new Float32Array(N)
@@ -213,14 +214,14 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
     // 来向：临海时从内陆流向海，否则随机
     let from = angle(p.riverDir)
     if (p.coast && !Number.isFinite(p.riverDir)) from = coastA + Math.PI + rng.range(-0.9, 0.9)
-    const u: P = [-Math.cos(from), -Math.sin(from)] // 流向
+    const u: P = [-dmath.cos(from), -dmath.sin(from)] // 流向
     const n: P = [-u[1], u[0]]
     // 离中心的横向偏移：城市通常建在河的一侧并跨河发展
     const off = R * rng.range(-0.2, 0.2)
     const amp = R * rng.range(0.08, 0.2)
     // 沿河按固定步长取样（步长与画面无关，大小地图上同一段河道完全一样）
     const step = 60
-    const half = Math.ceil(Math.hypot(MW, MH) / 2 / step) + 1
+    const half = Math.ceil(dmath.hypot(MW, MH) / 2 / step) + 1
     const pts: P[] = []
     for (let k = -half; k <= half; k++) {
       const s = k * step
@@ -251,6 +252,8 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
       const x = (k % W) * cell
       const y = Math.floor(k / W) * cell
       const d = dC[k] * cell
+      // 河宽不超过 hw0 × 1.18：再远就下切不到（t = 1，高程不变），不必取河宽噪声
+      if (d > hw0 * 1.8 + valley) continue
       const hw = hwAt(x, y)
       if (d < hw) riverMask[k] = 1
       const floor = 0.6 + Math.max(0, d - hw) * 0.035
@@ -302,13 +305,13 @@ function sample(W: number, H: number, height: Float32Array, water: Float32Array,
   const waterGrad = (q: P): P => {
     const gx = waterAt([q[0] + g, q[1]]) - waterAt([q[0] - g, q[1]])
     const gy = waterAt([q[0], q[1] + g]) - waterAt([q[0], q[1] - g])
-    const L = Math.hypot(gx, gy) || 1
+    const L = dmath.hypot(gx, gy) || 1
     return [gx / L, gy / L]
   }
   const slopeAt = (q: P) => {
     const gx = heightAt([q[0] + g, q[1]]) - heightAt([q[0] - g, q[1]])
     const gy = heightAt([q[0], q[1] + g]) - heightAt([q[0], q[1] - g])
-    return Math.hypot(gx, gy) / (2 * g)
+    return dmath.hypot(gx, gy) / (2 * g)
   }
 
   return {
@@ -320,6 +323,19 @@ function sample(W: number, H: number, height: Float32Array, water: Float32Array,
     seaAt,
   }
 }
+
+/** routeOnTerrain 的工作数组（按网格大小复用） */
+let routePool: {
+  N: number
+  run: number
+  stamp: Int32Array
+  gScore: Float64Array
+  prev: Int32Array
+  hAt: Float64Array
+  surf: Int8Array
+  bias: Float64Array
+  closed: Uint8Array
+} | null = null
 
 /**
  * 网格 A*：在地形上找一条代价最低的路（坡度、涉水都有代价）。
@@ -336,18 +352,43 @@ export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: 
   const start = idx(from)
   const goal = idx(to)
   const N = GW * GH
-  const gScore = new Float64Array(N).fill(Infinity)
-  const prev = new Int32Array(N).fill(-1)
+  // 各数组按网格大小复用：第几次寻路记在 stamp 里，某格第一次碰到才初始化（代替每次整表 fill）
+  if (routePool?.N !== N)
+    routePool = {
+      N,
+      run: 0,
+      stamp: new Int32Array(N),
+      gScore: new Float64Array(N),
+      prev: new Int32Array(N),
+      hAt: new Float64Array(N),
+      surf: new Int8Array(N),
+      bias: new Float64Array(N),
+      closed: new Uint8Array(N),
+    }
+  const pool = routePool
+  const run = ++pool.run
+  const { stamp, gScore, prev, hAt, surf, closed } = pool
   // 每格的高程、地表（1 海，2 水，0 陆）与偏好只算一次：同一格会被周围十几个格子反复问到
-  const hAt = new Float64Array(N).fill(NaN)
-  const surf = new Int8Array(N).fill(-1)
-  const biasAt = opts.bias ? new Float64Array(N).fill(NaN) : null
+  const biasAt = opts.bias ? pool.bias : null
+  const touch = (k: number) => {
+    if (stamp[k] === run) return
+    stamp[k] = run
+    gScore[k] = Infinity
+    prev[k] = -1
+    hAt[k] = NaN
+    surf[k] = -1
+    pool.bias[k] = NaN
+    closed[k] = 0
+  }
+  const prevOf = (k: number) => (stamp[k] === run ? prev[k] : -1)
   const height = (k: number) => {
+    touch(k)
     let h = hAt[k]
     if (h !== h) h = hAt[k] = T.heightAt([(k % GW) * gc, Math.floor(k / GW) * gc])
     return h
   }
   const surface = (k: number) => {
+    touch(k)
     let v = surf[k]
     if (v < 0) {
       const q: P = [(k % GW) * gc, Math.floor(k / GW) * gc]
@@ -399,15 +440,17 @@ export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: 
   }
   const gx = goal % GW
   const gy = Math.floor(goal / GW)
-  const hEst = (k: number) => Math.hypot((k % GW) - gx, Math.floor(k / GW) - gy) * gc
+  const hEst = (k: number) => dmath.hypot((k % GW) - gx, Math.floor(k / GW) - gy) * gc
+  touch(start)
   gScore[start] = 0
   push(start, hEst(start))
   const DX = [1, -1, 0, 0, 1, 1, -1, -1, 2, 2, -2, -2, 1, 1, -1, -1]
   const DY = [0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 2, -2, 2, -2]
-  const closed = new Uint8Array(N)
+  const LEN = DX.map((dx, d) => dmath.hypot(dx, DY[d]) * gc)
   while (hf.length) {
     const k = pop()
     if (k === goal) break
+    // 出堆的格都已 touch 过
     if (closed[k]) continue
     closed[k] = 1
     const x = k % GW
@@ -418,10 +461,11 @@ export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: 
       const ny = y + DY[d]
       if (nx < 0 || ny < 0 || nx >= GW || ny >= GH) continue
       const nk = ny * GW + nx
+      touch(nk)
       if (closed[nk]) continue
       const sf = surface(nk)
       if (nk !== goal && sf === 1) continue
-      const L = Math.hypot(DX[d], DY[d]) * gc
+      const L = LEN[d]
       const dh = Math.abs(height(nk) - hp) / L
       let c = L * (1 + opts.slope * dh * dh * 40)
       // 海一定也是水（水距 < 0），终点落在海里时照旧算过水
@@ -439,9 +483,9 @@ export function routeOnTerrain(T: TerrainResult, from: P, to: P, opts: { water: 
       }
     }
   }
-  if (goal !== start && prev[goal] < 0) return []
+  if (goal !== start && prevOf(goal) < 0) return []
   const path: P[] = []
-  for (let k = goal; k >= 0; k = prev[k]) {
+  for (let k = goal; k >= 0; k = prevOf(k)) {
     path.push([(k % GW) * gc, Math.floor(k / GW) * gc])
     if (k === start) break
   }

@@ -9,6 +9,7 @@ import { drop } from '../undo'
 import { axisExit, gridSites, rectOutline, RESIDENTIAL, uvLine } from './common'
 import type { CityPlan, PlanRoad, PlanZone } from './types'
 import { addWall } from '../walls'
+import * as dmath from '../../gen/dmath'
 
 /**
  * 里坊制（隋唐长安、洛阳的形制，缩到地图的尺度）：
@@ -128,7 +129,7 @@ export const lifang: CityPlan = {
   },
   exit(_ctx, z, dir) {
     const { gw, ge, BV } = extent(z)
-    const d = z.toUV([z.c[0] + Math.cos(dir), z.c[1] + Math.sin(dir)])
+    const d = z.toUV([z.c[0] + dmath.cos(dir), z.c[1] + dmath.sin(dir)])
     // 向南出正门走朱雀大街；向北绕开宫城走侧面的大街；东西走中间的横街
     if (Math.abs(d[1]) >= Math.abs(d[0])) {
       if (d[1] > 0) return axisExit(z, dir)

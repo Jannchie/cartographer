@@ -9,6 +9,10 @@ export class GpuTimer {
   private frames: { tag: number; qs: { label: string; q: WebGLQuery }[] }[] = []
   private cur: { label: string; q: WebGLQuery }[] | null = null
   private open = false
+  /** 结果读完的查询对象，下次复用（不必每帧新建、删除） */
+  private pool: WebGLQuery[] = []
+  /** 逐 pass 累加用，复用 */
+  private sum = new Map<string, number>()
   /** 逐 pass 计时（性能读数打开时） */
   detail = false
   /** 本帧的标记，随结果一起回传（例如这一帧用的渲染缩放） */
@@ -39,7 +43,7 @@ export class GpuTimer {
 
   private query(label: string) {
     this.end()
-    const q = this.gl.createQuery()!
+    const q = this.pool.pop() ?? this.gl.createQuery()!
     this.gl.beginQuery(this.ext!.TIME_ELAPSED_EXT, q)
     this.cur!.push({ label, q })
     this.open = true
@@ -61,15 +65,16 @@ export class GpuTimer {
       if (!gl.getQueryParameter(f.qs[f.qs.length - 1].q, gl.QUERY_RESULT_AVAILABLE)) break
       this.frames.shift()
       const disjoint = gl.getParameter(this.ext!.GPU_DISJOINT_EXT)
-      const sum = new Map<string, number>()
+      const sum = this.sum
+      sum.clear()
       let total = 0
       for (const { label, q } of f.qs) {
         if (!disjoint) {
           const v = (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6
-          sum.set(label, (sum.get(label) ?? 0) + v)
+          if (this.detail) sum.set(label, (sum.get(label) ?? 0) + v)
           total += v
         }
-        gl.deleteQuery(q)
+        this.pool.push(q)
       }
       if (disjoint) continue
       this.onFrame?.(total, f.tag)

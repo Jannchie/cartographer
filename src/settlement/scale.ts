@@ -2,6 +2,7 @@ import type { SizeCfg } from './ctx'
 import { clamp, lerp } from '../gen/util'
 import type { Culture, Density, SettlementParams, SettlementSize, WardType } from './types'
 import { CULTURE_INFO } from './culture'
+import * as dmath from '../gen/dmath'
 
 /**
  * 人口 → 规模：档位（决定布局分支，例如村落没有城墙、城市才有贫民窟）
@@ -42,7 +43,7 @@ const BOUNDS: [number, SettlementSize][] = [
 ]
 
 export const POP_MIN = 20
-export const POP_MAX = 60000
+export const POP_MAX = 100000
 function sizeOf(pop: number): SettlementSize {
   return BOUNDS.find(([b]) => pop < b)![1]
 }
@@ -62,12 +63,12 @@ export function scaleOf(pop: number): { size: SettlementSize; cfg: SizeCfg; exte
   if (p >= last.pop) {
     // 城市以上：片区数随人口的 0.78 次方增长，地图范围随片区数的平方根
     const k = p / last.pop
-    const inner = Math.round(last.cfg.inner * Math.pow(k, 0.78))
+    const inner = Math.round(last.cfg.inner * dmath.pow(k, 0.78))
     const g = Math.sqrt(inner / last.cfg.inner)
     const c = last.cfg
     return {
       size,
-      cfg: { inner, patch: PATCH, roads: [c.roads[0] + Math.round(Math.log2(k)), c.roads[1] + Math.round(Math.log2(k))], lane: c.lane, main: q05(c.main * Math.pow(k, 0.12)), highway: c.highway },
+      cfg: { inner, patch: PATCH, roads: [c.roads[0] + Math.round(dmath.log2(k)), c.roads[1] + Math.round(dmath.log2(k))], lane: c.lane, main: q05(c.main * dmath.pow(k, 0.12)), highway: c.highway },
       extent: [Math.round(last.extent[0] * g * 0.92), Math.round(last.extent[1] * g * 0.92)],
     }
   }
@@ -75,13 +76,13 @@ export function scaleOf(pop: number): { size: SettlementSize; cfg: SizeCfg; exte
   while (i < ANCHORS.length - 2 && p > ANCHORS[i + 1].pop) i++
   const a = ANCHORS[i]
   const b = ANCHORS[i + 1]
-  const t = clamp(Math.log(p / a.pop) / Math.log(b.pop / a.pop), 0, 1)
+  const t = clamp(dmath.log(p / a.pop) / dmath.log(b.pop / a.pop), 0, 1)
   const ca = a.cfg
   const cb = b.cfg
   return {
     size,
     cfg: {
-      inner: Math.max(3, Math.round(Math.exp(lerp(Math.log(ca.inner), Math.log(cb.inner), t)))),
+      inner: Math.max(3, Math.round(dmath.exp(lerp(dmath.log(ca.inner), dmath.log(cb.inner), t)))),
       patch: PATCH,
       roads: [Math.round(lerp(ca.roads[0], cb.roads[0], t)), Math.round(lerp(ca.roads[1], cb.roads[1], t))],
       lane: q05(lerp(ca.lane, cb.lane, t)),
@@ -182,7 +183,7 @@ export const densityScore = (age: number, road: number, noise: number) => (1 - M
  * 得分到中档、密档的门槛。中档、密档随城镇化逐步放开：小村的街坊都是疏的，快成镇时村心才连成排，城市里才有密档
  */
 function densityCuts(pop: number) {
-  const big = clamp(Math.log(pop / 3000) / Math.log(4), 0, 1)
+  const big = clamp(dmath.log(pop / 3000) / dmath.log(4), 0, 1)
   const u = 1 - urbanT(pop)
   return { mid: 0.2 + 1.5 * u, high: 1.1 - 0.5 * big + 1.5 * u }
 }
@@ -212,10 +213,10 @@ export function wardRate(culture: Culture, type: WardType, pop: number, s: numbe
  * 再往上连续升高，约 4000 人时全城都是街坊。dc 是离城心的距离（按城区半径归一），越靠城心占比越高；传 2/3 得到全城的平均。
  * 村 → 镇没有分界：各片区按自己的位置哈希与这个占比比较，占比升高只会有更多片区变成街坊（见 generate.ts 的 wardTown）
  */
-export const townShare = (pop: number, dc: number) => clamp(urbanT(pop) ** 2 * (2 - dc), 0, 1)
+export const townShare = (pop: number, dc: number) => clamp(dmath.pow(urbanT(pop), 2) * (2 - dc), 0, 1)
 
 /** 城镇化的程度：150 人以下为 0，4000 人为 1（按对数） */
-export const urbanT = (pop: number) => clamp(Math.log(pop / 150) / Math.log(4000 / 150), 0, 1)
+export const urbanT = (pop: number) => clamp(dmath.log(pop / 150) / dmath.log(4000 / 150), 0, 1)
 
 /** 旧参数（只有档位）换算成人口 */
 export const POP_OF_SIZE: Record<SettlementSize, number> = { hamlet: 45, village: 300, town: 3800, city: 13000 }
