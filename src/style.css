@@ -2240,3 +2240,239 @@ select.lang:hover {
     display: none;
   }
 }
+
+/* —— 全息沙盘的读数界面：四周的小号等宽读数、十字基准线与目标卡片 —— */
+.holo-view canvas {
+  display: block;
+}
+.holo-hud {
+  --hh-text: #dfe9f5;
+  --hh-line: #7f9dbf;
+  --hh-accent: #ff6a2a;
+  position: absolute;
+  inset: 26px;
+  z-index: 1;
+  pointer-events: none;
+  font-family: var(--mono);
+  color: var(--hh-text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.holo-hud .hh-row {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 28px;
+  opacity: 0.82;
+}
+.holo-hud .hh-top {
+  top: 18px;
+}
+.holo-hud .hh-bottom {
+  bottom: 40px;
+}
+.holo-hud .hh-spacer {
+  flex: 1;
+}
+.holo-hud .hh-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  white-space: nowrap;
+}
+.holo-hud .hh-kv > span {
+  font-size: 8px;
+  opacity: 0.6;
+}
+.holo-hud .hh-kv > b {
+  font-weight: 400;
+  font-size: 12px;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--hh-text) 60%, transparent);
+}
+.holo-hud .hh-kv.dim > b {
+  opacity: 0.6;
+}
+.holo-hud .hh-tiny {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 1px 8px;
+  font-size: 7.5px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.holo-hud .hh-tiny i {
+  font-style: normal;
+  opacity: 0.55;
+}
+.holo-hud .hh-tiny em {
+  font-style: normal;
+}
+.holo-hud .hh-mini {
+  border-collapse: collapse;
+  font-size: 7.5px;
+  line-height: 1.3;
+  opacity: 0.75;
+}
+.holo-hud .hh-mini td {
+  padding: 0 7px 0 0;
+}
+.holo-hud .hh-mini u {
+  text-decoration: none;
+  background: color-mix(in srgb, var(--hh-line) 55%, transparent);
+  color: #fff;
+  padding: 0 2px;
+}
+.holo-hud .hh-side {
+  position: absolute;
+  top: 28%;
+  bottom: 22%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  opacity: 0.7;
+}
+.holo-hud .hh-left {
+  left: 18px;
+}
+.holo-hud .hh-right {
+  right: 18px;
+  align-items: flex-end;
+}
+.holo-hud .hh-cross-h,
+.holo-hud .hh-cross-v {
+  position: absolute;
+  opacity: 0.22;
+}
+.holo-hud .hh-cross-h {
+  left: 6%;
+  right: 6%;
+  top: 50%;
+  border-top: 1px dashed var(--hh-line);
+  /* 与竖线相交处镂空，正中由 .hh-cross-c 补一个小十字 */
+  mask-image: linear-gradient(90deg, #000 calc(50% - 22px), transparent calc(50% - 22px), transparent calc(50% + 22px), #000 calc(50% + 22px));
+}
+.holo-hud .hh-cross-v {
+  top: 14%;
+  bottom: 14%;
+  left: 50%;
+  border-left: 1px solid var(--hh-line);
+  mask-image: linear-gradient(180deg, #000 calc(50% - 22px), transparent calc(50% - 22px), transparent calc(50% + 22px), #000 calc(50% + 22px));
+}
+.holo-hud .hh-cross-c {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  transform: translate(-6px, -6px);
+  opacity: 0.6;
+  background:
+    linear-gradient(var(--hh-line), var(--hh-line)) center / 1px 100% no-repeat,
+    linear-gradient(var(--hh-line), var(--hh-line)) center / 100% 1px no-repeat;
+}
+.holo-hud .hh-corner {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 0 solid var(--hh-line);
+  opacity: 0.8;
+}
+.holo-hud .hh-corner.tl {
+  left: 0;
+  top: 0;
+  border-width: 1px 0 0 1px;
+}
+.holo-hud .hh-corner.tr {
+  right: 0;
+  top: 0;
+  border-width: 1px 1px 0 0;
+}
+.holo-hud .hh-corner.bl {
+  left: 0;
+  bottom: 0;
+  border-width: 0 0 1px 1px;
+}
+.holo-hud .hh-corner.br {
+  right: 0;
+  bottom: 0;
+  border-width: 0 1px 1px 0;
+}
+.holo-hud .hh-target {
+  position: absolute;
+  right: 64px;
+  top: 96px;
+  width: 230px;
+  padding: 10px 12px 10px 14px;
+  background: color-mix(in srgb, #060a10 62%, transparent);
+  border-left: 2px solid var(--hh-line);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--hh-line) 50%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--hh-line) 50%, transparent);
+  opacity: 0;
+  transform: translateX(8px);
+  transition:
+    opacity 0.18s,
+    transform 0.18s;
+}
+.holo-hud .hh-target.on {
+  opacity: 1;
+  transform: none;
+}
+.holo-hud .hh-target.pinned {
+  border-left-color: var(--hh-accent);
+}
+.holo-hud .hh-target-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  opacity: 0.65;
+}
+.holo-hud .hh-target.pinned .hh-target-head span:first-child {
+  color: var(--hh-accent);
+  opacity: 1;
+}
+.holo-hud .hh-target-name {
+  margin: 4px 0 8px;
+  font-family: var(--ui);
+  font-stretch: 125%;
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 10px color-mix(in srgb, var(--hh-text) 50%, transparent);
+}
+.holo-hud .hh-target dl {
+  margin: 0;
+  font-size: 10px;
+}
+.holo-hud .hh-target dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+  border-top: 1px dotted color-mix(in srgb, var(--hh-line) 35%, transparent);
+}
+.holo-hud .hh-target dt {
+  opacity: 0.6;
+}
+.holo-hud .hh-target dd {
+  margin: 0;
+  text-align: right;
+  text-transform: none;
+}
+@media (max-width: 1100px) {
+  .holo-hud .hh-top .hh-wide,
+  .holo-hud .hh-bottom .hh-mini {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .holo-hud .hh-row,
+  .holo-hud .hh-side {
+    display: none;
+  }
+  .holo-hud .hh-target {
+    right: 12px;
+    top: 40px;
+    width: 200px;
+  }
+}

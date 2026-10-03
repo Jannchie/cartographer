@@ -28,6 +28,16 @@ pnpm dev        # 打开 http://localhost:5190
 
 3D 沙盘支持实时阴影、体积云、水面反射、昼夜循环、自动巡览运镜与胶片调色。编辑模式支持以笔刷抬升或下沉地形、调整气温与降水、增删城镇及划分大洲，编辑完成后重新推演气候与水系。
 
+全息沙盘以投影台上的发光线框呈现同一世界：地形抬升为带亮边的地块，海岸为双线，主要城市与高峰以引线和高程尺寸线标注，四周附有经纬度刻度、线框立面上的地形侧视轮廓与浮于上方的顶面网格。悬停或点选陆块可查看其面积、最高点与中心坐标。仅在视角或选择变化时重绘，画面静止时不占用 GPU。
+
+<p align="center"><img src="docs/images/zh/world-holo.webp" alt="全息沙盘：发光地块、引线标注与线框立面" width="100%"></p>
+
+全息沙盘提供四种配色：
+
+| 战术 | 警戒 | 雷达 | 极地 |
+| :-: | :-: | :-: | :-: |
+| <img src="docs/images/zh/holo-tactical.webp" width="200"> | <img src="docs/images/zh/holo-crimson.webp" width="200"> | <img src="docs/images/zh/holo-phosphor.webp" width="200"> | <img src="docs/images/zh/holo-arctic.webp" width="200"> |
+
 纸质地图提供六种风格，均包含注记避让、比例尺与图框。浏览时图框固定，缩放仅作用于地图内容：
 
 | 自然地理 | 奇幻羊皮 | 航海图 |

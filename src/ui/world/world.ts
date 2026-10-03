@@ -12,6 +12,8 @@ import type { AtlasBase } from '../../render/atlas/svg/vector'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import type { SmoothRiver } from '../../render/rivers'
 import { Scene3D, type View3DOptions } from '../../render/scene3d'
+import { HoloScene, type HoloOptions } from '../../render/holo/scene'
+import { HOLO_PALETTES } from '../../render/holo/palettes'
 import { LOOKS, QUALITIES, type Look, type QualityId } from '../../render/aerial/looks'
 import { DEFAULT_TIME } from '../../render/aerial/daylight'
 import { buildPhysicalTexture, textureCanvases } from '../../render/texture'
@@ -25,7 +27,7 @@ import { mapFontsReady } from '../fonts'
 import { bindPanZoom } from '../panZoom'
 import { syllableSeed } from '../seed'
 
-export type Mode = '3d' | '2d' | 'edit' | 'areas'
+export type Mode = '3d' | 'holo' | '2d' | 'edit' | 'areas'
 
 export const pct = (v: number) => `${Math.round(v * 100)}%`
 export const latFmt = (v: number) => `${Math.abs(v)}°${v > 0 ? 'N' : v < 0 ? 'S' : ''}`
@@ -57,6 +59,17 @@ function loadTime() {
   return Number.isFinite(h) && h >= 0 && h <= 24 ? h : DEFAULT_TIME
 }
 
+export const HOLO_DEFAULTS: HoloOptions = { palette: HOLO_PALETTES[0].id, exaggeration: 14, labels: true, hud: true, sectionHeight: 1 }
+function loadHolo(): HoloOptions {
+  try {
+    const o = { ...HOLO_DEFAULTS, ...JSON.parse(storeGet('holo') ?? '{}') }
+    if (!HOLO_PALETTES.some((p) => p.id === o.palette)) o.palette = HOLO_DEFAULTS.palette
+    return o
+  } catch {
+    return { ...HOLO_DEFAULTS }
+  }
+}
+
 // —— 界面状态（响应式） ——
 export type WorldTab = 'gen' | 'view' | 'stats'
 export const ws = reactive({
@@ -78,6 +91,8 @@ export const ws = reactive({
     look: loadLook(),
   } as View3DOptions,
   lookId: storeGet('lookId') ?? LOOKS[0].id,
+  /** 全息沙盘的选项 */
+  holo: loadHolo(),
   atlasStyle: ((storeGet('atlasStyle') as StyleId) || 'physical') as StyleId,
   atlasOpts: { labels: true, contours: true, graticule: true },
   /** 纸图的图饰：标题框、指北针、图例（默认不画，只影响浏览器里的图廓层；导出总是画） */
@@ -122,9 +137,15 @@ export const ws = reactive({
 
 // —— 引擎（非响应式） ——
 let scene: Scene3D | null = null
+/** 全息沙盘：第一次切到全息视图时才创建（另占一个 WebGL 上下文） */
+let holo: HoloScene | null = null
+/** 全息沙盘当前显示的世界：与 world 不同时，切到全息视图再重建 */
+let holoWorld: World | null = null
+/** 全息里的地名过期了（不可见时改了地名或语言）：切到全息视图时只重排注记 */
+let holoNamesStale = false
 let viewer: AtlasViewer | null = null
 let editor: EditorView | null = null
-let els: { stage: HTMLElement; v3: HTMLElement; v2: HTMLElement; ve: HTMLElement } | null = null
+let els: { stage: HTMLElement; v3: HTMLElement; vh: HTMLElement; v2: HTMLElement; ve: HTMLElement } | null = null
 let world: World | null = null
 let rivers: SmoothRiver[] = []
 /**
@@ -220,6 +241,52 @@ const paperMode = () => ws.mode === '2d' || ws.mode === 'areas'
 
 function syncActive() {
   if (scene) scene.active = app.module === 'world' && ws.mode === '3d'
+  if (holo) holo.active = app.module === 'world' && ws.mode === 'holo'
+}
+
+/** 全息视图可见时：按需创建并换上当前世界 */
+function syncHolo() {
+  if (ws.mode !== 'holo' || !els || ws.no3d) return
+  if (!holo) {
+    try {
+      holo = markRaw(new HoloScene(els.vh, structuredClone(toRaw(ws.holo))))
+    } catch (err) {
+      console.error(err)
+      ws.no3d = true
+      return
+    }
+    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__holo = holo
+    syncActive()
+  }
+  if (!world) return
+  if (holoWorld !== world) {
+    holoWorld = world
+    holoNamesStale = false
+    holo.setWorld(world)
+  } else if (holoNamesStale) {
+    holoNamesStale = false
+    holo.refreshLabels()
+  }
+}
+/** 地名或语言变了：全息里的注记重排（不可见时等下次切过去再排） */
+function relabelHolo() {
+  holoNamesStale = true
+  syncHolo()
+}
+/** 地点增删改：纸图推迟重建，3D 与全息的地名重排 */
+function labelsChanged() {
+  atlasStale = true
+  scene?.refreshLabels()
+  relabelHolo()
+}
+
+export function setHolo(patch: Partial<HoloOptions>) {
+  Object.assign(ws.holo, patch)
+  storeSet('holo', JSON.stringify(toRaw(ws.holo)))
+  holo?.setOptions(patch)
+}
+export function resetHoloView() {
+  holo?.resetView()
 }
 // 第一次进入世界模块时才生成
 function start() {
@@ -334,6 +401,7 @@ export function setMode(m: Mode) {
   if (m !== '3d') scene?.stopTour()
   ws.mode = m
   syncActive()
+  syncHolo()
   ws.probe = null
   if (m === '3d' && sceneStale && world && lastTex) {
     scene?.setWorld(world, lastTex.color, lastTex.roughness, rivers)
@@ -408,6 +476,11 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   // 区域按这次的地名在 Worker 里推断好了
   inferred = { world: next, areas: m.areas }
   if (world && lastTex && m.ground === lastGround && places === lastPlaces) {
+    // 全息沙盘显示的是同一片地面：换上新的世界对象，地名在下面的 relabelHolo 里重排
+    if (holoWorld === world) {
+      holoWorld = next
+      holo?.setNames(next)
+    }
     world = next
     rivers = m.rivers
     if (!sceneStale) scene?.setNames(world)
@@ -420,6 +493,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
     ws.loading.show = false
     ws.editStatus = null
     ws.busy = false
+    relabelHolo()
     flushWaiters()
     return
   }
@@ -456,6 +530,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   ws.loading.show = false
   ws.editStatus = null
   ws.busy = false
+  syncHolo()
   flushWaiters()
 }
 
@@ -576,6 +651,8 @@ function probeAt(clientX: number, clientY: number) {
   if (!world || !els) return
   let cell: { x: number; y: number } | null = null
   if (ws.mode === '3d') cell = scene?.pick(clientX, clientY) ?? null
+  // 全息视图的读数在它自己的界面里（目标卡片）
+  else if (ws.mode === 'holo') cell = null
   else if (ws.mode === 'edit' && editor) {
     const r = els.ve.getBoundingClientRect()
     const c = editor.toCell(clientX - r.left, clientY - r.top)
@@ -624,6 +701,7 @@ export async function exportPng() {
   if (!world || !els) return
   let url: string
   if (ws.mode === '3d' && scene) url = scene.snapshot()
+  else if (ws.mode === 'holo' && holo) url = holo.snapshot()
   else {
     // 由矢量显示列表按 2 倍分辨率栅格化
     await mapFontsReady()
@@ -633,7 +711,7 @@ export async function exportPng() {
     showList(list, ws.atlasStyle)
     url = viewer.rasterize(2).toDataURL('image/png')
   }
-  download(url, `${world.worldName.toLowerCase()}-${ws.params.seed}-${ws.mode === '3d' ? '3d' : ws.atlasStyle}.png`)
+  download(url, `${world.worldName.toLowerCase()}-${ws.params.seed}-${ws.mode === '3d' ? '3d' : ws.mode === 'holo' ? `holo-${ws.holo.palette}` : ws.atlasStyle}.png`)
 }
 /** 矢量导出：纸图的全部底色、线划、符号与注记都是路径和文字 */
 export async function exportSvg() {
@@ -744,8 +822,7 @@ function ensureEditor() {
         if (kind === 'labels' && world) {
           edits.labels = world.labels.map((l) => ({ ...l }))
           // 地点改动立即反映到纸图与 3D 地名，政区在重算后更新
-          atlasStale = true
-          scene?.refreshLabels()
+          labelsChanged()
         }
         scheduleRegen()
       },
@@ -784,8 +861,7 @@ export function setEditView(v: 'auto' | EditView) {
 let inspEditing = false
 function commitLabels() {
   edits.labels = world ? world.labels.map((l) => ({ ...l })) : edits.labels
-  atlasStale = true
-  scene?.refreshLabels()
+  labelsChanged()
   editor?.draw()
 }
 /** 只改了一个地点的名字（逐键触发）：只同步 edits 里的对应项与 3D 里的那一个地名，纸图推迟到下次显示再重建 */
@@ -798,6 +874,7 @@ function renamed(l: Label) {
   else edits.labels = w.labels.map((x) => ({ ...x }))
   atlasStale = true
   scene?.renameLabel(l)
+  relabelHolo()
   editor?.draw()
 }
 /** 改名：连续输入只记一次撤销 */
@@ -829,8 +906,7 @@ export function deleteSelected() {
   world.labels.splice(world.labels.indexOf(l), 1)
   editor!.select(null)
   edits.labels = world.labels.map((x) => ({ ...x }))
-  atlasStale = true
-  scene?.refreshLabels()
+  labelsChanged()
   scheduleRegen()
 }
 function showInspector(l: Label | null) {
@@ -886,8 +962,7 @@ function syncContinentLabels(regionsChanged = false) {
   })
   w.labels.splice(0, w.labels.length, ...conts, ...others)
   edits.labels = w.labels.map((l) => ({ ...l }))
-  atlasStale = true
-  scene?.refreshLabels()
+  labelsChanged()
 }
 export function autoRegions() {
   if (!world || !editor) return
@@ -1067,6 +1142,13 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') randomSeed()
 })
 
+// 离开页面（含开发时的整页刷新）时立即交还两个 WebGL 上下文的显存：
+// 浏览器回收旧页面的上下文有延迟，新页面紧接着再建两个大画布时可能因显存不足丢失上下文
+window.addEventListener('pagehide', () => {
+  holo?.renderer.forceContextLoss()
+  scene?.renderer.forceContextLoss()
+})
+
 // —— 语言：地图文字重排版 ——
 onLang(async () => {
   ws.probe = null
@@ -1077,5 +1159,6 @@ onLang(async () => {
   atlasCache.clear()
   if (paperMode()) refreshAtlas()
   scene?.refreshLanguage()
+  relabelHolo()
   editor?.draw()
 })

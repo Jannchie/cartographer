@@ -11,9 +11,10 @@ import { areaCheckpoint, commitAreas, mountWorld, selectArea, setMode, toggleTou
 
 const stage = ref<HTMLElement>()
 const v3 = ref<HTMLElement>()
+const vh = ref<HTMLElement>()
 const v2 = ref<HTMLElement>()
 const ve = ref<HTMLElement>()
-onMounted(() => mountWorld({ stage: stage.value!, v3: v3.value!, v2: v2.value!, ve: ve.value! }))
+onMounted(() => mountWorld({ stage: stage.value!, v3: v3.value!, vh: vh.value!, v2: v2.value!, ve: ve.value! }))
 
 /** 区域叠加层要的名字、大小与是否水域 */
 const areaInfo = (a: Area) => {
@@ -23,6 +24,7 @@ const areaInfo = (a: Area) => {
 
 const MODES: { id: Mode; label: string }[] = [
   { id: '3d', label: '3D 沙盘' },
+  { id: 'holo', label: '全息' },
   { id: '2d', label: '纸图' },
   { id: 'edit', label: '编辑' },
   { id: 'areas', label: '区域' },
@@ -32,18 +34,21 @@ const hint = computed(() =>
     ? ws.touring
       ? '自动运镜中 · → 下一个镜头 · 拖动或 Esc 交还手动'
       : '拖动旋转 · 右键平移 · 滚轮缩放 · WASD / 方向键移动 · Q E 转向 · PgUp PgDn 俯仰 · +/− 远近 · T 巡览 · R 随机 · P 性能'
-    : ws.mode === '2d'
-      ? '拖动平移 · 滚轮缩放 · 方向键平移 · +/− 缩放 · 双击或 0 复位 · R 随机'
-      : ws.mode === 'areas'
-        ? '点选区域 · 拖顶点改边界 · 拖边中点加顶点 · 双击顶点删除 · 拖名字挪注记 · Ctrl+Z 撤销'
-        : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销',
+    : ws.mode === 'holo'
+      ? '拖动旋转 · 右键平移 · 滚轮缩放 · 点选陆块锁定目标 · R 随机'
+      : ws.mode === '2d'
+        ? '拖动平移 · 滚轮缩放 · 方向键平移 · +/− 缩放 · 双击或 0 复位 · R 随机'
+        : ws.mode === 'areas'
+          ? '点选区域 · 拖顶点改边界 · 拖边中点加顶点 · 双击顶点删除 · 拖名字挪注记 · Ctrl+Z 撤销'
+          : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销',
 )
 </script>
 
 <template>
   <main ref="stage" class="stage">
     <div ref="v3" class="view" :class="{ hidden: ws.mode !== '3d' }"></div>
-    <div v-if="ws.no3d && ws.mode === '3d'" class="no3d">
+    <div ref="vh" class="view holo-view" :class="{ hidden: ws.mode !== 'holo' }"></div>
+    <div v-if="ws.no3d && (ws.mode === '3d' || ws.mode === 'holo')" class="no3d">
       <h3>{{ t('3D 沙盘不可用') }}</h3>
       <p>{{ t('浏览器没能创建 WebGL，多半是显卡加速被停用了。完全退出浏览器再重新打开通常就能恢复；在 Chrome 里可以打开 chrome://gpu 查看状态。纸图与编辑不受影响。') }}</p>
     </div>

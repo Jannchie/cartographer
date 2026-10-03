@@ -6,6 +6,7 @@ import { DEFAULT_PARAMS, isGlobe } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
+import { HOLO_PALETTES } from '../../render/holo/palettes'
 import { DEFAULT_TIME, fmtTime } from '../../render/aerial/daylight'
 import { langRef, t } from '../i18n'
 import Dropdown from '../kit/Dropdown.vue'
@@ -69,6 +70,13 @@ const lookScales: { key: keyof Look; label: string; min: number; max: number; st
   { label: '颗粒', key: 'grain', min: 0, max: 0.15, step: 0.005, fmt: (x) => pct(x / 0.15) },
   { label: '颗粒大小', key: 'grainSize', min: 1, max: 3, step: 0.1, fmt: (x) => `${x.toFixed(1)} px` },
 ]
+const h = ws.holo
+const holoToggles = computed(() => [
+  { label: '地名', on: h.labels },
+  { label: '读数界面', on: h.hud, title: '屏幕四周的任务读数与目标卡片' },
+])
+const holoKeys = ['labels', 'hud'] as const
+const holoSwatches = HOLO_PALETTES.map((p) => ({ value: p.id, label: p.name }))
 const lookBase = computed(() => LOOKS.find((l) => l.id === ws.lookId)?.look ?? LOOKS[0].look)
 
 const atlasSwatches = THEMES.map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: `rgb(${th.paper.join(',')})`, ink: th.ink }))
@@ -215,6 +223,26 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
           @update:model-value="(x) => W.setLook({ [s.key]: x })"
         />
       </Fold>
+    </Section>
+
+    <Section v-if="ws.mode === 'holo'" v-show="ws.tab === 'view'">
+      <Field label="配色">
+        <Seg :cols="holoSwatches.length" :options="holoSwatches" :model-value="h.palette" @update:model-value="(id) => W.setHolo({ palette: id })" />
+      </Field>
+      <Legend :items="holoToggles" @toggle="(i) => W.setHolo({ [holoKeys[i]]: !h[holoKeys[i]] })" />
+      <Scale label="垂直夸张" :min="0" :max="40" :step="1" :reset="W.HOLO_DEFAULTS.exaggeration" :fmt="(x) => `×${x}`" :model-value="h.exaggeration" @update:model-value="(x) => W.setHolo({ exaggeration: x })" />
+      <Scale
+        label="立面高度"
+        title="四周线框立面上地形侧视轮廓的高度；顶面随之升降"
+        :min="0"
+        :max="15"
+        :step="0.25"
+        :reset="W.HOLO_DEFAULTS.sectionHeight"
+        :fmt="(x) => x.toFixed(1)"
+        :model-value="h.sectionHeight"
+        @update:model-value="(x) => W.setHolo({ sectionHeight: x })"
+      />
+      <button type="button" class="link" @click="W.resetHoloView()">{{ t('复位视角') }}</button>
     </Section>
 
     <Section v-if="ws.mode === '2d'" v-show="ws.tab === 'view'">

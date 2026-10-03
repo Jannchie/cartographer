@@ -28,6 +28,16 @@ Terrain is generated in the following stages:
 
 The 3D diorama supports real-time shadows, volumetric clouds, water reflections, a day–night cycle, an automated flyover and film-style colour grading. Edit mode provides brushes for raising and lowering terrain and adjusting temperature and precipitation, as well as adding or removing towns and defining continents; climate and hydrology are recomputed after each edit.
 
+The hologram view presents the same world as luminous wireframe on a projection table: land is raised into slabs with lit edges, coastlines are drawn as double lines, and major cities and summits carry leader lines and elevation dimension lines. The table is framed by latitude and longitude scales, wireframe walls showing the terrain side profile, and a top grid plane suspended above the map. Hovering over or selecting a landmass displays its area, highest point and centre coordinates. The view redraws only when the camera or selection changes and uses no GPU time while static.
+
+<p align="center"><img src="docs/images/en/world-holo.webp" alt="Hologram view with luminous landmasses, leader-line annotations and wireframe walls" width="100%"></p>
+
+The hologram view offers four colour schemes:
+
+| Tactical | Alert | Radar | Polar |
+| :-: | :-: | :-: | :-: |
+| <img src="docs/images/en/holo-tactical.webp" width="200"> | <img src="docs/images/en/holo-crimson.webp" width="200"> | <img src="docs/images/en/holo-phosphor.webp" width="200"> | <img src="docs/images/en/holo-arctic.webp" width="200"> |
+
 Six paper-map styles are available, each with label placement, scale bar and frame. While browsing, the frame remains fixed and zooming applies only to the map content:
 
 | Physical | Fantasy | Nautical |
