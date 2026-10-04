@@ -2032,6 +2032,19 @@ select.lang:hover {
   background: #1c1c1c;
   box-shadow: 0 0 0 2px #f3efe4;
 }
+/* 聚落沙盘：片区名（疏排的小型大写）与地标名 */
+.l3-district {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #f6f1e4;
+}
+.l3-landmark {
+  font-size: 12px;
+  font-style: italic;
+  color: #efe6cf;
+}
 
 /* ———————————————————— 首页：一张图版目录 ———————————————————— */
 .home {

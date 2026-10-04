@@ -3,7 +3,7 @@ import type { World } from '../../gen/types'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { fromWorld } from '../../settlement/fromWorld'
-import { computeHistory, Superseded } from './historyWorker'
+import { computeHistory, computeTown, Superseded } from './historyWorker'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import { pointInPoly, type P } from '../../settlement/geom'
 import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
@@ -26,6 +26,10 @@ import { planFits } from '../../settlement/culture'
 import { LAND_USES, landUseOf, landUseStats, type LandUse, type LandUseStat } from '../../settlement/landuse'
 import { peopleStats, type PeopleStat } from '../../settlement/people'
 import { defaultRegions, type SettleRegion } from '../../settlement/regions'
+import { TownScene, type Town3DOptions } from '../../render/town3d/townScene'
+import { buildTown } from '../../render/town3d/massing'
+import { LOOKS, QUALITIES, type Look, type QualityId } from '../../render/aerial/looks'
+import { DEFAULT_TIME } from '../../render/aerial/daylight'
 
 /**
  * 聚落地图模块：参数、风格、导出 + 矢量查看器与悬停探针。
@@ -73,6 +77,17 @@ const initialParams: SettlementParams = fromUrl
     }
 
 export type SettleTab = 'gen' | 'features' | 'style' | 'stats' | 'areas'
+export type SettleMode = 'map' | 'areas' | 'sandbox'
+
+/** 沙盘选项：存在本机（与世界沙盘的选项分开） */
+const town3dSaved = (() => {
+  try {
+    return JSON.parse(storeGet('town3d') ?? '{}') as Partial<Town3DOptions & { ground: SettleStyleId; lookId: string }>
+  } catch {
+    return {}
+  }
+})()
+const lookOf = (id: string): Look => structuredClone((LOOKS.find((l) => l.id === id) ?? LOOKS[0]).look)
 export const ss = reactive({
   params: initialParams,
   style: (fromUrl ? (fromUrl.style ?? 'parchment') : (storeGet('settleStyle') as SettleStyleId) || 'parchment') as SettleStyleId,
@@ -103,8 +118,25 @@ export const ss = reactive({
   timeline: { from: 0, until: 0, at: 0 },
   /** 成长动画进行中 */
   growing: false,
-  /** 舞台：地图，或编辑命名区域 */
-  mode: 'map' as 'map' | 'areas',
+  /** 舞台：地图、编辑命名区域，或三维沙盘 */
+  mode: 'map' as SettleMode,
+  /** 浏览器创建不了 WebGL：沙盘里只显示说明 */
+  no3d: false,
+  /** 沙盘选项；ground 为地面贴图所用的二维风格 */
+  town: {
+    timeOfDay: town3dSaved.timeOfDay ?? DEFAULT_TIME + 2.5,
+    sunAzimuth: town3dSaved.sunAzimuth ?? 225,
+    sunElevation: town3dSaved.sunElevation ?? 42,
+    haze: town3dSaved.haze ?? true,
+    dof: town3dSaved.dof ?? 0.2,
+    stage: town3dSaved.stage ?? true,
+    labels: town3dSaved.labels ?? true,
+    quality: (QUALITIES.some((q) => q.id === town3dSaved.quality) ? town3dSaved.quality : 'high') as QualityId,
+    shadowSoftness: town3dSaved.shadowSoftness ?? 2,
+    look: lookOf(town3dSaved.lookId ?? LOOKS[0].id),
+    lookId: town3dSaved.lookId ?? LOOKS[0].id,
+    ground: (SETTLE_THEMES.some((th) => th.id === town3dSaved.ground) ? town3dSaved.ground : 'color') as SettleStyleId,
+  },
   /** 区域视图：编辑中的命名区域、选中的那个、是否改过（改过就不再用默认的片区） */
   regions: [] as SettleRegion[],
   regionSel: null as string | null,
@@ -310,6 +342,13 @@ export async function run() {
   cache.clear()
   showInfo(st)
   if (ss.mode === 'areas') loadRegions()
+  // 沙盘里看不到二维地图：只记下要重画（换了城，切回时适配视图），先搭沙盘
+  if (ss.mode === 'sandbox') {
+    stale2d = 2
+    void showTown()
+    return
+  }
+  stale2d = 0
   await refresh(true)
 }
 
@@ -395,6 +434,11 @@ export async function seek(pop: number) {
   if (!hist) return
   const tl = ss.timeline
   tl.at = Math.round(Math.min(tl.until, Math.max(tl.from, pop)))
+  // 沙盘：体块与树在着色器里升降，地面由沙盘按节流重画；二维地图切回时再画
+  if (ss.mode === 'sandbox') {
+    townSeek(tl.at)
+    return
+  }
   if (seekBusy) {
     seekNext = tl.at
     return
@@ -433,6 +477,12 @@ export async function playGrowth() {
   for (let k = 0; k <= frames && ss.growing && hist === h; k++) {
     const t0 = performance.now()
     tl.at = pops[k]
+    if (ss.mode === 'sandbox') {
+      // 沙盘：每一步的新建筑在 0.3 秒里升起，步与步之间留 0.2 秒
+      townSeek(pops[k], 0.3)
+      await new Promise((r) => setTimeout(r, Math.max(0, 200 - (performance.now() - t0))))
+      continue
+    }
     await showFrame(snapshot(h, pops[k]))
     // 每帧至少停留 90 毫秒，小聚落算得快时也看得清
     await new Promise((r) => setTimeout(r, Math.max(0, 90 - (performance.now() - t0))))
@@ -475,7 +525,7 @@ const probeCard = () => {
 }
 watch(
   () => ss.probe,
-  () => viewer?.refreshChrome(),
+  () => ss.mode !== 'sandbox' && viewer?.refreshChrome(),
 )
 
 /** 把地图（不含页面的图廓）整个放进图框内框，四周留一点空 */
@@ -513,8 +563,23 @@ function showInfo(s: Settlement) {
 }
 
 // —— 平移缩放 ——
-export function mountSettlement(el: HTMLElement) {
+export function mountSettlement(el: HTMLElement, townEl: HTMLElement) {
   host = el
+  townHost = townEl
+  // 沙盘的悬停探针：指针下的建筑或地面
+  townEl.addEventListener('pointermove', (e) => {
+    if (e.buttons) return
+    cancelAnimationFrame(raf)
+    raf = requestAnimationFrame(() => {
+      const hit = town?.pick(e.clientX, e.clientY)
+      if (hit) probeQ(hit.q)
+      else ss.probe = null
+    })
+  })
+  townEl.addEventListener('pointerleave', () => {
+    cancelAnimationFrame(raf)
+    ss.probe = null
+  })
   bindPanZoom(el, view, applyView, { min: 0.1, max: 40, fit: fitView })
   el.addEventListener('pointermove', (e) => probeAt(e.clientX, e.clientY))
   el.addEventListener('pointerleave', () => (ss.probe = null))
@@ -535,7 +600,13 @@ function probeAt(clientX: number, clientY: number) {
     if (!st || !list || !host) return
     const r = host.getBoundingClientRect()
     const S = list.MW / st.width
-    const q: P = [((clientX - r.left - view.x) / view.k - list.M) / S, ((clientY - r.top - view.y) / view.k - list.M) / S]
+    probeQ([((clientX - r.left - view.x) / view.k - list.M) / S, ((clientY - r.top - view.y) / view.k - list.M) / S])
+  })
+}
+/** 聚落米坐标 q 处的读数（地图与沙盘共用） */
+function probeQ(q: P) {
+  {
+    if (!st) return
     if (q[0] < 0 || q[1] < 0 || q[0] > st.width || q[1] > st.height) {
       ss.probe = null
       return
@@ -571,13 +642,17 @@ function probeAt(clientX: number, clientY: number) {
     // 内容没变就不换对象，免得触发图廓重排
     if (sameProbe(ss.probe, title, rows)) return
     ss.probe = { title, rows }
-  })
+  }
 }
 
 // —— 导出 ——
 const fileBase = () => `${(st?.name ?? 'settlement').toLowerCase()}-${st?.params.seed ?? ss.params.seed}-${ss.style}${ss.opts.view === 'zoning' ? '-zoning' : ''}`
 export async function exportPng() {
   if (!st) return
+  if (ss.mode === 'sandbox') {
+    if (town && townFor === hist) download(town.snapshot(), `${fileBase()}-3d.png`)
+    return
+  }
   const list = await listFor(st, ss.style, 60000)
   const c = document.createElement('canvas')
   c.width = list.width * 2
@@ -672,13 +747,121 @@ export function resetRegions() {
   commitRegions(null)
   loadRegions()
 }
-export function setMode(m: 'map' | 'areas') {
+export function setMode(m: SettleMode) {
   ss.mode = m
+  ss.probe = null
   if (m === 'areas') {
     loadRegions()
     setTab('areas')
-    applyView()
   } else if (ss.tab === 'areas') setTab('gen')
+  if (m === 'sandbox') {
+    void showTown()
+    return
+  }
+  syncTown()
+  if (stale2d) redraw2d()
+  else applyView()
+}
+
+/** 沙盘里改过时刻、换过城：二维地图按时间轴上的当前时刻重画（2：换了城，适配视图） */
+let stale2d = 0
+function redraw2d() {
+  if (!hist) return
+  const fit = stale2d === 2
+  stale2d = 0
+  st = markRaw(snapshot(hist, ss.timeline.at))
+  cache.clear()
+  showInfo(st)
+  void refresh(fit)
+}
+
+// —— 沙盘（见 render/town3d） ——
+let town: TownScene | null = null
+let townHost: HTMLElement | null = null
+/** 沙盘里装着的是哪一份成长史 */
+let townFor: SettlementHistory | null = null
+let townJob = 0
+
+const townTitle = (s: Settlement) => ({
+  name: lang === 'zh' ? s.nameZh : lang === 'ja' ? s.nameJa : s.name,
+  sub: t('{km} 公里 · 种子 {seed}', { km: (s.width / 1000).toFixed(1), seed: s.params.seed }),
+})
+const townOpts = (): Town3DOptions => {
+  const { ground: _g, lookId: _l, ...o } = structuredClone(toRaw(ss.town))
+  return o
+}
+
+/** 沙盘只在聚落模块的沙盘模式下渲染 */
+function syncTown() {
+  town?.setActive(app.module === 'settlement' && ss.mode === 'sandbox')
+}
+
+/**
+ * 进入沙盘（或在沙盘里换了城）：第一次进入时才创建 WebGL；体块与树在推演线程里构建，
+ * 地形、地面贴图与水面在主线程搭（大城约百毫秒）
+ */
+async function showTown() {
+  syncTown()
+  if (ss.mode !== 'sandbox' || app.module !== 'settlement' || !hist || !townHost) return
+  if (!town && !ss.no3d) {
+    try {
+      town = markRaw(new TownScene(townHost, townOpts()))
+      town.onSnapshot = (s) => {
+        st = markRaw(s)
+        showInfo(st)
+      }
+      if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__town = town
+    } catch (err) {
+      console.error(err)
+      ss.no3d = true
+    }
+  }
+  if (!town) return
+  syncTown()
+  if (townFor === hist) return
+  const h = hist
+  const id = ++townJob
+  ss.loading.show = true
+  ss.loading.stage = '搭建沙盘'
+  let build: Awaited<ReturnType<typeof computeTown>> = null
+  try {
+    build = await computeTown(h)
+  } catch (err) {
+    if (!(err instanceof Superseded)) console.error(err)
+  }
+  // 期间换了城：交给新的那次
+  if (id !== townJob || hist !== h) return
+  // 推演线程里已经不是这一版：在主线程构建
+  build ??= buildTown(h.st, h.life)
+  const s = markRaw(snapshot(h, ss.timeline.at))
+  await town.setTown(h, build, s, ss.timeline.at, ss.town.ground, townTitle(s))
+  if (hist !== h) return
+  townFor = h
+  st = s
+  ss.loading.show = false
+}
+
+/** 沙盘里穿梭到人口 pop（dur：升降过渡的秒数） */
+function townSeek(pop: number, dur?: number) {
+  stale2d ||= 1
+  if (town && townFor === hist) town.setPopulation(pop, dur)
+}
+
+let townSaveTimer = 0
+/** 沙盘选项：立即生效，稍后存下 */
+export function setTown3d(patch: Partial<typeof ss.town>) {
+  Object.assign(ss.town, patch)
+  if (patch.ground) town?.setGroundStyle(patch.ground)
+  const { ground: _g, lookId: _l, ...o } = patch
+  if (Object.keys(o).length) town?.setOptions(structuredClone(toRaw(o)))
+  clearTimeout(townSaveTimer)
+  townSaveTimer = window.setTimeout(() => {
+    const { look: _look, ...save } = toRaw(ss.town)
+    storeSet('town3d', JSON.stringify(save))
+  }, 300)
+}
+export function pickTownLook(id: string) {
+  setTown3d({ lookId: id, look: lookOf(id) })
 }
 /** 在视图中央放一个新区域（六边形），选中它 */
 export function addRegion() {
@@ -740,9 +923,11 @@ window.addEventListener('keydown', (e) => {
 
 // 第一次进入聚落模块时才生成
 function start() {
+  syncTown()
   if (app.module !== 'settlement' || !host) return
   refreshPlaces(false)
   if (!st) run()
+  else if (ss.mode === 'sandbox') void showTown()
   else requestAnimationFrame(fitView)
 }
 watch(() => app.module, start)
@@ -766,6 +951,10 @@ registerRoute('settlement', {
 onLang(() => {
   if (!st) return
   showInfo(st)
+  if (town && townFor) {
+    town.setLabels(st.labels)
+    town.setTitle(townTitle(st))
+  }
   cache.clear()
   if (app.module === 'settlement') refresh(false, true)
 })

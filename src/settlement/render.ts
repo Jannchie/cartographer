@@ -26,6 +26,8 @@ export interface SettleOpts {
   ornaments?: boolean
   /** 命名区域（区域视图里改过的）：给了就按区域标片区名（见 regions.ts） */
   regions?: SettleRegion[]
+  /** 只画地面（底色、田、绿地、街区底、水、路、院落），给 3D 沙盘当地面贴图；晕渲、等高线、桥、码头、船、建筑、树、城墙、注记由三维场景表达 */
+  ground3d?: boolean
 }
 
 const SIZE_NAME: Record<Lang, Record<SettlementSize, string>> = {
@@ -87,7 +89,7 @@ export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts
     return list
   }
   R.rect(th.ground)
-  terrainLayers(R, st, th, opts)
+  if (!opts.ground3d) terrainLayers(R, st, th, opts)
   fieldFills(R, st, th)
   furrows(R, st, th)
   for (const g of st.greens) R.poly(g.poly, { color: th.green[g.kind], alpha: 1 }, g.kind === 'cemetery' ? { color: th.ink, alpha: 0.35, width: 0.5 } : undefined)
@@ -95,6 +97,11 @@ export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts
   waterLayers(R, st, th)
   wonderGlow(R, st, th)
   roads(R, st, th)
+  // 桥、码头、船在水面之上，3D 沙盘里另建实体
+  if (opts.ground3d) {
+    enclosureLayers(R, st, th)
+    return list
+  }
   crossingLayers(R, st, th)
   for (const p of st.piers) R.poly(p, { color: th.plaza, alpha: 1 }, { color: th.ink, alpha: 0.8, width: 0.7 })
   boatLayers(R, st, th)

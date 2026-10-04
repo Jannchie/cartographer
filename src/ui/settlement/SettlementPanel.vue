@@ -7,6 +7,8 @@ import { CULTURE_INFO, CULTURES, planFits } from '../../settlement/culture'
 import { POP_MAX, POP_MIN, sizeLabel } from '../../settlement/scale'
 import { LAND_USES } from '../../settlement/landuse'
 import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
+import { LOOKS, QUALITIES } from '../../render/aerial/looks'
+import { DEFAULT_TIME, fmtTime } from '../../render/aerial/daylight'
 import { placeName } from '../../i18n'
 import { langRef, t } from '../i18n'
 import Counter from '../kit/Counter.vue'
@@ -84,6 +86,14 @@ const RANDOM_TERRAIN = [
   { value: 'fixed', label: '固定地形', title: '保持现在的山、河、海岸，只换上面的城' },
 ] as const
 const optKeys = ['labels', 'contours', 'ornaments'] as const
+// 沙盘选项（与世界沙盘同名同义）
+const tv = ss.town
+const townToggles = computed(() => [
+  { label: '空气感', on: tv.haze },
+  { label: '展台', on: tv.stage },
+  { label: '注记', on: tv.labels, title: '片区名与地标名' },
+])
+const townKeys = ['haze', 'stage', 'labels'] as const
 const opts = computed(() => [
   { label: '注记', on: ss.opts.labels },
   { label: '等高线', on: ss.opts.contours },
@@ -257,7 +267,43 @@ const zoningLegend = computed(() =>
       <RegionPanel />
     </Section>
 
-    <Section v-show="ss.tab === 'style'">
+    <Section v-if="ss.mode === 'sandbox'" v-show="ss.tab === 'style'">
+      <Field label="地面" title="地面贴图用哪种地图风格画（道路、田地、绿地、水面）" />
+      <Swatches :items="swatches" :model-value="tv.ground" @update:model-value="(g) => S.setTown3d({ ground: g })" />
+      <Legend :items="townToggles" @toggle="(i) => S.setTown3d({ [townKeys[i]]: !tv[townKeys[i]] })" />
+      <Scale
+        label="移轴景深"
+        :min="0"
+        :max="100"
+        :step="1"
+        :reset="20"
+        :fmt="(x) => (x ? `${x}%` : t('关'))"
+        :model-value="Math.round(tv.dof * 100)"
+        @update:model-value="(x) => S.setTown3d({ dof: x / 100 })"
+      />
+      <Scale
+        label="时间"
+        title="一天中的时刻：12:00 为正午，入夜后窗户亮起灯火"
+        :min="0"
+        :max="24"
+        :step="0.1"
+        :reset="DEFAULT_TIME + 2.5"
+        :fmt="fmtTime"
+        :model-value="tv.timeOfDay"
+        @update:model-value="(x) => S.setTown3d({ timeOfDay: x })"
+      />
+      <Scale label="太阳方位" title="正午时太阳所在的方位：日出、日落的方向随之转动" :min="0" :max="360" :step="1" :reset="225" :fmt="(x) => `${x}°`" :model-value="tv.sunAzimuth" @update:model-value="(x) => S.setTown3d({ sunAzimuth: x })" />
+      <Scale label="正午高度" title="太阳一天中升到的最高角度（夜里月亮也升到这么高）" :min="2" :max="88" :step="1" :reset="42" :fmt="(x) => `${x}°`" :model-value="tv.sunElevation" @update:model-value="(x) => S.setTown3d({ sunElevation: x })" />
+      <Field label="画质">
+        <Seg :options="QUALITIES.map((q) => ({ value: q.id, label: q.name }))" :model-value="tv.quality" @update:model-value="(q) => S.setTown3d({ quality: q })" />
+      </Field>
+      <Scale label="阴影柔和" :min="0" :max="10" :step="0.5" :reset="2" :fmt="(x) => x.toFixed(1)" :model-value="tv.shadowSoftness" @update:model-value="(x) => S.setTown3d({ shadowSoftness: x })" />
+      <Field label="滤镜">
+        <Seg :cols="langRef === 'zh' ? 4 : 2" :options="LOOKS.map((l) => ({ value: l.id, label: l.name }))" :model-value="tv.lookId" @update:model-value="S.pickTownLook" />
+      </Field>
+    </Section>
+
+    <Section v-else v-show="ss.tab === 'style'">
       <Field label="视图" title="普通地图，或按用地性质给片区着色的区划图">
         <Seg :options="[...VIEWS]" :model-value="ss.opts.view" @update:model-value="(v) => S.setView(v)" />
       </Field>

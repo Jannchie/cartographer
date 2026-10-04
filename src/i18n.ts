@@ -722,6 +722,16 @@ const EN: Record<string, string> = {
   视图: 'View',
   地图: 'Map',
   区划: 'Zoning',
+  // 聚落沙盘
+  搭建沙盘: 'Building the diorama',
+  地面: 'Ground',
+  '地面贴图用哪种地图风格画（道路、田地、绿地、水面）': 'Which map style paints the ground (streets, fields, greens, water)',
+  片区名与地标名: 'District and landmark names',
+  '一天中的时刻：12:00 为正午，入夜后窗户亮起灯火': 'Time of day: 12:00 is noon; windows light up after dusk',
+  '拖动旋转 · 右键平移 · 滚轮缩放 · WASD / 方向键移动 · Q E 转向 · PgUp PgDn 俯仰 · +/− 远近 · R 随机 · P 性能':
+    'Drag to orbit · right-drag to pan · wheel to zoom · WASD / arrows to move · Q E to turn · PgUp PgDn to tilt · +/− to zoom · R random · P perf',
+  '浏览器没能创建 WebGL，多半是显卡加速被停用了。完全退出浏览器再重新打开通常就能恢复；在 Chrome 里可以打开 chrome://gpu 查看状态。地图与区域不受影响。':
+    'The browser could not create a WebGL context, most likely because graphics acceleration is disabled. Fully quitting and reopening the browser usually fixes it; in Chrome, chrome://gpu shows the status. The map and areas views are unaffected.',
   '普通地图，或按用地性质给片区着色的区划图': 'The ordinary map, or a zoning map that colours each district by land use',
   '点图例开关各类的着色': 'Click a legend entry to toggle its colour',
   官署与军事: 'Government & military',
@@ -1487,6 +1497,16 @@ const JA: Record<string, string> = {
   视图: '表示',
   地图: '地図',
   区划: '用途地域',
+  // 聚落ジオラマ
+  搭建沙盘: 'ジオラマを組み立てています',
+  地面: '地面',
+  '地面贴图用哪种地图风格画（道路、田地、绿地、水面）': '地面（道路・田畑・緑地・水面）をどの地図スタイルで描くか',
+  片区名与地标名: '地区名とランドマーク名',
+  '一天中的时刻：12:00 为正午，入夜后窗户亮起灯火': '一日の時刻：12:00 が正午。日が暮れると窓に灯がともる',
+  '拖动旋转 · 右键平移 · 滚轮缩放 · WASD / 方向键移动 · Q E 转向 · PgUp PgDn 俯仰 · +/− 远近 · R 随机 · P 性能':
+    'ドラッグで回転 · 右ドラッグで移動 · ホイールでズーム · WASD / 矢印キーで移動 · Q E で旋回 · PgUp PgDn で俯角 · +/− で遠近 · R ランダム · P 性能',
+  '浏览器没能创建 WebGL，多半是显卡加速被停用了。完全退出浏览器再重新打开通常就能恢复；在 Chrome 里可以打开 chrome://gpu 查看状态。地图与区域不受影响。':
+    'ブラウザが WebGL を作成できませんでした。グラフィックアクセラレーションが無効になっている可能性が高いです。ブラウザを完全に終了して開き直すと多くの場合は直ります。Chrome では chrome://gpu で状態を確認できます。地図と区域の表示には影響しません。',
   '普通地图，或按用地性质给片区着色的区划图': '通常の地図、または地区を土地利用で塗り分けた用途地域図',
   '点图例开关各类的着色': '凡例をクリックすると各区分の色を切り替えます',
   官署与军事: '官庁・軍事',

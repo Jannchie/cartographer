@@ -19,10 +19,14 @@ const worldExports = computed(() => [
   { label: 'PNG', title: '导出当前视图的图片', run: W.exportPng },
   ...(ws.mode === '2d' || ws.mode === 'areas' ? [{ label: 'SVG', title: '纸图的矢量版本，可无损放大', run: W.exportSvg }] : []),
 ])
-const settleExports = [
-  { label: 'PNG', title: '按 2 倍分辨率导出', run: S.exportPng },
-  { label: 'SVG', title: '矢量版本，可无损放大', run: S.exportSvg },
-]
+const settleExports = computed(() =>
+  S.ss.mode === 'sandbox'
+    ? [{ label: 'PNG', title: '导出当前视图的图片', run: S.exportPng }]
+    : [
+        { label: 'PNG', title: '按 2 倍分辨率导出', run: S.exportPng },
+        { label: 'SVG', title: '矢量版本，可无损放大', run: S.exportSvg },
+      ],
+)
 
 // 侧边栏分页：世界的第二页随模式是沙盘、纸图风格或编辑
 const worldTabs = computed(() => [
@@ -30,11 +34,11 @@ const worldTabs = computed(() => [
   { id: 'view' as const, label: ws.mode === '3d' ? '沙盘' : ws.mode === '2d' ? '纸图风格' : ws.mode === 'areas' ? '区域' : '编辑', icon: 'layers' as const },
   { id: 'stats' as const, label: '统计', icon: 'chart' as const },
 ])
-// 区域视图里多出一页"区域"
+// 区域视图里多出一页"区域"；沙盘模式下绘图风格页换成沙盘选项
 const settleTabs = computed(() => [
   { id: 'gen' as const, label: '生成', icon: 'sliders' as const },
   { id: 'features' as const, label: '要素', icon: 'blocks' as const },
-  { id: 'style' as const, label: '绘图风格', icon: 'brush' as const },
+  { id: 'style' as const, label: S.ss.mode === 'sandbox' ? '沙盘' : '绘图风格', icon: 'brush' as const },
   ...(S.ss.mode === 'areas' ? [{ id: 'areas' as const, label: '区域', icon: 'layers' as const }] : []),
   { id: 'stats' as const, label: '统计', icon: 'chart' as const },
 ])
