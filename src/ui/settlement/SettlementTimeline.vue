@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { IconPlay, IconStop } from '@jannchie/icons'
 import { computed, ref } from 'vue'
 import { sizeLabel } from '../../settlement/scale'
 import { t } from '../i18n'
+import Icon from '../kit/Icon.vue'
 import { playGrowth, seek, ss } from './settlement'
 
 /**
@@ -59,7 +61,7 @@ function onKey(e: KeyboardEvent) {
 <template>
   <div v-if="tl.until > tl.from" class="timeline" :class="{ dragging }">
     <button type="button" class="tl-play" :class="{ on: ss.growing }" :title="t(ss.growing ? '停止' : '从时间轴上的当前时刻播放城市的成长')" @click="playGrowth()">
-      <i :class="ss.growing ? 'tl-stop' : 'tl-tri'" aria-hidden="true"></i>
+      <Icon :icon="ss.growing ? IconStop : IconPlay" :size="14" />
     </button>
     <div
       ref="track"

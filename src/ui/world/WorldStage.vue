@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { IconDiorama, IconEdit, IconHologram, IconMap, IconRegion, type Icon as IconDef } from '@jannchie/icons'
 import { computed, onMounted, ref } from 'vue'
 import { t } from '../i18n'
+import Icon from '../kit/Icon.vue'
 import Loading from '../kit/Loading.vue'
 import Probe from '../kit/Probe.vue'
 import RegionOverlay from '../kit/RegionOverlay.vue'
@@ -22,12 +24,12 @@ const areaInfo = (a: Area) => {
   return { label: placeName(a), size: a.cells, water: isWaterArea(a.kind) || a.kind === 'lake', feature: isFeatureArea(a.kind) }
 }
 
-const MODES: { id: Mode; label: string }[] = [
-  { id: '3d', label: '3D 沙盘' },
-  { id: 'holo', label: '全息' },
-  { id: '2d', label: '纸图' },
-  { id: 'edit', label: '编辑' },
-  { id: 'areas', label: '区域' },
+const MODES: { id: Mode; label: string; icon: IconDef<string> }[] = [
+  { id: '3d', label: '3D 沙盘', icon: IconDiorama },
+  { id: 'holo', label: '全息', icon: IconHologram },
+  { id: '2d', label: '纸图', icon: IconMap },
+  { id: 'edit', label: '编辑', icon: IconEdit },
+  { id: 'areas', label: '区域', icon: IconRegion },
 ]
 const hint = computed(() =>
   ws.mode === '3d'
@@ -49,6 +51,7 @@ const hint = computed(() =>
     <div ref="v3" class="view" :class="{ hidden: ws.mode !== '3d' }"></div>
     <div ref="vh" class="view holo-view" :class="{ hidden: ws.mode !== 'holo' }"></div>
     <div v-if="ws.no3d && (ws.mode === '3d' || ws.mode === 'holo')" class="no3d">
+      <Icon :icon="IconDiorama" :size="32" weight="light" />
       <h3>{{ t('3D 沙盘不可用') }}</h3>
       <p>{{ t('浏览器没能创建 WebGL，多半是显卡加速被停用了。完全退出浏览器再重新打开通常就能恢复；在 Chrome 里可以打开 chrome://gpu 查看状态。纸图与编辑不受影响。') }}</p>
     </div>
@@ -68,7 +71,7 @@ const hint = computed(() =>
     <div class="neatline" aria-hidden="true"></div>
     <nav class="tabs" role="tablist">
       <button v-for="m in MODES" :key="m.id" type="button" role="tab" :aria-selected="ws.mode === m.id" :class="{ on: ws.mode === m.id }" @click="setMode(m.id)">
-        {{ t(m.label) }}
+        <Icon :icon="m.icon" :size="16" />{{ t(m.label) }}
       </button>
     </nav>
     <Transition name="fade">

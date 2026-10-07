@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { IconLocate, IconTrash } from '@jannchie/icons'
 import { computed } from 'vue'
 import type { AreaKind } from '../../gen/areas'
 import { placeName } from '../../i18n'
 import { langRef, t } from '../i18n'
 import Dropdown from '../kit/Dropdown.vue'
 import Field from '../kit/Field.vue'
+import Icon from '../kit/Icon.vue'
 import * as W from './world'
 import { ws } from './world'
 
@@ -64,8 +66,8 @@ function pick(id: string) {
         <Dropdown :options="KINDS" :model-value="sel.kind" @update:model-value="setKind" />
       </Field>
       <div class="pair">
-        <button type="button" @click="W.focusArea(sel.id)">{{ t('定位') }}</button>
-        <button type="button" @click="W.deleteArea(sel.id)">{{ t('删除区域') }}</button>
+        <button type="button" @click="W.focusArea(sel.id)"><Icon :icon="IconLocate" :size="14" />{{ t('定位') }}</button>
+        <button type="button" @click="W.deleteArea(sel.id)"><Icon :icon="IconTrash" :size="14" />{{ t('删除区域') }}</button>
       </div>
     </div>
     <p v-else class="counter-note">{{ t('在地图上点一个区域，或从下面的清单里选') }}</p>

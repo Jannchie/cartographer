@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { IconLocate, IconPlus, IconTrash } from '@jannchie/icons'
 import { computed } from 'vue'
 import { lang } from '../../i18n'
 import { langRef, t } from '../i18n'
 import Field from '../kit/Field.vue'
+import Icon from '../kit/Icon.vue'
 import * as S from './settlement'
 import { ss } from './settlement'
 
@@ -28,7 +30,7 @@ function pick(id: string) {
 <template>
   <div class="area-panel">
     <div class="area-actions">
-      <button type="button" class="wide" @click="S.addRegion()">{{ t('新建区域') }}</button>
+      <button type="button" class="wide" @click="S.addRegion()"><Icon :icon="IconPlus" :size="14" />{{ t('新建区域') }}</button>
       <button v-if="ss.regionsEdited" type="button" class="link" :title="t('丢掉这座城的区域改动，回到按片区划分的区域与名字')" @click="S.resetRegions()">{{ t('恢复默认区域') }}</button>
     </div>
 
@@ -37,8 +39,8 @@ function pick(id: string) {
       <Field label="中文名"><input :value="sel.name.zh" spellcheck="false" @focus="S.regionCheckpoint()" @input="editName('zh', val($event))" @change="S.commitRegions()" /></Field>
       <Field label="日文名"><input :value="sel.name.ja" spellcheck="false" @focus="S.regionCheckpoint()" @input="editName('ja', val($event))" @change="S.commitRegions()" /></Field>
       <div class="pair">
-        <button type="button" @click="S.focusRegion(sel.id)">{{ t('定位') }}</button>
-        <button type="button" @click="S.deleteRegion(sel.id)">{{ t('删除区域') }}</button>
+        <button type="button" @click="S.focusRegion(sel.id)"><Icon :icon="IconLocate" :size="14" />{{ t('定位') }}</button>
+        <button type="button" @click="S.deleteRegion(sel.id)"><Icon :icon="IconTrash" :size="14" />{{ t('删除区域') }}</button>
       </div>
     </div>
     <p v-else class="counter-note">{{ t('在地图上点一个区域，或从下面的清单里选') }}</p>

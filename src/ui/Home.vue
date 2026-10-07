@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { IconArrowRight, IconFolderOpen } from '@jannchie/icons'
 import { app } from './app'
 import { langRef, t } from './i18n'
+import Icon from './kit/Icon.vue'
 import LangSelect from './LangSelect.vue'
 
 const emit = defineEmits<{ open: [] }>()
@@ -36,13 +38,13 @@ const plates = [
           <span class="plate-img"><img :src="`${BASE}plates/${pl.img}-${langRef}.webp`" alt="" width="1200" height="752" /></span>
           <span class="plate-cap">
             <span class="plate-no">{{ t('图版') }} {{ pl.no }}</span>
-            <span class="plate-title">{{ t(pl.title) }}<i aria-hidden="true">→</i></span>
+            <span class="plate-title">{{ t(pl.title) }}<Icon :icon="IconArrowRight" :size="18" /></span>
             <span class="plate-desc">{{ t(pl.desc) }}</span>
           </span>
         </button>
       </div>
       <footer class="home-foot">
-        <button type="button" class="link" @click="emit('open')">{{ t('打开项目文件…') }}</button>
+        <button type="button" class="link" @click="emit('open')"><Icon :icon="IconFolderOpen" :size="14" />{{ t('打开项目文件…') }}</button>
         <LangSelect />
       </footer>
     </div>

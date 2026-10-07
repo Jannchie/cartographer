@@ -1,4 +1,24 @@
 <script setup lang="ts">
+import {
+  IconBrush,
+  IconCloudRain,
+  IconContinent,
+  IconCursor,
+  IconDices,
+  IconDropletOff,
+  IconEraser,
+  IconMapPinPlus,
+  IconReset,
+  IconSnowflake,
+  IconSun,
+  IconTerrainLower,
+  IconTerrainRaise,
+  IconTerrainSmooth,
+  IconTrash,
+  IconUndo,
+  IconWand,
+  type Icon as IconDef,
+} from '@jannchie/icons'
 import { computed } from 'vue'
 import type { EditTool, EditView } from '../../editor/editor'
 import type { Label, WorldParams } from '../../gen/types'
@@ -12,6 +32,7 @@ import { langRef, t } from '../i18n'
 import Dropdown from '../kit/Dropdown.vue'
 import Field from '../kit/Field.vue'
 import Fold from '../kit/Fold.vue'
+import Icon from '../kit/Icon.vue'
 import Legend from '../kit/Legend.vue'
 import Scale from '../kit/Scale.vue'
 import Section from '../kit/Section.vue'
@@ -88,19 +109,20 @@ const atlasToggles = computed(() => [
 ])
 const atlasKeys = ['labels', 'contours', 'graticule'] as const
 
-const TOOLS: { value: EditTool; label: string; title: string }[] = [
-  { value: 'select', label: '选取', title: '选取、拖动地点；空白处拖动平移' },
-  { value: 'place', label: '新增地点', title: '点击地图添加城镇' },
-  { value: 'raise', label: '抬升', title: '抬高地形：海里画出陆地、平原上堆出山' },
-  { value: 'lower', label: '下沉', title: '压低地形：挖出海湾、湖盆' },
-  { value: 'smooth', label: '抹平', title: '让地形变平缓' },
-  { value: 'warm', label: '升温', title: '提高气温' },
-  { value: 'cool', label: '降温', title: '降低气温' },
-  { value: 'wet', label: '增雨', title: '增加降水' },
-  { value: 'dry', label: '减雨', title: '减少降水' },
-  { value: 'region', label: '大洲', title: '点选陆块建立大洲，或选中已有大洲' },
-  { value: 'regionAdd', label: '划入', title: '画笔把陆地划入选中的大洲' },
-  { value: 'regionErase', label: '移出', title: '画笔把陆地移出选中的大洲' },
+// 编辑工具：三列的图标工具栏（选取 · 地形 · 气候 · 大洲）
+const TOOLS: { value: EditTool; label: string; title: string; icon: IconDef<string> }[] = [
+  { value: 'select', label: '选取', title: '选取、拖动地点；空白处拖动平移', icon: IconCursor },
+  { value: 'place', label: '新增地点', title: '点击地图添加城镇', icon: IconMapPinPlus },
+  { value: 'raise', label: '抬升', title: '抬高地形：海里画出陆地、平原上堆出山', icon: IconTerrainRaise },
+  { value: 'lower', label: '下沉', title: '压低地形：挖出海湾、湖盆', icon: IconTerrainLower },
+  { value: 'smooth', label: '抹平', title: '让地形变平缓', icon: IconTerrainSmooth },
+  { value: 'warm', label: '升温', title: '提高气温', icon: IconSun },
+  { value: 'cool', label: '降温', title: '降低气温', icon: IconSnowflake },
+  { value: 'wet', label: '增雨', title: '增加降水', icon: IconCloudRain },
+  { value: 'dry', label: '减雨', title: '减少降水', icon: IconDropletOff },
+  { value: 'region', label: '大洲', title: '点选陆块建立大洲，或选中已有大洲', icon: IconContinent },
+  { value: 'regionAdd', label: '划入', title: '画笔把陆地划入选中的大洲', icon: IconBrush },
+  { value: 'regionErase', label: '移出', title: '画笔把陆地移出选中的大洲', icon: IconEraser },
 ]
 const EDIT_VIEWS: { value: 'auto' | EditView; label: string }[] = [
   { value: 'auto', label: '随画笔切换' },
@@ -141,7 +163,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
           @input="p.seed = val($event); W.markDirty()"
           @keydown.enter="W.generate()"
         />
-        <button type="button" class="dice" :title="t('随机种子并生成（R）')" @click="W.randomSeed()">{{ t('随机') }}</button>
+        <button type="button" class="dice" :title="t('随机种子并生成（R）')" @click="W.randomSeed()"><Icon :icon="IconDices" :size="14" />{{ t('随机') }}</button>
       </div>
       <Field label="地形预设" title="一键换一类世界的参数，点「生成」后生效">
         <Dropdown :options="W.PRESETS.map((x, i) => ({ value: i, label: x.name, desc: x.desc }))" :model-value="ws.preset" placeholder="自定义" @update:model-value="W.applyPreset" />
@@ -265,18 +287,18 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </div>
       <div v-if="regionTool" class="sub">
         <Scale label="地峡宽度" :min="2" :max="40" :step="1" :fmt="(x) => t('{n} 格', { n: Math.round(x) })" v-model="ws.neck" />
-        <button type="button" class="wide" :title="t('在窄于「地峡宽度」的地方把陆地切开，每块大陆核心各成一洲')" @click="W.autoRegions()">{{ t('自动划分大洲') }}</button>
+        <button type="button" class="wide" :title="t('在窄于「地峡宽度」的地方把陆地切开，每块大陆核心各成一洲')" @click="W.autoRegions()"><Icon :icon="IconWand" :size="14" />{{ t('自动划分大洲') }}</button>
         <div v-if="ws.region" class="inspector">
           <Field label="原名"><input :value="ws.region.name" spellcheck="false" @input="W.editRegionName('name', val($event))" /></Field>
           <Field label="中文名"><input :value="ws.region.zh" spellcheck="false" @input="W.editRegionName('zh', val($event))" /></Field>
           <Field label="日文名"><input :value="ws.region.ja" spellcheck="false" @input="W.editRegionName('ja', val($event))" /></Field>
-          <button type="button" class="danger" @click="W.deleteRegion()">{{ t('删除这个大洲') }}</button>
+          <button type="button" class="danger" @click="W.deleteRegion()"><Icon :icon="IconTrash" :size="14" />{{ t('删除这个大洲') }}</button>
         </div>
       </div>
       <Legend :items="[{ label: '显示地名', on: ws.showNames }]" @toggle="W.setShowNames(!ws.showNames)" />
       <div class="pair">
-        <button type="button" :title="t('撤销（Ctrl+Z）')" @click="W.undo()">{{ t('撤销') }}</button>
-        <button type="button" :title="t('清除全部编辑')" @click="W.clearEdits()">{{ t('清除编辑') }}</button>
+        <button type="button" :title="t('撤销（Ctrl+Z）')" @click="W.undo()"><Icon :icon="IconUndo" :size="14" />{{ t('撤销') }}</button>
+        <button type="button" :title="t('清除全部编辑')" @click="W.clearEdits()"><Icon :icon="IconReset" :size="14" />{{ t('清除编辑') }}</button>
       </div>
       <div v-if="ws.insp" class="inspector">
         <h3>{{ t('地点') }}</h3>
@@ -286,7 +308,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         <Field label="类型">
           <Dropdown :options="KINDS.map(([k, n]) => ({ value: k, label: n }))" :model-value="ws.insp.kind" @update:model-value="W.setLabelKind" />
         </Field>
-        <button type="button" class="danger" :title="t('删除（Delete）')" @click="W.deleteSelected()">{{ t('删除地点') }}</button>
+        <button type="button" class="danger" :title="t('删除（Delete）')" @click="W.deleteSelected()"><Icon :icon="IconTrash" :size="14" />{{ t('删除地点') }}</button>
       </div>
     </Section>
   </div>

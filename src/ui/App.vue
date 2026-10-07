@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { IconCastle, IconChartBar, IconDiorama, IconEdit, IconFolderOpen, IconHologram, IconImage, IconPalette, IconRegion, IconSave, IconShapes, IconSliders } from '@jannchie/icons'
 import { computed, ref, watchEffect } from 'vue'
 import { app, storeGet, storeSet } from './app'
 import { langRef, t } from './i18n'
 import ExportMenu from './kit/ExportMenu.vue'
+import Icon from './kit/Icon.vue'
 import PanelTabs from './kit/PanelTabs.vue'
 import Home from './Home.vue'
 import LangSelect from './LangSelect.vue'
@@ -16,31 +18,38 @@ import { ws } from './world/world'
 
 // 导出格式：纸图才有矢量版本
 const worldExports = computed(() => [
-  { label: 'PNG', title: '导出当前视图的图片', run: W.exportPng },
-  ...(ws.mode === '2d' || ws.mode === 'areas' ? [{ label: 'SVG', title: '纸图的矢量版本，可无损放大', run: W.exportSvg }] : []),
+  { label: 'PNG', title: '导出当前视图的图片', icon: IconImage, run: W.exportPng },
+  ...(ws.mode === '2d' || ws.mode === 'areas' ? [{ label: 'SVG', title: '纸图的矢量版本，可无损放大', icon: IconShapes, run: W.exportSvg }] : []),
 ])
 const settleExports = computed(() =>
   S.ss.mode === 'sandbox'
-    ? [{ label: 'PNG', title: '导出当前视图的图片', run: S.exportPng }]
+    ? [{ label: 'PNG', title: '导出当前视图的图片', icon: IconImage, run: S.exportPng }]
     : [
-        { label: 'PNG', title: '按 2 倍分辨率导出', run: S.exportPng },
-        { label: 'SVG', title: '矢量版本，可无损放大', run: S.exportSvg },
+        { label: 'PNG', title: '按 2 倍分辨率导出', icon: IconImage, run: S.exportPng },
+        { label: 'SVG', title: '矢量版本，可无损放大', icon: IconShapes, run: S.exportSvg },
       ],
 )
 
-// 侧边栏分页：世界的第二页随模式是沙盘、纸图风格或编辑
+// 侧边栏分页：世界的第二页随模式是沙盘、全息、纸图风格、区域或编辑，图标与舞台上的视图切换一致
+const VIEW_TAB = {
+  '3d': { label: '沙盘', icon: IconDiorama },
+  holo: { label: '全息', icon: IconHologram },
+  '2d': { label: '纸图风格', icon: IconPalette },
+  areas: { label: '区域', icon: IconRegion },
+  edit: { label: '编辑', icon: IconEdit },
+} as const
 const worldTabs = computed(() => [
-  { id: 'gen' as const, label: '生成', icon: 'sliders' as const },
-  { id: 'view' as const, label: ws.mode === '3d' ? '沙盘' : ws.mode === '2d' ? '纸图风格' : ws.mode === 'areas' ? '区域' : '编辑', icon: 'layers' as const },
-  { id: 'stats' as const, label: '统计', icon: 'chart' as const },
+  { id: 'gen' as const, label: '生成', icon: IconSliders },
+  { id: 'view' as const, ...VIEW_TAB[ws.mode] },
+  { id: 'stats' as const, label: '统计', icon: IconChartBar },
 ])
 // 区域视图里多出一页"区域"；沙盘模式下绘图风格页换成沙盘选项
 const settleTabs = computed(() => [
-  { id: 'gen' as const, label: '生成', icon: 'sliders' as const },
-  { id: 'features' as const, label: '要素', icon: 'blocks' as const },
-  { id: 'style' as const, label: S.ss.mode === 'sandbox' ? '沙盘' : '绘图风格', icon: 'brush' as const },
-  ...(S.ss.mode === 'areas' ? [{ id: 'areas' as const, label: '区域', icon: 'layers' as const }] : []),
-  { id: 'stats' as const, label: '统计', icon: 'chart' as const },
+  { id: 'gen' as const, label: '生成', icon: IconSliders },
+  { id: 'features' as const, label: '要素', icon: IconCastle },
+  S.ss.mode === 'sandbox' ? { id: 'style' as const, label: '沙盘', icon: IconDiorama } : { id: 'style' as const, label: '绘图风格', icon: IconPalette },
+  ...(S.ss.mode === 'areas' ? [{ id: 'areas' as const, label: '区域', icon: IconRegion }] : []),
+  { id: 'stats' as const, label: '统计', icon: IconChartBar },
 ])
 
 const file = ref<HTMLInputElement>()
@@ -97,8 +106,8 @@ watchEffect(() => {
         <div class="masthead-top">
           <button type="button" class="wordmark" :title="t('回到首页')" @click="app.module = 'home'">Cartographer</button>
           <div class="file">
-            <button v-show="app.module === 'world'" type="button" class="link" :title="t('打开项目文件')" @click="openFile">{{ t('打开') }}</button>
-            <button v-show="app.module === 'world'" type="button" class="link" :title="t('保存种子、参数与全部编辑')" @click="W.saveProject()">{{ t('保存') }}</button>
+            <button v-show="app.module === 'world'" type="button" class="link" :title="t('打开项目文件')" @click="openFile"><Icon :icon="IconFolderOpen" :size="14" />{{ t('打开') }}</button>
+            <button v-show="app.module === 'world'" type="button" class="link" :title="t('保存种子、参数与全部编辑')" @click="W.saveProject()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
             <LangSelect />
           </div>
         </div>

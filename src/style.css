@@ -182,7 +182,7 @@ select {
 }
 .file {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   white-space: nowrap;
 }
@@ -211,12 +211,6 @@ select {
   line-height: 1.15;
   text-align: center;
   transition: color 0.2s;
-}
-.ptabs svg {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.3;
-  stroke-linejoin: round;
 }
 .ptabs span {
   max-width: 100%;
@@ -302,6 +296,9 @@ select {
     0 10px 28px rgba(30, 26, 21, 0.18);
 }
 .export-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 14px;
   font-family: var(--mono);
   font-size: 12px;
@@ -460,6 +457,9 @@ select.lang:hover {
 }
 .dice {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 5px 10px;
   border: 1px solid var(--ink);
   font-size: 12px;
@@ -664,6 +664,14 @@ select.lang:hover {
 .seg button.on {
   background: var(--ink);
   color: var(--paper);
+}
+/* 带图标的分段（编辑工具栏）：图标在上、名称在下 */
+.seg.iconic button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 4px 6px;
 }
 
 /* ———————————————————— 下拉选择 ———————————————————— */
@@ -1035,6 +1043,21 @@ select.lang:hover {
 .link:hover {
   color: var(--ink);
   text-decoration-color: var(--ink);
+}
+/* 带图标的文字链接：图标不带下划线，和文字留一点间距 */
+.link:has(> .icon) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 带图标的按钮：图标在文字左边，整体居中 */
+.pair button,
+.wide,
+.danger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 .pair button,
 .wide {
@@ -1502,6 +1525,10 @@ select.lang:hover {
     inset 0 0 0 3px var(--paper),
     inset 0 0 0 4px var(--rule-2);
 }
+.no3d .icon {
+  margin-bottom: 10px;
+  color: var(--ink-2);
+}
 .no3d h3 {
   margin: 0 0 8px;
   font-family: var(--cjk-serif);
@@ -1559,7 +1586,10 @@ select.lang:hover {
   box-shadow: 0 0 0 4px var(--night);
 }
 .tabs button {
-  padding: 6px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
   font-size: 12.5px;
   color: var(--ink-2);
   transition:
@@ -1608,19 +1638,6 @@ select.lang:hover {
 .tl-play:hover,
 .tl-play.on {
   border-color: var(--paper);
-}
-.tl-tri {
-  width: 0;
-  height: 0;
-  margin-left: 2px;
-  border: 5px solid transparent;
-  border-right: 0;
-  border-left: 8px solid currentColor;
-}
-.tl-stop {
-  width: 8px;
-  height: 8px;
-  background: currentColor;
 }
 .tl-track {
   position: relative;
@@ -2169,25 +2186,23 @@ select.lang:hover {
 }
 .plate-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   font-family: var(--cjk-serif);
   font-size: 26px;
   font-weight: 600;
   letter-spacing: 0.04em;
 }
-.plate-title i {
-  font-style: normal;
-  font-family: var(--mono);
-  font-size: 18px;
+.plate-title .icon {
+  flex: none;
   opacity: 0;
   transform: translateX(-8px);
   transition:
     opacity 0.25s,
     transform 0.35s var(--ease);
 }
-.plate:hover .plate-title i,
-.plate:focus-visible .plate-title i {
+.plate:hover .plate-title .icon,
+.plate:focus-visible .plate-title .icon {
   opacity: 1;
   transform: none;
   color: var(--accent);
@@ -2200,7 +2215,7 @@ select.lang:hover {
 }
 .home-foot {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 20px;
   padding-top: 14px;
   border-top: 1px solid var(--rule-2);
@@ -2488,4 +2503,10 @@ select.lang:hover {
     top: 40px;
     width: 200px;
   }
+}
+
+/* 图标（kit/Icon.vue）：不随行内基线下沉，不被弹性布局压扁 */
+.icon {
+  display: block;
+  flex: none;
 }

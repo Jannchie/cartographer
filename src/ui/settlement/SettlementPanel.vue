@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { IconDices } from '@jannchie/icons'
 import { computed } from 'vue'
 import { SETTLE_THEMES } from '../../settlement/themes'
 import { FEATURES, FUNCTIONS, GROUPS, featureEnv, featureName as nameOf, resolveCounts, type FeatureDef } from '../../settlement/features'
@@ -14,6 +15,7 @@ import { langRef, t } from '../i18n'
 import Counter from '../kit/Counter.vue'
 import Dropdown from '../kit/Dropdown.vue'
 import Field from '../kit/Field.vue'
+import Icon from '../kit/Icon.vue'
 import LayoutPicker from '../kit/LayoutPicker.vue'
 import Legend from '../kit/Legend.vue'
 import Scale from '../kit/Scale.vue'
@@ -136,7 +138,7 @@ const zoningLegend = computed(() =>
           :title="t('同一种子总是生成同一座聚落')"
           @keydown.enter="S.run()"
         />
-        <button type="button" class="dice" :title="t('按下面的方式随机一座聚落（R）')" @click="S.randomSeed()">{{ t('随机') }}</button>
+        <button type="button" class="dice" :title="t('按下面的方式随机一座聚落（R）')" @click="S.randomSeed()"><Icon :icon="IconDices" :size="14" />{{ t('随机') }}</button>
       </div>
       <Field label="随机" title="点「随机」或按 R 时换掉哪些">
         <Seg :options="[...RANDOM_MODE]" :model-value="ss.random.mode" @update:model-value="(v) => S.setRandom('mode', v)" />
