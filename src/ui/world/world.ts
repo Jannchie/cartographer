@@ -5,6 +5,7 @@ import { EditorView, type EditTool, type EditView } from '../../editor/editor'
 import { autoContinents, floodLand, regionAnchor } from '../../editor/layers'
 import { BIOME_NAMES, DEFAULT_PARAMS, normalizeParams, type Label, type World, type WorldEdits, type WorldParams } from '../../gen/types'
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
+import { earthAreas } from '../../gen/earth/realWorld'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
@@ -34,13 +35,14 @@ export const latFmt = (v: number) => `${Math.abs(v)}°${v > 0 ? 'N' : v < 0 ? 'S
 
 // 预设：一键换一类世界
 export const PRESETS: { name: string; desc: string; p: Partial<WorldParams> }[] = [
-  { name: '大陆', desc: '几块中等大小的大陆，温带为主', p: { globe: false, earth: false, landRatio: 0.36, plates: 14, mountains: 1, coastRoughness: 0.55, rainfall: 1, temperature: 0, latNorth: 64, latSouth: 14 } },
-  { name: '群岛', desc: '破碎的岛链与浅海，热带到亚热带', p: { globe: false, earth: false, landRatio: 0.2, plates: 22, mountains: 1.2, coastRoughness: 0.85, rainfall: 1.2, temperature: 3, latNorth: 30, latSouth: -30 } },
-  { name: '泛大陆', desc: '一整块超级大陆，内陆干旱、山系绵长', p: { globe: false, earth: false, landRatio: 0.56, plates: 9, mountains: 1.3, coastRoughness: 0.4, rainfall: 0.85, temperature: 1, latNorth: 55, latSouth: -40 } },
-  { name: '冰原', desc: '高纬寒冷，冰盖、苔原与峡湾', p: { globe: false, earth: false, landRatio: 0.4, plates: 12, mountains: 1.1, coastRoughness: 0.9, rainfall: 0.9, temperature: -9, latNorth: 82, latSouth: 42 } },
-  { name: '沙海', desc: '炎热少雨，沙漠与盐湖广布', p: { globe: false, earth: false, landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
-  { name: '类地球', desc: '全球全图：几块大陆隔着大洋，从赤道雨林到两极冰原', p: { globe: true, earth: false, landRatio: 0.29, plates: 16, mountains: 1.1, coastRoughness: 0.6, rainfall: 1, temperature: 0, latNorth: 80, latSouth: -62 } },
-  { name: '地球', desc: '真实地球的大陆、山脉与海深（ETOPO1），地名仍是虚构的', p: { globe: true, earth: true, mountains: 1, coastRoughness: 0.5, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
+  { name: '大陆', desc: '几块中等大小的大陆，温带为主', p: { globe: false, earth: false, earthReal: false, landRatio: 0.36, plates: 14, mountains: 1, coastRoughness: 0.55, rainfall: 1, temperature: 0, latNorth: 64, latSouth: 14 } },
+  { name: '群岛', desc: '破碎的岛链与浅海，热带到亚热带', p: { globe: false, earth: false, earthReal: false, landRatio: 0.2, plates: 22, mountains: 1.2, coastRoughness: 0.85, rainfall: 1.2, temperature: 3, latNorth: 30, latSouth: -30 } },
+  { name: '泛大陆', desc: '一整块超级大陆，内陆干旱、山系绵长', p: { globe: false, earth: false, earthReal: false, landRatio: 0.56, plates: 9, mountains: 1.3, coastRoughness: 0.4, rainfall: 0.85, temperature: 1, latNorth: 55, latSouth: -40 } },
+  { name: '冰原', desc: '高纬寒冷，冰盖、苔原与峡湾', p: { globe: false, earth: false, earthReal: false, landRatio: 0.4, plates: 12, mountains: 1.1, coastRoughness: 0.9, rainfall: 0.9, temperature: -9, latNorth: 82, latSouth: 42 } },
+  { name: '沙海', desc: '炎热少雨，沙漠与盐湖广布', p: { globe: false, earth: false, earthReal: false, landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
+  { name: '类地球', desc: '全球全图：几块大陆隔着大洋，从赤道雨林到两极冰原', p: { globe: true, earth: false, earthReal: false, landRatio: 0.29, plates: 16, mountains: 1.1, coastRoughness: 0.6, rainfall: 1, temperature: 0, latNorth: 80, latSouth: -62 } },
+  { name: '地球', desc: '真实地球的大陆、山脉与海深（ETOPO1），地名仍是虚构的', p: { globe: true, earth: true, earthReal: false, mountains: 1, coastRoughness: 0.5, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
+  { name: '真实地球', desc: '高程、气候、群系、河湖与自然地物名称都取自真实数据；没有城市与国家', p: { globe: true, earth: true, earthReal: true, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
 ]
 
 /** 观感：上次选的预设 + 在其上的微调（旧版本存的字段缺了就用预设补上） */
@@ -311,6 +313,8 @@ export function setParam<K extends keyof WorldParams>(k: K, v: WorldParams[K]) {
   // 全球图的高度随纬度范围走；开关全球图时换宽高比
   // 关掉全球图时地球底图一并关掉（地球底图总是全球图，见 normalizeParams）
   if (k === 'globe' && !v) ws.params.earth = false
+  // 真实地球建立在地球底图之上：关掉底图时一并关掉
+  if ((k === 'globe' || k === 'earth') && !v) ws.params.earthReal = false
   normalizeParams(ws.params)
   markDirty()
 }
@@ -1045,7 +1049,7 @@ let inferred: { world: World; areas: Area[] } | null = null
 function currentAreas(): Area[] {
   if (edits.areas) return edits.areas
   if (!world) return []
-  if (inferred?.world !== world) inferred = { world, areas: inferAreas(world) }
+  if (inferred?.world !== world) inferred = { world, areas: world.params.earthReal ? earthAreas(world) : inferAreas(world) }
   return inferred.areas
 }
 /** 区域视图里显示、编辑的是当前区域的副本；换了世界要重新载入 */

@@ -1,4 +1,5 @@
 import type { Area } from './areas'
+import type { EarthRes } from './earth/real'
 export interface WorldParams {
   seed: string
   width: number
@@ -27,6 +28,10 @@ export interface WorldParams {
   globe?: boolean
   /** 地球底图：大陆与海深取自真实地球（ETOPO1），只在全球图下有效；陆地比例、板块数这些不再起作用 */
   earth?: boolean
+  /** 真实地球：在地球底图之上，气候、群系、河湖与自然地物名称也取自真实数据，不再模拟；没有城市、国家与道路 */
+  earthReal?: boolean
+  /** 真实地球数据的精度：15m 为 0.25°，5m 为 5′ */
+  earthRes?: EarthRes
   /** 命名世界观（auto 按种子挑） */
   naming: NamingStyle
 }
@@ -55,6 +60,7 @@ export function globeHeight(p: Pick<WorldParams, 'width' | 'latNorth' | 'latSout
 
 /** 参数里可以推导的部分就地补齐：地球底图总是全球图；高度由宽度（全球图再加纬度范围）定。改动 width、纬度、globe、earth 之后调用 */
 export function normalizeParams(p: WorldParams) {
+  if (p.earthReal) p.earth = true
   if (p.earth) p.globe = true
   p.height = globeHeight(p)
 }
@@ -76,6 +82,8 @@ export const DEFAULT_PARAMS: WorldParams = {
   coastRoughness: 0.55,
   globe: false,
   earth: false,
+  earthReal: false,
+  earthRes: '15m',
   naming: 'auto',
 }
 
@@ -123,7 +131,7 @@ export const BIOME_NAMES: Record<number, string> = {
 }
 
 export interface Label {
-  kind: 'continent' | 'island' | 'ocean' | 'sea' | 'lake' | 'range' | 'city' | 'capital' | 'basin' | 'desert' | 'forest'
+  kind: 'continent' | 'island' | 'ocean' | 'sea' | 'lake' | 'range' | 'city' | 'capital' | 'basin' | 'desert' | 'forest' | 'river'
   name: string
   /** 中文名 */
   zh: string
@@ -137,6 +145,8 @@ export interface Label {
   weight: number
   /** 沿轴向的跨度（格） */
   span: number
+  /** 沿线排字的路径（交替存储的格坐标，河流注记用） */
+  path?: number[]
 }
 
 export interface Realm {

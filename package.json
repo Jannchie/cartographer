@@ -30,6 +30,8 @@
     "@types/pngjs": "^6.0.5",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-vue": "^6.0.9",
+    "geotiff": "^3.0.5",
+    "opencc-js": "^1.4.2",
     "pngjs": "^7.0.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

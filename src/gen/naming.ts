@@ -12,7 +12,7 @@ import type { Label, NamingStyle } from './types'
  * - 和风：日本地名，英文用罗马字，中文用对应的简体字
  */
 
-export type NameKind = Label['kind'] | 'realm' | 'world'
+export type NameKind = Exclude<Label['kind'], 'river'> | 'realm' | 'world'
 export interface Tri {
   en: string
   zh: string

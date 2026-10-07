@@ -2,6 +2,8 @@ import { generateWorld, groundKey, type WorldCache } from './gen/world'
 import type { World, WorldEdits, WorldParams } from './gen/types'
 import { loadWorld, saveWorld, worldKey } from './gen/cache'
 import { loadEarth } from './gen/earth/index'
+import { loadEarthFeatures, loadEarthGrid } from './gen/earth/real'
+import { earthAreas, earthResOf } from './gen/earth/realWorld'
 import { inferAreas, type Area } from './gen/areas'
 import { smoothRivers, type SmoothRiver } from './render/rivers'
 import { physicalTexturePixels, type TexturePixels } from './render/texture'
@@ -37,7 +39,8 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
     const cached = !!world
     if (world) post({ id, type: 'progress', stage: '读取缓存', frac: 1 })
     else {
-      if (params.earth) await loadEarth()
+      if (params.earthReal) await Promise.all([loadEarthGrid(earthResOf(params)), loadEarthFeatures()])
+      else if (params.earth) await loadEarth()
       world = generateWorld(params, (stage, frac) => post({ id, type: 'progress', stage, frac }), edits ?? {}, cache)
       // 先写缓存再转移数组（转移后缓冲区就被清空了）
       if (key) await saveWorld(key, world)
@@ -48,7 +51,8 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
     post({ id, type: 'progress', stage: '绘制地表', frac: 1 })
     const rivers = smoothRivers(world)
     const tex = ground === have ? undefined : physicalTexturePixels(world, 2)
-    const areas = inferAreas(world)
+    if (world.params.earthReal) await loadEarthFeatures()
+    const areas = world.params.earthReal ? earthAreas(world) : inferAreas(world)
     const transfer: Transferable[] = [
       world.elevation.buffer,
       world.water.buffer,

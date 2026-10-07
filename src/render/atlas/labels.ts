@@ -109,6 +109,8 @@ export class LabelLayer {
         return base(f(`${it} 500`, 1, L.text), L.region, 0.22, false)
       case 'lake':
         return base(f(`${it} 500`, 0, L.text), L.water, 0.05, false)
+      case 'river':
+        return base(f(`${it} 500`, 0, L.text), L.water, 0.04, false)
       case 'capital':
         return base(f('700', 2, L.text), L.city, 0.04, false)
       default: {
@@ -514,7 +516,7 @@ export class LabelLayer {
   all() {
     const { world, S, theme } = this
     const k = S / 2
-    const order: Kind[] = ['ocean', 'realm', 'continent', 'capital', 'range', 'sea', 'city', 'island', 'bay', 'lake', 'desert', 'basin', 'forest']
+    const order: Kind[] = ['ocean', 'realm', 'continent', 'capital', 'range', 'sea', 'city', 'river', 'island', 'bay', 'lake', 'desert', 'basin', 'forest']
     const capitals = new Set(theme.realms ? world.realms.map((r) => r.capital) : [])
     type Item = { kind: Kind; weight: number; label?: Label; realm?: number; area?: Area }
     // 由区域推出来的地名按区域画（名字、位置可能改过）；其余照原注记
@@ -566,6 +568,13 @@ export class LabelLayer {
         // 山脉名顺着山脊排；山太短、弯得太急或放不下时照直排
         const line = this.spine(it.area ? this.polyCells(it.area) : rangeCells(world, l))
         if (line && this.curved(name, line.map(([x, y]) => [x * S, y * S] as [number, number]), st)) continue
+      }
+      if (it.kind === 'river' && l.path) {
+        // 河名顺着河道排，排不下就不标（不照直排到河道外）
+        const line: [number, number][] = []
+        for (let q = 0; q + 1 < l.path.length; q += 2) line.push([l.path[q] * S, l.path[q + 1] * S])
+        this.curved(name, line, st)
+        continue
       }
       const r = Math.max(30 * k, Math.min(120 * k, l.span * S * 0.25))
       const offs = [[0, 0], [0, -r * 0.5], [0, r * 0.5], [-r, 0], [r, 0], [-r, -r * 0.6], [r, r * 0.6], [r, -r * 0.6], [-r, r * 0.6], [-2 * r, 0], [2 * r, 0], [0, -r], [0, r]]

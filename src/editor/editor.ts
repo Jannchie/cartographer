@@ -52,6 +52,7 @@ const KIND_STYLE: Record<Label['kind'], { font: string; color: string; dot?: num
   basin: { font: 'italic 11px', color: 'rgba(250,235,215,0.8)' },
   desert: { font: 'italic 11px', color: 'rgba(250,235,215,0.8)' },
   forest: { font: 'italic 11px', color: 'rgba(225,245,215,0.85)' },
+  river: { font: 'italic 10px', color: 'rgba(200,225,240,0.85)' },
 }
 
 /** 图例：配色带与刻度 */

@@ -8,6 +8,7 @@ import { nameRealms, realmMap, type RealmMap } from './realms'
 import { Noise } from './noise'
 import { RNG, hashString } from './rng'
 import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
+import { realEarthWorld } from './earth/realWorld'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
 import { Biome, EQUATOR_KM, isGlobe, MAP_KM, reliefKm, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
 import { blur, edt, neighbors8 } from './util'
@@ -45,6 +46,8 @@ export function terrainKey(p: WorldParams, edits?: WorldEdits) {
 }
 
 export function generateWorld(p: WorldParams, progress: Progress = () => {}, edits: WorldEdits = {}, cache?: WorldCache): World {
+  // 真实地球：不走模拟流水线，直接取真实数据（数据要事先 await loadEarthGrid / loadEarthFeatures）
+  if (p.earthReal) return realEarthWorld(p, progress, edits)
   const t0 = performance.now()
   const W = p.width
   const H = p.height
@@ -384,7 +387,7 @@ function protectedBasins(elev: Float32Array, W: number, H: number): Map<number, 
   return m
 }
 
-function signedCoastDist(elev: Float32Array, W: number, H: number) {
+export function signedCoastDist(elev: Float32Array, W: number, H: number) {
   const N = W * H
   const land = new Uint8Array(N)
   const sea = new Uint8Array(N)
@@ -399,7 +402,7 @@ function signedCoastDist(elev: Float32Array, W: number, H: number) {
   return out
 }
 
-function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number) {
+export function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number) {
   const s = new Float32Array(W * H)
   for (let y = 1; y < H - 1; y++) {
     for (let x = 1; x < W - 1; x++) {

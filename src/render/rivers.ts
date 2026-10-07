@@ -13,7 +13,8 @@ export function smoothRivers(world: World): SmoothRiver[] {
   const out: SmoothRiver[] = []
   for (const r of world.rivers) {
     const c = chaikin(r, 3)
-    out.push(meander(Array.from(c.xs), Array.from(c.ys), Array.from(c.fl)))
+    // 真实河道本身就是实测的走向，不再加蜿蜒
+    out.push(world.params.earthReal ? c : meander(Array.from(c.xs), Array.from(c.ys), Array.from(c.fl)))
   }
   return out
 }

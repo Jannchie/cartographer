@@ -338,7 +338,7 @@ function geodesicSplit(W: number, H: number, cells: number[], seeds: number[]): 
 }
 
 /** 格子集合的外轮廓：取面积最大的一圈，化简到一两百个顶点以内，并夹回地图范围 */
-function outline(W: number, H: number, cells: number[]): [number, number][] | null {
+export function outline(W: number, H: number, cells: number[]): [number, number][] | null {
   if (!cells.length) return null
   let x0 = W
   let y0 = H

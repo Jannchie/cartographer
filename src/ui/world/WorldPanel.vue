@@ -22,6 +22,7 @@ import {
 import { computed } from 'vue'
 import type { EditTool, EditView } from '../../editor/editor'
 import type { Label, WorldParams } from '../../gen/types'
+import type { EarthRes } from '../../gen/earth/real'
 import { DEFAULT_PARAMS, isGlobe } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
@@ -46,7 +47,7 @@ const p = ws.params
 const x100 = (v: number) => v.toFixed(2)
 const signed = (d: number) => (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(d)}`
 
-type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming' | 'width' | 'height' | 'globe' | 'earth'>
+type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming' | 'width' | 'height' | 'globe' | 'earth' | 'earthReal' | 'earthRes'>
 const worldScales: { key: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; inputScale?: number }[] = [
   { key: 'landRatio', label: '陆地比例', min: 0.12, max: 0.65, step: 0.01, fmt: pct, inputScale: 100 },
   { key: 'plates', label: '板块数量', min: 4, max: 30, step: 1, fmt: (v) => String(v) },
@@ -145,6 +146,10 @@ const KINDS: [Label['kind'], string][] = [
   ['desert', '沙漠'],
   ['forest', '森林'],
 ]
+const EARTH_RES_OPTS = [
+  { value: '15m', label: '0.25°', title: '1440 × 720 网格，约 28 km' },
+  { value: '5m', label: '5′', title: '4320 × 2160 网格，约 9 km' },
+]
 const brushTool = computed(() => !['select', 'place', 'region'].includes(ws.tool))
 const regionTool = computed(() => ws.tool.startsWith('region'))
 const val = (e: Event) => (e.target as HTMLInputElement).value
@@ -177,9 +182,13 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
           :items="[
             { label: '全球图', on: isGlobe(p), title: '横跨 360° 经度的世界全图：比例尺按赤道，高度随纬度范围' },
             { label: '地球底图', on: !!p.earth, title: '大陆、山脉与海深取自真实地球（ETOPO1）；陆地比例、板块数不再起作用' },
+            { label: '真实地球', on: !!p.earthReal, title: '高程、气候、群系、河湖与自然地物名称都取自真实数据，不再模拟；没有城市、国家与道路' },
           ]"
-          @toggle="(i) => (i ? W.setParam('earth', !p.earth) : W.setParam('globe', !isGlobe(p)))"
+          @toggle="(i) => (i === 2 ? W.setParam('earthReal', !p.earthReal) : i ? W.setParam('earth', !p.earth) : W.setParam('globe', !isGlobe(p)))"
         />
+        <Field v-if="p.earthReal" label="数据精度" title="真实地球数据的网格：0.25° 约 1 MB，5′ 约 9 MB（精细分辨率下更清楚）">
+          <Seg :model-value="p.earthRes ?? '15m'" :options="EARTH_RES_OPTS" @update:model-value="(v) => W.setParam('earthRes', v as EarthRes)" />
+        </Field>
         <Scale
           v-for="s in worldScales"
           :key="s.key"
