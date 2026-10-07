@@ -422,7 +422,17 @@ export function setMode(m: Mode) {
 const worker = new GenWorker()
 let jobId = 0
 let quietJob = false
+/** Worker 正在算的任务：算完前不再投递（Worker 同步执行，排队的旧任务只会白算一遍） */
+let running = false
+/** 运行期间又要求的生成：当前任务结束后只算最新的一次；null 为没有。有一次非静默就按非静默 */
+let queued: boolean | null = null
 export function generate(quiet = false) {
+  if (running) {
+    queued = queued === null ? quiet : queued && quiet
+    if (quiet) ws.editStatus = t('演算中…')
+    else Object.assign(ws.loading, { show: true, frac: 0 })
+    return
+  }
   const id = ++jobId
   const p = ws.params
   p.seed = p.seed.trim() || 'world'
@@ -448,6 +458,7 @@ export function generate(quiet = false) {
   if (quiet) ws.editStatus = t('演算中…')
   else Object.assign(ws.loading, { show: true, frac: 0 })
   ws.busy = true
+  running = true
   sentEdits = snapshotEdits(edits)
   // 区域不影响地形，不发给生成线程（也不影响"没有编辑时整份缓存"的判断）；
   // 带上现有贴图的地面版本：地面没变时 Worker 不再算贴图
@@ -460,11 +471,21 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   if (m.type === 'progress') {
     ws.loading.stage = t(m.stage)
     ws.loading.frac = m.frac
-    if (quietJob) ws.editStatus = t('演算中 · {stage}', { stage: t(m.stage) })
+    if (quietJob && queued === null) ws.editStatus = t('演算中 · {stage}', { stage: t(m.stage) })
+    return
+  }
+  running = false
+  // 算的过程中又有了新的编辑或参数：这份结果已经过时，直接算最新的
+  if (queued !== null) {
+    const quiet = queued
+    queued = null
+    generate(quiet)
     return
   }
   if (m.type === 'error') {
     ws.loading.stage = t('生成失败：') + m.message.split('\n')[0]
+    // 编辑后的静默重算不显示加载层：失败信息留在状态提示里，而不是一直显示"演算中"
+    ws.editStatus = quietJob ? ws.loading.stage : null
     ws.busy = false
     console.error(m.message)
     flushWaiters()
@@ -519,6 +540,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   } catch (err) {
     console.error(err)
     ws.loading.stage = t('绘制失败：') + (err instanceof Error ? err.message : String(err))
+    ws.editStatus = quietJob ? ws.loading.stage : null
     ws.busy = false
     flushWaiters()
     return

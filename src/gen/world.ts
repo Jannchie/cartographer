@@ -7,7 +7,7 @@ import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type H
 import { nameRealms, realmMap, type RealmMap } from './realms'
 import { Noise } from './noise'
 import { RNG, hashString } from './rng'
-import { buildEarthTerrain, buildTerrain } from './terrain'
+import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
 import { Biome, EQUATOR_KM, isGlobe, MAP_KM, reliefKm, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
 import { blur, edt, neighbors8 } from './util'
@@ -29,6 +29,8 @@ export interface TerrainStage {
 
 /** Worker 里的分阶段缓存：改了哪一级的参数，就只从那一级往下重算 */
 export interface WorldCache {
+  /** 板块造山的结果，叠加地形编辑之前（只改地形编辑时沿用；阶段内会改写，取用时复制） */
+  plates?: { key: string; terr: TerrainResult }
   /** 侵蚀结束时的地形（只改气候时沿用） */
   stage?: TerrainStage
   /** 地名之前的地面（只改命名时沿用） */
@@ -59,7 +61,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   const key = terrainKey(p, edits)
   let stage = cache?.stage?.key === key ? cache.stage : undefined
   if (!stage) {
-    stage = terrainStage(p, progress, edits, W, H, kmPerCell, rTerrain, rErode, key)
+    stage = terrainStage(p, progress, edits, W, H, kmPerCell, rTerrain, rErode, key, cache)
     if (cache) cache.stage = stage
   } else progress('沿用已演算的地形', 0.72)
   const gk = groundKey(p, edits)
@@ -286,10 +288,19 @@ function terrainStage(
   rTerrain: RNG,
   rErode: RNG,
   key: string,
+  cache?: WorldCache,
 ): TerrainStage {
   const N = W * H
-  progress('板块运动与造山', 0.02)
-  const terr = p.earth ? buildEarthTerrain(p, rTerrain) : buildTerrain(p, rTerrain, kmPerCell)
+  // 板块造山与地形编辑无关：连续画笔重算时沿用
+  const pk = terrainKey(p)
+  let base = cache?.plates?.key === pk ? cache.plates.terr : undefined
+  if (base) progress('沿用板块与造山', 0.18)
+  else {
+    progress('板块运动与造山', 0.02)
+    base = p.earth ? buildEarthTerrain(p, rTerrain) : buildTerrain(p, rTerrain, kmPerCell)
+    if (cache) cache.plates = { key: pk, terr: base }
+  }
+  const terr = { ...base, elev: base.elev.slice(), uplift: base.uplift.slice() }
   const elev = terr.elev
   // 地形编辑：在侵蚀之前叠加"意图"，抬高的地方同时获得构造抬升，侵蚀后仍能保持山体
   if (edits.terrain && edits.terrain.length === N) {
