@@ -1,6 +1,7 @@
 import { markRaw, reactive, toRaw, watch } from 'vue'
 import { latitudeOf } from '../../gen/climate'
 import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from '../../app/project'
+import { deleteWorld, getMeta, getWorld as getEntry, listWorlds, newWorldId, putMeta, putWorld, renameWorld, type LibraryMeta } from '../../app/library'
 import { EditorView, isSketchTool, type EditTool, type EditView } from '../../editor/editor'
 import { bumpSketch, sketchFromWorld } from '../../gen/sketch'
 import { autoContinents, floodLand, regionAnchor } from '../../editor/layers'
@@ -138,6 +139,12 @@ export const ws = reactive({
   sketch: false,
   /** 选中的草图山脉 */
   range: null as { height: number; width: number } | null,
+  /** 已定稿：地形是数据，与种子、地形参数、草图无关 */
+  frozen: false,
+  /** 当前世界对应的世界库条目（保存时覆盖它） */
+  entry: null as { id: string; name: string } | null,
+  /** 世界库面板 */
+  library: { open: false, items: [] as LibraryMeta[], busy: false },
   /** 自动运镜中 */
   touring: false,
 })
@@ -339,6 +346,8 @@ export function applyPreset(i: number) {
 
 const SYL = ['ar', 'en', 'is', 'or', 'ul', 'va', 'mi', 'ko', 'ra', 'the', 'lo', 'san', 'dra', 'nor', 'eth', 'wyn', 'ka', 'mel']
 export function randomSeed() {
+  // 定稿的世界与种子无关：换种子要先回到规划
+  if (ws.frozen) return
   ws.params.seed = syllableSeed(SYL)
   generate()
 }
@@ -436,8 +445,9 @@ let quietJob = false
 let running = false
 /** 运行期间又要求的生成：当前任务结束后只算最新的一次；null 为没有。有一次非静默就按非静默 */
 let queued: boolean | null = null
-export function generate(quiet = false) {
-  if (running) {
+/** opened：从世界库或文件打开的整个世界——不演算，只让 Worker 补派生数据 */
+export function generate(quiet = false, opened?: World) {
+  if (running && !opened) {
     queued = queued === null ? quiet : queued && quiet
     if (quiet) ws.editStatus = t('演算中…')
     else Object.assign(ws.loading, { show: true, frac: 0 })
@@ -452,6 +462,7 @@ export function generate(quiet = false) {
   if (p.seed !== editsSize.seed) {
     p.terrainVariant = 0
     p.placeVariant = 0
+    ws.entry = null
   }
   if (p.seed !== editsSize.seed && hasEdits(edits)) {
     const sketch = edits.sketch
@@ -481,11 +492,26 @@ export function generate(quiet = false) {
   sentEdits = snapshotEdits(edits)
   // 区域不影响地形，不发给生成线程（也不影响"没有编辑时整份缓存"的判断）；
   // 带上现有贴图的地面版本：地面没变时 Worker 不再算贴图
-  const msg: WorkerIn = { id, params: { ...toRaw(p) }, edits: { ...edits, areas: undefined }, ground: lastTex ? lastGround : undefined }
-  worker.postMessage(msg)
+  const msg: WorkerIn = opened
+    ? { id, params: { ...toRaw(p) }, edits: workerEdits(), world: opened }
+    : { id, params: { ...toRaw(p) }, edits: workerEdits(), ground: lastTex ? lastGround : undefined }
+  // 打开的世界不再留在主线程（世界库与文件各有一份）：场数据直接转移给 Worker，不复制
+  worker.postMessage(msg, opened ? [opened.elevation, opened.water, opened.temperature, opened.precipitation, opened.flow, opened.biome, opened.coastDist, opened.realm].map((a) => a.buffer) : [])
 }
 worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   const m = ev.data
+  // 定稿取地形的请求（负编号，与生成任务分开）
+  if (m.id < 0) {
+    const req = stageReqs.get(m.id)
+    if (!req) return
+    if (m.type === 'progress') ws.editStatus = t('定稿 · {stage}', { stage: t(m.stage) })
+    else {
+      stageReqs.delete(m.id)
+      if (m.type === 'stage') req.resolve({ elev: m.elev, basins: m.basins })
+      else req.reject(new Error(m.type === 'error' ? m.message : '定稿失败'))
+    }
+    return
+  }
   if (m.id !== jobId) return
   if (m.type === 'progress') {
     ws.loading.stage = t(m.stage)
@@ -501,6 +527,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
     generate(quiet)
     return
   }
+  if (m.type === 'stage') return
   if (m.type === 'error') {
     ws.loading.stage = t('生成失败：') + m.message.split('\n')[0]
     // 编辑后的静默重算不显示加载层：失败信息留在状态提示里，而不是一直显示"演算中"
@@ -573,6 +600,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   ws.busy = false
   syncHolo()
   flushWaiters()
+  void fillPendingThumb()
 }
 
 let statsCached = false
@@ -799,23 +827,197 @@ registerRoute('world', {
 })
 
 // —— 项目：保存 / 打开 ——
-export async function saveProject() {
-  const text = await serializeProject(toRaw(ws.params), edits)
-  download(new Blob([text], { type: 'application/json' }), `${(world?.worldName ?? 'world').toLowerCase()}-${ws.params.seed}.cartographer.json`)
+// —— 定稿与世界库 ——
+const stageReqs = new Map<number, { resolve: (v: { elev: Float32Array; basins: { x: number; y: number; r: number }[] }) => void; reject: (e: Error) => void }>()
+let stageSeq = 0
+/** 向 Worker 要当前世界侵蚀结束时的地形（定稿的底） */
+function requestStage() {
+  const id = --stageSeq
+  return new Promise<{ elev: Float32Array; basins: { x: number; y: number; r: number }[] }>((resolve, reject) => {
+    stageReqs.set(id, { resolve, reject })
+    const msg: WorkerIn = { id, params: { ...toRaw(ws.params) }, edits: workerEdits(), want: 'stage' }
+    worker.postMessage(msg)
+  })
 }
+
+/**
+ * 定稿：把当前地形冻结成数据。之后地形与种子、地形参数、草图无关，地形画笔直接改在冻结的高度上；
+ * 地点、世界名、国名一并钉住，往后重算气候、水系、政区时名字不变。之前的地形画笔已烘焙进去，另存一份供回到规划时恢复
+ */
+async function freeze() {
+  const w = world
+  if (!w || edits.frozen || w.params.earthReal) return
+  const { elev, basins } = await requestStage()
+  if (world !== w) throw new Error('世界在定稿时变了，请重试')
+  edits.planTerrain = edits.terrain
+  edits.terrain = undefined
+  edits.terrainRev = (edits.terrainRev ?? 0) + 1
+  edits.frozen = { elev, basins, seed: ws.params.seed, terrainVariant: ws.params.terrainVariant }
+  edits.frozenRev = Date.now()
+  edits.labels = w.labels.map((l) => ({ ...l }))
+  pinWorldName(true)
+  const names: NonNullable<WorldEdits['realmNames']> = {}
+  for (const r of w.realms) {
+    const cap = w.labels[r.capital]
+    if (cap) names[cap.name] = { name: r.name, zh: r.zh, ja: r.ja }
+  }
+  edits.realmNames = names
+  // 显示中的世界就是定稿的结果：编辑预览的基准随之换成定稿后的编辑
+  genEdits = snapshotEdits(edits)
+  editor?.refreshEdits(edits)
+  syncSketch()
+  ws.editStatus = null
+}
+
+/** 回到规划：去掉定稿地形，地形重新由种子、参数与草图生成；定稿后的地形画笔会丢失（可撤销） */
+export function unfreeze() {
+  if (!edits.frozen || !window.confirm(t('回到规划？地形重新由种子、参数与草图生成，定稿后在地形上的修改会丢失（可撤销）。'))) return
+  pushUndo(false)
+  edits.terrain = edits.planTerrain
+  edits.planTerrain = undefined
+  edits.frozen = undefined
+  edits.frozenRev = undefined
+  edits.realmNames = undefined
+  edits.terrainRev = (edits.terrainRev ?? 0) + 1
+  editor?.refreshEdits(edits)
+  syncSketch()
+  scheduleRegen()
+}
+
+function thumbnail(): string {
+  if (!lastTex) return ''
+  const src = lastTex.color
+  const c = document.createElement('canvas')
+  c.width = 320
+  c.height = Math.round((320 * src.height) / src.width)
+  c.getContext('2d')!.drawImage(src, 0, 0, c.width, c.height)
+  return c.toDataURL('image/webp', 0.8)
+}
+
+/** 存进世界库的数据（IndexedDB 的 put 会结构化克隆，存不了响应式代理：参数取原对象） */
+function storable() {
+  return { params: { ...toRaw(ws.params) }, edits, world: world! }
+}
+
+let flashTimer = 0
+function flash(msg: string) {
+  ws.editStatus = t(msg)
+  clearTimeout(flashTimer)
+  flashTimer = window.setTimeout(() => {
+    if (ws.editStatus === t(msg)) ws.editStatus = null
+  }, 1800)
+}
+
+/** 保存到世界库（即定稿）：已对应某个条目就覆盖它，asNew 时另存一条 */
+export async function saveWorld(asNew = false) {
+  if (!world || ws.busy || world.params.earthReal) return
+  try {
+    await freeze()
+    const w = world!
+    const id = !asNew && ws.entry ? ws.entry.id : newWorldId()
+    const name = !asNew && ws.entry ? ws.entry.name : worldTitle(w)
+    await putWorld({ id, name, savedAt: Date.now(), thumb: thumbnail(), seed: ws.params.seed, W: w.W, H: w.H }, storable())
+    ws.entry = { id, name }
+    flash('已保存到世界库')
+    if (ws.library.open) await refreshLibrary()
+  } catch (err) {
+    window.alert(t('保存失败：') + (err instanceof Error ? err.message : String(err)))
+  }
+}
+
+/** 打开世界库里的世界：整个世界直接显示，不演算 */
+export async function openEntry(id: string) {
+  const [e, m] = await Promise.all([getEntry(id), getMeta(id)])
+  if (!e || !m) return
+  loadWorldData(e.params, e.edits, e.world)
+  ws.entry = { id, name: m.name }
+  ws.library.open = false
+}
+
+function loadWorldData(params: WorldParams, ed: WorldEdits, w?: World) {
+  Object.assign(ws.params, { ...DEFAULT_PARAMS, ...params })
+  edits = ed
+  if (edits.frozen) edits.frozenRev = Date.now()
+  editsSize = { W: ws.params.width, H: ws.params.height, seed: ws.params.seed }
+  undoStack.length = 0
+  editor?.select(null)
+  editor?.refreshEdits(edits)
+  syncSketch()
+  ws.entry = null
+  ws.preset = -1
+  generate(false, w)
+}
+
+export async function refreshLibrary() {
+  ws.library.items = await listWorlds()
+}
+export async function openLibrary(v = true) {
+  ws.library.open = v
+  if (v) await refreshLibrary()
+}
+export async function renameEntry(id: string, name: string) {
+  name = name.trim()
+  if (!name) return
+  await renameWorld(id, name)
+  if (ws.entry?.id === id) ws.entry.name = name
+  await refreshLibrary()
+}
+export async function deleteEntry(id: string) {
+  const m = ws.library.items.find((x) => x.id === id)
+  if (!m || !window.confirm(t('从世界库删除「{name}」？此操作无法撤销。', { name: m.name }))) return
+  await deleteWorld(id)
+  if (ws.entry?.id === id) ws.entry = null
+  await refreshLibrary()
+}
+
+const fileName = (name: string) => `${name.replace(/[\\/:*?"<>|\s]+/g, '-').toLowerCase() || 'world'}.cartographer.json`
+
+/** 导出世界库里的一条：整个世界的数据，导入后直接显示 */
+export async function exportEntry(id: string) {
+  const [e, m] = await Promise.all([getEntry(id), getMeta(id)])
+  if (!e || !m) return
+  const text = await serializeProject(e.params, e.edits, e.world, m.name)
+  download(new Blob([text], { type: 'application/json' }), fileName(m.name))
+}
+
+/** 导出当前世界（先定稿） */
+export async function exportWorldFile() {
+  if (!world || ws.busy || world.params.earthReal) return
+  await freeze()
+  const name = ws.entry?.name ?? worldTitle(world!)
+  const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world!), name)
+  download(new Blob([text], { type: 'application/json' }), fileName(name))
+}
+
+/** 打开文件：带整个世界数据的（第 2 版）存进世界库并直接显示；只有种子与编辑的旧文件按种子演算 */
 export async function openProject(f: File) {
   try {
     const doc = await parseProject(await f.text())
-    Object.assign(ws.params, doc.params)
-    edits = doc.edits
-    editsSize = { W: ws.params.width, H: ws.params.height, seed: ws.params.seed }
-    undoStack.length = 0
-    editor?.refreshEdits(edits)
-    syncSketch()
-    generate()
+    if (doc.world) {
+      const id = newWorldId()
+      const name = doc.name ?? worldTitle(doc.world)
+      // 先存库再打开（打开时场数据转移给 Worker）；缩略图等贴图画好后再补
+      await putWorld({ id, name, savedAt: Date.now(), thumb: '', seed: doc.params.seed, W: doc.world.W, H: doc.world.H }, { params: doc.params, edits: doc.edits, world: doc.world })
+      loadWorldData(doc.params, doc.edits, doc.world)
+      ws.entry = { id, name }
+      pendingThumb = id
+      if (ws.library.open) await refreshLibrary()
+      return
+    }
+    loadWorldData(doc.params, doc.edits)
   } catch (err) {
     window.alert(t('无法打开：') + t(err instanceof Error ? err.message : String(err)))
   }
+}
+/** 导入的世界等贴图画好后补上缩略图 */
+let pendingThumb: string | null = null
+async function fillPendingThumb() {
+  const id = pendingThumb
+  if (!id || !lastTex) return
+  pendingThumb = null
+  const m = await getMeta(id)
+  if (m) await putMeta({ ...m, thumb: thumbnail() })
+  if (ws.library.open) await refreshLibrary()
 }
 
 // —— 编辑视图 ——
@@ -846,6 +1048,8 @@ function keepEdits(...keys: (keyof WorldEdits)[]): WorldEdits {
   return out
 }
 const WORLD_NAME_KEYS = ['worldName', 'worldNameZh', 'worldNameJa'] as const
+/** 发给 Worker 的编辑：区域不影响生成，回到规划才用的旧画笔也用不到，都不必复制过去 */
+const workerEdits = (): WorldEdits => ({ ...edits, areas: undefined, planTerrain: undefined })
 /** 放开钉住的地点、大洲与区域：按当前地形重新生成 */
 function releasePlaces() {
   edits.labels = undefined
@@ -868,9 +1072,9 @@ export function undo() {
 }
 export function clearEdits() {
   // 规划草图不算在内（退出规划另有按钮）：清除的是草图之上的画笔、地点与大洲
-  if (!hasEdits({ ...edits, sketch: undefined }) || !window.confirm(t(edits.sketch ? '清除草图以外的全部编辑？' : '清除全部编辑，恢复为程序生成的原样？'))) return
+  if (!hasEdits({ ...edits, sketch: undefined, frozen: undefined }) || !window.confirm(t(edits.sketch ? '清除草图以外的全部编辑？' : '清除全部编辑，恢复为程序生成的原样？'))) return
   pushUndo()
-  edits = keepEdits('sketch', 'sketchRev')
+  edits = keepEdits('sketch', 'sketchRev', 'frozen', 'frozenRev', 'planTerrain', 'realmNames')
   editor?.refreshEdits(edits)
   scheduleRegen()
 }
@@ -900,6 +1104,33 @@ defineStrings([
   ['移除草图，大陆回到按陆地比例随机生成', 'Remove the sketch and go back to random continents', 'スケッチを外し、大陸をランダム生成に戻す'],
   ['退出规划', 'Leave plan', '計画を終了'],
   ['聚落与道路', 'Settlements & roads', '集落と道路'],
+  ['定稿 · {stage}', 'Finalizing · {stage}', '確定中 · {stage}'],
+  ['回到规划？地形重新由种子、参数与草图生成，定稿后在地形上的修改会丢失（可撤销）。', 'Back to planning? Terrain is generated again from the seed, parameters and sketch; terrain changes made after finalizing are lost (undoable).', '計画に戻りますか？地形はシード・パラメーター・スケッチから再び生成され、確定後の地形の修正は失われます（元に戻せます）。'],
+  ['已保存到世界库', 'Saved to library', 'ライブラリに保存しました'],
+  ['保存失败：', 'Save failed: ', '保存に失敗：'],
+  ['从世界库删除「{name}」？此操作无法撤销。', 'Delete “{name}” from the library? This cannot be undone.', '「{name}」をライブラリから削除しますか？元に戻せません。'],
+  ['读取世界库', 'Reading library', 'ライブラリを読み込み中'],
+  ['读取定稿地形', 'Reading finalized terrain', '確定地形を読み込み中'],
+  ['世界库', 'Library', 'ライブラリ'],
+  ['世界库…', 'Library…', 'ライブラリ…'],
+  ['关闭', 'Close', '閉じる'],
+  ['保存到世界库', 'Save to library', 'ライブラリに保存'],
+  ['保存到世界库：地形定稿成数据，之后与种子无关', 'Save to the library: the terrain is finalized as data and no longer depends on the seed', 'ライブラリに保存：地形をデータとして確定し、以後シードに依存しない'],
+  ['已定稿', 'Finalized', '確定済み'],
+  ['地形已是数据，与种子无关：种子与地形参数不再起作用，地形画笔直接修改这份地形；气候、水系、聚落仍可调整与重算。', 'The terrain is data and no longer depends on the seed: seed and terrain parameters have no effect, and terrain brushes edit it directly. Climate, water and settlements can still be adjusted.', '地形はデータになり、シードに依存しません。シードと地形パラメーターは効かず、地形ブラシはこの地形を直接修正します。気候・水系・集落は引き続き調整できます。'],
+  ['回到规划', 'Back to planning', '計画に戻る'],
+  ['去掉定稿地形，重新由种子、参数与草图生成', 'Drop the finalized terrain and generate it from the seed, parameters and sketch again', '確定地形を外し、シード・パラメーター・スケッチから再び生成する'],
+  ['另存为新世界', 'Save as new', '新規として保存'],
+  ['导入文件…', 'Import file…', 'ファイルを読み込む…'],
+  ['还没有保存的世界。生成满意后点「保存」，世界会连同全部数据存进这里。', 'No saved worlds yet. Click “Save” when you like a world; it is stored here with all its data.', '保存した世界はまだありません。気に入ったら「保存」を押すと、すべてのデータごとここに保存されます。'],
+  ['打开', 'Open', '開く'],
+  ['导出', 'Export', '書き出し'],
+  ['删除', 'Delete', '削除'],
+  ['双击改名', 'Double-click to rename', 'ダブルクリックで名前を変更'],
+  ['当前', 'Current', '現在'],
+  ['世界文件', 'World file', 'ワールドファイル'],
+  ['整个世界的数据（.json），导入后直接显示，与种子无关', 'All data of the world (.json); opens as is, independent of the seed', '世界の全データ（.json）。読み込むとそのまま表示され、シードに依存しない'],
+  ['保存的世界、导入与导出', 'Saved worlds, import and export', '保存した世界・読み込みと書き出し'],
   ['地形方案', 'Terrain variant', '地形案'],
   ['聚落方案', 'Settlement variant', '集落案'],
   ['同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成', 'Another set of terrain details for the same seed (a sketch keeps its continents and ranges); places are regenerated for the new terrain', '同じシードで地形の細部を作り直す（スケッチがあれば大陸と山脈は保たれる）。地点は新しい地形に合わせて作り直す'],
@@ -923,6 +1154,7 @@ defineStrings([
   ['退出规划？草图将被移除，大陆回到随机生成（可撤销）。', 'Leave the plan? The sketch is removed and continents are generated randomly again (undoable).', '計画を終了しますか？スケッチを外し、大陸はランダム生成に戻ります（元に戻せます）。'],
 ])
 function syncSketch() {
+  ws.frozen = !!edits.frozen
   ws.sketch = !!edits.sketch
   if (!edits.sketch && isSketchTool(ws.tool)) setTool('select')
   showRangeInspector(editor?.selectedRange ?? -1)
@@ -932,7 +1164,7 @@ function syncSketch() {
  * 原先的地形画笔、地点与大洲都是针对随机大陆的，一并清掉（可撤销）
  */
 export function startSketch(from: 'world' | 'blank') {
-  if (!world || ws.params.earth) return
+  if (!world || ws.params.earth || ws.frozen) return
   pushUndo(false)
   const { W, H } = world
   const sketch = from === 'world' ? sketchFromWorld(world.elevation, W, H, world.kmPerCell) : { land: new Float32Array(W * H), ranges: [] }
@@ -948,9 +1180,9 @@ export function startSketch(from: 'world' | 'blank') {
   }
   scheduleRegen()
 }
-/** 世界名钉住：政区命名会消耗命名序列，开关聚落前后生成的世界名会不同 */
-function pinWorldName() {
-  if (!world || edits.worldName) return
+/** 世界名钉住：政区命名会消耗命名序列，开关聚落前后生成的世界名会不同。force：已钉住的也换成当前世界的 */
+function pinWorldName(force = false) {
+  if (!world || (edits.worldName && !force)) return
   edits.worldName = world.worldName
   edits.worldNameZh = world.worldNameZh
   edits.worldNameJa = world.worldNameJa
@@ -960,6 +1192,7 @@ function pinWorldName() {
  * 钉住的地点、大洲与区域是贴着旧地形摆的，一并放开，按新地形重新生成（可撤销）
  */
 export function setTerrainVariant(n: number) {
+  if (ws.frozen) return
   n = Math.max(0, Math.round(n))
   if (n === (ws.params.terrainVariant ?? 0)) return
   pushUndo(false)

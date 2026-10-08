@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconArrowRight, IconFolderOpen } from '@jannchie/icons'
+import { IconArrowRight, IconLibrary } from '@jannchie/icons'
 import { app } from './app'
 import { langRef, t } from './i18n'
 import Icon from './kit/Icon.vue'
@@ -44,7 +44,7 @@ const plates = [
         </button>
       </div>
       <footer class="home-foot">
-        <button type="button" class="link" @click="emit('open')"><Icon :icon="IconFolderOpen" :size="14" />{{ t('打开项目文件…') }}</button>
+        <button type="button" class="link" @click="emit('open')"><Icon :icon="IconLibrary" :size="14" />{{ t('世界库…') }}</button>
         <LangSelect />
       </footer>
     </div>

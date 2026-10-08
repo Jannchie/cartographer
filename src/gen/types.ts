@@ -45,6 +45,9 @@ export interface WorldParams {
   placeVariant?: number
 }
 
+/** 只塑造地形形状的参数：定稿后不再起作用（纬度、降水、气温仍影响气候） */
+export const SHAPE_PARAMS = ['landRatio', 'plates', 'mountains', 'coastRoughness', 'erosion'] as const
+
 /** 区域图的宽度（公里）；全球图按赤道一周 */
 export const MAP_KM = 6000
 export const EQUATOR_KM = 40075
@@ -240,6 +243,23 @@ export interface WorldEdits {
   sketch?: WorldSketch
   /** 草图的版本号：变了才需要重算造山 */
   sketchRev?: number
+  /**
+   * 定稿的地形：侵蚀结束时（河道下切之前）的高度与盆地。有它时地形不再由种子、参数与草图生成，
+   * 地形画笔直接改在这份高度上；气候、水系、群系与聚落仍从它往下演算
+   */
+  frozen?: {
+    elev: Float32Array
+    basins: { x: number; y: number; r: number }[]
+    /** 定稿时的种子与地形方案：气候扰动、水系、地名与聚落的随机数流从此固定，之后改种子也不影响这个世界 */
+    seed: string
+    terrainVariant?: number
+  }
+  /** 定稿版本号（每次定稿换一个） */
+  frozenRev?: number
+  /** 定稿前的地形画笔（已烘焙进 frozen）：回到规划时恢复 */
+  planTerrain?: Float32Array
+  /** 定稿时的国名，按都城原名对应：重算政区后国名不变 */
+  realmNames?: Record<string, { name: string; zh: string; ja?: string }>
   /** 有名字的区域（区域视图里改过就存完整的列表，替换自动推断的；见 gen/areas.ts）。不影响地形，不发给生成线程 */
   areas?: Area[]
 }
