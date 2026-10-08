@@ -40,9 +40,12 @@ const DOT_MATRIX = /* glsl */ `
     float r = min(0.28, px * 0.7);
     float d = length(fract(g) - 0.5);
     float m = 1.0 - smoothstep(r * 0.5, r + px * 0.5, d);
-    m = mix(m, min(1.0, 3.1416 * r * r * 1.4), smoothstep(0.35, 0.8, px));
+    // 点距小于约 8 像素就开始退回平均亮度（点径不到一像素时，镜头一动点就在像素间跳动闪烁）；
+    // 每点的随机亮度同样抹平
+    float avg = smoothstep(0.12, 0.3, px);
+    m = mix(m, min(1.0, 3.1416 * r * r * 1.4), avg);
     float n = vnoise(p * 0.07) * 0.65 + vnoise(p * 0.33 + 7.0) * 0.35;
-    return m * smoothstep(0.2, 0.85, n) * (0.55 + 0.45 * hash12(floor(g)));
+    return m * smoothstep(0.2, 0.85, n) * (0.55 + 0.45 * mix(hash12(floor(g)), 0.5, avg));
   }
 `
 
@@ -68,6 +71,14 @@ export interface TerrainUniforms {
   uRelief: { value: number }
   uLift: { value: number }
   uReveal: { value: number }
+  /**
+   * 展开动画（离线录制的片头）：地图分成方块，以 uCenter（场景 xz）为圆心、按方块中心的距离（加一点随机）
+   * 落在半径 uUnfold 以内的方块才有地形；前沿 uBand 宽的一圈方块从平地升到原本的高度，刚出现的方块发亮并描出方格。
+   * uUnfold 很大时不起作用
+   */
+  uUnfold: { value: number }
+  uCenter: { value: THREE.Vector2 }
+  uBand: { value: number }
   uLand: { value: THREE.Color }
   uAccent: { value: THREE.Color }
   uSea: { value: THREE.Color }
@@ -92,6 +103,9 @@ export function createTerrainMaterial() {
     uRelief: { value: 1 },
     uLift: { value: 0.35 },
     uReveal: { value: 1 },
+    uUnfold: { value: 1e6 },
+    uCenter: { value: new THREE.Vector2() },
+    uBand: { value: 22 },
     uLand: { value: new THREE.Color() },
     uAccent: { value: new THREE.Color() },
     uSea: { value: new THREE.Color() },
@@ -106,14 +120,25 @@ export function createTerrainMaterial() {
       uniform vec2 uGrid;
       uniform float uRelief;
       uniform float uLift;
+      uniform float uUnfold;
+      uniform vec2 uCenter;
+      uniform float uBand;
       varying vec2 vT;
       varying vec3 vWp;
       ${TEX_UV}
       ${GROUND_H}
+      // 展开用的方块：边长 2.4，距离按方块中心算并加随机，前沿参差
+      float unfoldD(vec2 xz) {
+        vec2 t = floor(xz / 2.4);
+        return length((t + 0.5) * 2.4 - uCenter) + fract(sin(dot(t, vec2(12.9898, 78.233))) * 43758.5453) * 7.0;
+      }
       void main() {
         vT = texUv(uv);
         vec3 p = position;
-        p.y = groundH(texture2D(uHeight, vT).r);
+        // 展开：前沿的一圈方块从平地升起
+        float d = unfoldD((modelMatrix * vec4(p, 1.0)).xz);
+        float rise = smoothstep(0.0, 1.0, clamp((uUnfold - d) / uBand, 0.0, 1.0));
+        p.y = groundH(texture2D(uHeight, vT).r) * rise;
         vec4 w = modelMatrix * vec4(p, 1.0);
         vWp = w.xyz;
         gl_Position = projectionMatrix * viewMatrix * w;
@@ -129,6 +154,8 @@ export function createTerrainMaterial() {
       uniform vec2 uSize;
       uniform float uRelief;
       uniform float uReveal;
+      uniform float uUnfold;
+      uniform vec2 uCenter;
       uniform vec3 uLand;
       uniform vec3 uAccent;
       uniform vec3 uSea;
@@ -138,6 +165,12 @@ export function createTerrainMaterial() {
       varying vec2 vT;
       varying vec3 vWp;
       ${NOISE_GLSL}
+      // 展开用的方块：边长 2.4，距离按方块中心算并加随机，前沿参差
+      float unfoldD(vec2 xz) {
+        vec2 t = floor(xz / 2.4);
+        return length((t + 0.5) * 2.4 - uCenter) + fract(sin(dot(t, vec2(12.9898, 78.233))) * 43758.5453) * 7.0;
+      }
+
       ${NOTCHED_GRID}
       ${DOT_MATRIX}
       /** 等值线：v 每过一个整数画一道细线（屏幕上约一像素宽） */
@@ -211,6 +244,14 @@ export function createTerrainMaterial() {
         float rz = mix(-uSize.y * 0.5 - 2.0, uSize.y * 0.5 + 2.0, uReveal);
         if (vWp.z > rz) discard;
         col += uLine * exp(-(rz - vWp.z) * 2.5) * 2.5 * (1.0 - step(1.0, uReveal));
+        // 展开：前沿以外的方块不画；刚出现的方块整块发亮并描出方格，随后回落
+        float dr = uUnfold - unfoldD(vWp.xz);
+        if (dr < 0.0) discard;
+        float on = 1.0 - step(1e5, uUnfold);
+        vec2 cell = fract(vWp.xz / 2.4);
+        float edge = min(min(cell.x, 1.0 - cell.x), min(cell.y, 1.0 - cell.y));
+        float frame = 1.0 - smoothstep(0.0, 0.05, edge);
+        col += uLine * (exp(-dr * 0.7) * (1.2 + frame * 2.5) + exp(-dr * 0.2) * 0.12) * on;
         gl_FragColor = vec4(col, 1.0);
       }
     `,
@@ -228,6 +269,11 @@ export function createFloorMaterial() {
     uBg: { value: new THREE.Color() },
     /** 图框的半宽、半深 */
     uHalf: { value: new THREE.Vector2(52, 34) },
+    /**
+     * 进出场（离线录制的片头片尾）：按 10 单位的主网格分块，方块中心的方形距离（以图框为 1，加一点随机）
+     * 小于 uReach 的方块才有底纹；主网格与十字先出，细网格与点阵晚一拍，刚出现的方块整块闪亮。很大时不起作用
+     */
+    uReach: { value: 1e6 },
   }
   const mat = new THREE.ShaderMaterial({
     uniforms,
@@ -243,6 +289,7 @@ export function createFloorMaterial() {
       uniform vec3 uLine;
       uniform vec3 uBg;
       uniform vec2 uHalf;
+      uniform float uReach;
       varying vec3 vWp;
       ${NOISE_GLSL}
       ${NOTCHED_GRID}
@@ -263,15 +310,25 @@ export function createFloorMaterial() {
         vec2 minor = notchedGrid(p, 2.0, -1.0, -1.0, 1.0);
         vec2 q = abs(mod(p + 5.0, 10.0) - 5.0);
         float hole = step(q.x, 1.1) * step(q.y, 1.1);
-        float grid = minor.x * (1.0 - hole) * 0.05 * minorW + (major.x * 0.16 + major.y * 0.6) * majorW;
+        // 进出场：所在方块离中心的距离（含随机），主网格到 uReach 即出，细网格与点阵要再晚 0.35
+        vec2 cell = floor(p / 10.0);
+        vec2 cc = (cell + 0.5) * 10.0;
+        float cr = max(abs(cc.x) / uHalf.x, abs(cc.y) / uHalf.y) + hash12(cell) * 0.45;
+        float lead = uReach - cr;
+        float inMajor = step(0.0, lead);
+        float inMinor = step(0.35, lead);
+        float flash = inMajor * exp(-max(lead, 0.0) * 9.0) * (1.0 - step(1e5, uReach));
+        float grid = minor.x * (1.0 - hole) * 0.05 * minorW * inMinor + (major.x * 0.16 + major.y * 0.6) * majorW * inMajor * (1.0 + flash * 3.0);
         // 辅助线：中轴的延长线，外加每 50 个单位一道的长线（只在主网格淡出后出现）
         float axis = max(lineAt(p.x, 0.0), lineAt(p.y, 0.0));
         vec2 g50 = notchedGrid(p, 50.0, 2.5, 1.2, 1.0);
-        float aux = axis * 0.08 + (g50.x * 0.06 + g50.y * 0.3) * smoothstep(1.6, 2.4, rr);
+        float aux = (axis * 0.08 + (g50.x * 0.06 + g50.y * 0.3) * smoothstep(1.6, 2.4, rr)) * inMajor;
         float fall = exp(-rr * 0.35);
         // 底纹：细密点阵，近处清楚、远处淡去
-        float dots = dotMatrix(p, 0.45) * 0.22 * exp(-rr * 0.6);
-        vec3 c = uBg + uLine * (grid + aux * fall + dots) * (0.55 + 0.45 * exp(-rr * rr * 0.5));
+        float dots = dotMatrix(p, 0.45) * 0.22 * exp(-rr * 0.6) * inMinor;
+        // 刚出现的方块：整块淡淡一层亮色
+        float fill = flash * 0.05 * exp(-rr * 0.5);
+        vec3 c = uBg + uLine * (grid + aux * fall + dots + fill) * (0.55 + 0.45 * exp(-rr * rr * 0.5));
         gl_FragColor = vec4(c, 1.0);
       }
     `,

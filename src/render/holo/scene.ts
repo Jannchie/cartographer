@@ -8,18 +8,35 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
-import { reliefKm, type World } from '../../gen/types'
+import { reliefKm, type AdminBorder, type World } from '../../gen/types'
 import { hashString } from '../../gen/rng'
 import { smoothstep } from '../../gen/util'
 import { latitudeOf } from '../../gen/climate'
+import { regionProjection } from '../../gen/earth/region'
 import { lonScale } from '../atlas/furniture'
 import { cjkFont, lang, placeName, worldTitle } from '../../i18n'
 import { holoFields, type HoloFields } from './fields'
 import { createFloorMaterial, createTerrainMaterial, FinishShader } from './materials'
+import { BOOT, BOOT_LEN, bootClock, bootFlicker, bootMaterial, bootTimes, FLOOR_FULL, neonFlicker, perimeterFrac, timesOf } from './boot'
 import { canvasTexture, disposeGroup, flatLabel, textMaterial, textTexture, type LabelStyle } from './labels'
-import { annotation, groundMark, segments } from './annotations'
+import { annotation, groundMark, revealAnnotation, segments } from './annotations'
 import { HoloHud } from './hud'
 import { holoPalette, type HoloPalette } from './palettes'
+
+/** 路网动画的样式：底层颜色、线宽与不透明度，白热色与冷却时长（年），焊头星芒的颜色与大小（场景单位） */
+export interface RoadStyle {
+  color: string
+  width: number
+  opacity: number
+  hot: string
+  hotWidth: number
+  cool: number
+  spark: string
+  sparkSize: number
+  /** 建成路段的微光：加色混合的宽线（线宽为底层的倍数）与它的不透明度，0 为不加 */
+  halo: number
+  haloWidth: number
+}
 
 export interface HoloOptions {
   /** 配色方案（见 palettes.ts） */
@@ -42,6 +59,9 @@ const MARGIN = 2.2
 const SECTION_PAD = 1.5
 /** 开场铺开的时长（秒） */
 const REVEAL_S = 1.8
+/** 第一次显示世界时，进入动画按几倍速播放（约 2 秒画完）；地板底纹铺满用多久（秒） */
+const BOOT_SPEED = 2.4
+const FLOOR_S = 1.4
 /** 图纸式引线标注的城市数（按重要度）与山峰数（按陆块面积取各自的最高峰） */
 const ANNO_CITIES = 8
 const ANNO_PEAKS = 3
@@ -107,6 +127,9 @@ export class HoloScene {
   camera: THREE.PerspectiveCamera
   controls: OrbitControls
   private composer: EffectComposer
+  private bloom: UnrealBloomPass
+  /** 固定的像素比（离线录制时超采样用）；null 时取屏幕的像素比 */
+  private fixedPr: number | null = null
   private finish: ShaderPass
   private opts: HoloOptions
   private pal: HoloPalette
@@ -128,6 +151,10 @@ export class HoloScene {
   private billboards: THREE.Group[] = []
   /** 浮在线框盒上方的标题立牌（属于 frameGroup） */
   private header: THREE.Mesh | null = null
+  /** 线的整体不透明度（逐帧模式下由 setIntro 给出），每帧重建的焊接层也用它 */
+  private linesAlpha = 1
+  /** 调用方提供的立牌画布（null 时画默认的标题与读数） */
+  private headerCanvas: HTMLCanvasElement | null = null
   /** 平铺地名与它们所在的格（垂直夸张变化时重算高度） */
   private placed: { obj: THREE.Object3D; cx: number; cy: number; dy: number }[] = []
 
@@ -153,6 +180,9 @@ export class HoloScene {
   private dirty = true
   /** 开场动画是否已播完（播完后再画一帧定格） */
   private revealDone = true
+  /** 第一次显示世界时进入动画的起点（时钟秒）；null 表示没有在播 */
+  private bootAt: number | null = null
+  private booted = false
   private pickRay = new THREE.Raycaster()
   active = true
 
@@ -166,7 +196,8 @@ export class HoloScene {
     this.renderer.toneMapping = THREE.NoToneMapping
     container.appendChild(this.renderer.domElement)
 
-    this.camera = new THREE.PerspectiveCamera(32, 1, 0.1, 3000)
+    // 近裁剪面不必太近（镜头最近也离台面 6 个单位），深度精度留给远处
+    this.camera = new THREE.PerspectiveCamera(32, 1, 0.5, 3000)
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.08
@@ -179,7 +210,8 @@ export class HoloScene {
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
     this.composer = new EffectComposer(this.renderer, rt)
     this.composer.addPass(new RenderPass(this.scene, this.camera))
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.12, 0.25, 1.0))
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.12, 0.25, 1.0)
+    this.composer.addPass(this.bloom)
     this.finish = new ShaderPass(FinishShader)
     this.composer.addPass(this.finish)
     this.composer.addPass(new OutputPass())
@@ -187,8 +219,9 @@ export class HoloScene {
     // 投影台地板与地图下方的台座
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(SX * 8, SX * 8).rotateX(-Math.PI / 2), this.floor.mat)
     floor.position.y = -0.3
-    this.skirt = new THREE.Mesh(new THREE.BoxGeometry(1, 0.28, 1), new THREE.MeshBasicMaterial({ color: 0x000000 }))
-    this.skirt.position.y = -0.15
+    // 台座顶面比海面（y = 0）低 0.12：贴得太近时远处分不清深度，台座会从海面里一块块透出来闪烁
+    this.skirt = new THREE.Mesh(new THREE.BoxGeometry(1, 0.18, 1), new THREE.MeshBasicMaterial({ color: 0x000000 }))
+    this.skirt.position.y = -0.21
     this.scene.add(floor, this.skirt, this.frameGroup, this.sectionGroup, this.lineGroup, this.labelGroup, this.annoGroup)
 
     this.hud = new HoloHud(container)
@@ -303,6 +336,11 @@ export class HoloScene {
     this.resetView()
     this.revealAt = this.clock.getElapsedTime()
     this.revealDone = false
+    // 第一次显示世界：图框、刻度与线框盒逐段画出，地板底纹逐块铺开（与录制视频片头同一套进入动画，加速播放）
+    if (!this.booted && this.active) {
+      this.booted = true
+      this.bootAt = this.revealAt
+    }
     this.dirty = true
   }
 
@@ -351,6 +389,270 @@ export class HoloScene {
     if (patch.labels !== undefined) this.labelGroup.visible = this.opts.labels
     if (patch.hud !== undefined) this.hud.visible = this.opts.hud
     this.dirty = true
+  }
+
+  // —— 路网动画（离线录制视频用） ——
+  private roads: {
+    /** 各小段的两端（场景坐标），按焊完的时间排序 */
+    pos: Float32Array
+    /** 各小段开始焊、焊完的时间（年） */
+    t0: Float32Array
+    t1: Float32Array
+    /** 最长一小段的焊接时长：按焊完时间找"正在焊"的小段时往后多看这么久 */
+    maxDur: number
+    base: LineSegments2
+    halo: LineSegments2
+    hot: LineSegments2 | null
+    style: RoadStyle
+  } | null = null
+
+  /**
+   * 路网：每条路一串格坐标、开通时间 t 与焊接时长 dur（年）。整条路从第一个点焊到最后一个点：
+   * 各小段按在路上的位置分到 [t, t + dur] 里的一段时间。焊完的小段（冷却之后）画在底层，按焊完的时间排序，
+   * setRoadTime 只画前若干段（实例数）；正在焊的与冷却中的小段每帧另外画
+   */
+  setRoadNetwork(roads: { pts: number[]; t: number; dur: number }[], style: RoadStyle) {
+    this.clearRoads()
+    if (!this.world) return
+    const lift = 0.06
+    const seg: { t0: number; t1: number; o: number }[] = []
+    const raw: number[] = []
+    for (const r of roads) {
+      const n = r.pts.length / 2
+      if (n < 2) continue
+      let total = 0
+      for (let i = 1; i < n; i++) total += Math.hypot(r.pts[2 * i] - r.pts[2 * i - 2], r.pts[2 * i + 1] - r.pts[2 * i - 1])
+      let acc = 0
+      for (let i = 1; i < n; i++) {
+        const ax = r.pts[2 * i - 2]
+        const ay = r.pts[2 * i - 1]
+        const bx = r.pts[2 * i]
+        const by = r.pts[2 * i + 1]
+        const l = Math.hypot(bx - ax, by - ay)
+        const f0 = total > 0 ? acc / total : 0
+        acc += l
+        const f1 = total > 0 ? acc / total : 1
+        seg.push({ t0: r.t + r.dur * f0, t1: r.t + r.dur * f1, o: raw.length })
+        raw.push(this.toX(ax), this.heightAt(ax, ay) + lift, this.toZ(ay), this.toX(bx), this.heightAt(bx, by) + lift, this.toZ(by))
+      }
+    }
+    seg.sort((p, q) => p.t1 - q.t1)
+    const pos = new Float32Array(seg.length * 6)
+    const t0 = new Float32Array(seg.length)
+    const t1 = new Float32Array(seg.length)
+    let maxDur = 0
+    seg.forEach((s, k) => {
+      for (let j = 0; j < 6; j++) pos[k * 6 + j] = raw[s.o + j]
+      t0[k] = s.t0
+      t1[k] = s.t1
+      maxDur = Math.max(maxDur, s.t1 - s.t0)
+    })
+    // 底层用普通混合：密集处不会叠加成一片白
+    const base = segments(pos, this.lineMat(linear(style.color), style.width, style.opacity, true, false))
+    ;(base.geometry as LineSegmentsGeometry).instanceCount = 0
+    this.lineGroup.add(base)
+    // 微光与底层共用几何：底层画到哪段，微光就跟到哪段
+    const halo = new LineSegments2(base.geometry as LineSegmentsGeometry, this.lineMat(linear(style.color), style.width * style.haloWidth, style.halo))
+    halo.frustumCulled = false
+    this.lineGroup.add(halo)
+    this.roads = { pos, t0, t1, maxDur, base, halo, hot: null, style }
+    this.dirty = true
+  }
+
+  /**
+   * 路网显示到 t 年。焊完不到 cool 年的小段从白热冷却到路网的颜色；正在焊的小段只画到焊头，
+   * 焊头加一个亮点（十字星芒）
+   */
+  setRoadTime(t: number) {
+    const r = this.roads
+    if (!r) return
+    const st = r.style
+    const upTo = (v: number) => {
+      let lo = 0
+      let hi = r.t1.length
+      while (lo < hi) {
+        const m = (lo + hi) >> 1
+        if (r.t1[m] <= v) lo = m + 1
+        else hi = m
+      }
+      return lo
+    }
+    const a = upTo(t - st.cool)
+    ;(r.base.geometry as LineSegmentsGeometry).instanceCount = a
+    if (r.hot) {
+      this.lineGroup.remove(r.hot)
+      r.hot.geometry.dispose()
+      ;(r.hot.material as LineMaterial).dispose()
+      r.hot = null
+    }
+    const b = upTo(t + r.maxDur)
+    const pos: number[] = []
+    const col: number[] = []
+    const base = linear(st.color)
+    const hot = linear(st.hot)
+    const spark = linear(st.spark)
+    const push = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, c0: THREE.Color, c1: THREE.Color) => {
+      pos.push(x0, y0, z0, x1, y1, z1)
+      col.push(c0.r, c0.g, c0.b, c1.r, c1.g, c1.b)
+    }
+    const tmp = new THREE.Color()
+    const P = r.pos
+    for (let i = a; i < b; i++) {
+      const s0 = r.t0[i]
+      const s1 = r.t1[i]
+      if (s0 > t) continue
+      const o = i * 6
+      if (s1 > t) {
+        // 正在焊：画到焊头，焊头一个星芒
+        const f = (t - s0) / Math.max(1e-6, s1 - s0)
+        const hx = P[o] + (P[o + 3] - P[o]) * f
+        const hy = P[o + 1] + (P[o + 4] - P[o + 1]) * f
+        const hz = P[o + 2] + (P[o + 5] - P[o + 2]) * f
+        push(P[o], P[o + 1], P[o + 2], hx, hy, hz, hot, spark)
+        const k = st.sparkSize
+        push(hx - k, hy, hz, hx + k, hy, hz, spark, spark)
+        push(hx, hy, hz - k, hx, hy, hz + k, spark, spark)
+        push(hx, hy - k * 0.2, hz, hx, hy + k * 1.2, hz, spark, spark)
+        continue
+      }
+      // 冷却中：白热 → 路网的颜色
+      const age = (t - s1) / st.cool
+      tmp.copy(hot).lerp(base, Math.min(1, age ** 0.7))
+      push(P[o], P[o + 1], P[o + 2], P[o + 3], P[o + 4], P[o + 5], tmp, tmp)
+    }
+    if (pos.length) {
+      // 正在焊与冷却中的小段跟着线的整体不透明度（片头淡入、片尾熄灭）
+      r.hot = segments(pos, this.lineMat(null, st.hotWidth, this.linesAlpha, true, true), col)
+      this.lineGroup.add(r.hot)
+    }
+    this.dirty = true
+  }
+
+  /**
+   * 片头（逐帧模式）：unfold 为展开圆的半径（场景单位，null 表示已展开完），圆心 (cx, cy) 为格坐标；
+   * lines 为海岸、界线、路网与地名的不透明度（0~1）；boot 为片头时钟（秒），图框、刻度、立面与辅助线按它逐段画出；
+   * floor 为地板底纹铺到的方形距离（以图框为 1，逐块亮出或收回）；neon 为国界的通电进度（0~1，不给时随 lines）；
+   * annotate 为引线标注的出现进度（0~1，逐条先升起竖线、再横向刷开文字；不给时随 lines 淡入）
+   */
+  setIntro(p: { unfold: number | null; cx: number; cy: number; lines: number; boot: number; floor?: number; neon?: number; annotate?: number }) {
+    // 地板底纹的进出场：铺到的方形距离（以图框为 1），不给时铺满
+    this.floor.uniforms.uReach.value = p.floor ?? 1e6
+    const u = this.terrain.uniforms
+    u.uUnfold.value = p.unfold ?? 1e6
+    u.uCenter.value.set(this.toX(p.cx), this.toZ(p.cy))
+    // 台座是地图下方的黑盒：展开完之前不露出来
+    this.skirt.visible = p.unfold === null
+    const neon = neonFlicker(p.neon ?? p.lines)
+    const fade = (g: THREE.Object3D, a: number) =>
+      g.traverse((c) => {
+        const m = (c as THREE.Mesh).material
+        if (m instanceof LineMaterial) m.opacity = (m.userData.neon ? neon : a) * ((m.userData.baseOpacity as number | undefined) ?? 1)
+        else if (m instanceof THREE.MeshBasicMaterial && m.map) m.opacity = a
+      })
+    fade(this.lineGroup, p.lines)
+    fade(this.labelGroup, p.lines)
+    // 引线标注：给了 annotate 时按它逐条画出（竖线先升起，文字再横向刷开），不随线淡入
+    fade(this.annoGroup, p.annotate === undefined ? p.lines : 1)
+    const a = p.annotate ?? 1
+    const n = this.billboards.length
+    this.billboards.forEach((g, i) => revealAnnotation(g, Math.min(1, Math.max(0, (a - (i / Math.max(1, n)) * 0.4) / 0.6))))
+    this.applyBoot(p.boot)
+    this.linesAlpha = p.lines
+    this.annoGroup.visible = (p.annotate ?? p.lines) > 0.01
+    this.dirty = true
+  }
+
+  /** 进入动画的时钟（秒）：图框与立面的线按它逐段画出，上面的文字（刻度读数、高程读数、立牌）到点闪烁着亮起 */
+  private applyBoot(clock: number) {
+    bootClock.value = clock
+    for (const g of [this.frameGroup, this.sectionGroup])
+      g.traverse((c) => {
+        const t = c.userData.boot as number | undefined
+        const m = (c as THREE.Mesh).material
+        if (t !== undefined && m instanceof THREE.MeshBasicMaterial) m.opacity = bootFlicker(clock, t)
+      })
+  }
+
+  /** 泛光强度（默认 0.12）与扩散半径（默认 0.25，越小越贴着亮处，画面越干净） */
+  setBloom(strength: number, radius?: number) {
+    this.bloom.strength = strength
+    if (radius !== undefined) this.bloom.radius = radius
+    this.dirty = true
+  }
+
+  /** 固定像素比（离线录制时设 2：画布按两倍分辨率画，浏览器缩回原尺寸，相当于超采样，海面的点阵不再闪） */
+  setPixelRatio(pr: number | null) {
+    this.fixedPr = pr
+    this.resize()
+  }
+
+  private clearRoads() {
+    const r = this.roads
+    if (!r) return
+    this.lineGroup.remove(r.halo)
+    ;(r.halo.material as LineMaterial).dispose()
+    for (const l of [r.base, r.hot]) {
+      if (!l) continue
+      this.lineGroup.remove(l)
+      l.geometry.dispose()
+      ;(l.material as LineMaterial).dispose()
+    }
+    this.roads = null
+  }
+
+  /** 逐帧模式（离线录制）：停掉自动渲染循环，开场动画直接播完；之后由 renderFrame 手动出帧 */
+  setManual(on: boolean) {
+    this.active = !on
+    if (on) {
+      // 开场动画交给调用方（setIntro），自带的铺开动画直接算播完，免得第一帧把线的不透明度改回去
+      this.controls.enableDamping = false
+      this.bootAt = null
+      this.booted = true
+      this.revealDone = true
+      this.terrain.uniforms.uReveal.value = 1
+      this.annoGroup.visible = true
+    }
+  }
+
+  /** 镜头：看向 target（世界坐标），从 position 看 */
+  setCamera(position: [number, number, number], target: [number, number, number]) {
+    this.camera.position.set(...position)
+    this.controls.target.set(...target)
+    this.camera.lookAt(this.controls.target)
+    this.dirty = true
+  }
+
+  /**
+   * 立牌改用调用方的画布（离线录制时画随时间变化的图表）；画布内容变了之后调 refreshHeader。null 恢复默认立牌
+   */
+  setHeaderCanvas(cv: HTMLCanvasElement | null) {
+    this.headerCanvas = cv
+    if (this.world) this.buildHeader()
+    this.dirty = true
+  }
+
+  refreshHeader() {
+    const map = (this.header?.material as THREE.MeshBasicMaterial | undefined)?.map
+    if (map) map.needsUpdate = true
+    this.dirty = true
+  }
+
+  /** 地图格坐标 → 画布上的像素位置（CSS 像素；镜头背后的点 behind 为 true） */
+  cellToScreen(cx: number, cy: number): { x: number; y: number; behind: boolean } {
+    this.camera.updateMatrixWorld()
+    const v = new THREE.Vector3(...this.cellToScene(cx, cy)).project(this.camera)
+    const el = this.renderer.domElement
+    return { x: ((v.x + 1) / 2) * el.clientWidth, y: ((1 - v.y) / 2) * el.clientHeight, behind: v.z > 1 }
+  }
+
+  /** 地图格坐标 → 场景坐标（落在台面上） */
+  cellToScene(cx: number, cy: number): [number, number, number] {
+    return [this.toX(cx), this.heightAt(cx, cy), this.toZ(cy)]
+  }
+
+  /** 画一帧（逐帧模式用） */
+  renderFrame() {
+    this.render()
   }
 
   resetView() {
@@ -492,6 +794,11 @@ export class HoloScene {
 
   private latLon(cx: number, cy: number) {
     const w = this.world!
+    const proj = regionProjection(w.params)
+    if (proj) {
+      const [lon, lat] = proj.toLonLat(cx, cy)
+      return { lat, lon }
+    }
     const lat = latitudeOf(w.params, cy, w.H)
     const lon = (cx - w.W / 2) * lonScale(w)
     return { lat, lon }
@@ -555,14 +862,14 @@ export class HoloScene {
   }
 
   // —— 构建 ——
-  private lineMat(color: THREE.Color | null, width: number, opacity = 1, depthTest = true) {
+  private lineMat(color: THREE.Color | null, width: number, opacity = 1, depthTest = true, additive = true) {
     const m = new LineMaterial({
       vertexColors: !color,
       transparent: true,
       opacity,
       depthTest,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
       worldUnits: false,
     })
     if (color) m.color.copy(color)
@@ -582,15 +889,18 @@ export class HoloScene {
     })
     return out
   }
-  /** 一个矩形的四边：写进 out（不画时传 null），并向两端无限延伸（延长线写进 ext / extC） */
-  private rect(x: number, z: number, y: number, k: number, out: number[] | null, ext: number[], extC: number[]) {
+  /**
+   * 一个矩形的四边：写进 out（不画时传 null），并向两端无限延伸（延长线写进 ext / extC）。
+   * extT 收延长线的进入时刻：at 秒起从角上向外射出
+   */
+  private rect(x: number, z: number, y: number, k: number, out: number[] | null, ext: number[], extC: number[], extT: number[], at: number) {
     const c = [[-x, y, -z], [x, y, -z], [x, y, z], [-x, y, z]]
     const grid = linear(this.pal.grid)
     for (let i = 0; i < 4; i++) {
       const a = c[i]
       const b = c[(i + 1) % 4]
       out?.push(a[0], a[1], a[2], b[0], b[1], b[2])
-      this.extendEdge(a, b, grid, k, ext, extC)
+      this.extendEdge(a, b, grid, k, ext, extC, extT, at)
     }
   }
 
@@ -606,14 +916,17 @@ export class HoloScene {
     const hz = this.SZ / 2 + MARGIN
     const y = 0.01
     // 盒子（图框、地图台座、顶上的投影框）的每条边都向两端延伸
+    // 进入动画（片头时钟，秒）：角标先锁定，外框从四角同时描出，刻度随描线依次弹出，
+    // 投影线自四角升起、顶上的大框接着描出；每条边画完后，延长线从端点向远处射出
     const ext: number[] = []
     const extC: number[] = []
+    const extT: number[] = []
     const bright: number[] = []
-    this.rect(hx, hz, y, 1.3, bright, ext, extC)
+    this.rect(hx, hz, y, 1.3, bright, ext, extC, extT, BOOT.frame[1])
     const dim: number[] = []
-    this.rect(SX / 2, this.SZ / 2, y, 0.55, dim, ext, extC)
-    this.rect(hx + 1.4, hz + 1.4, y, 0.55, dim, ext, extC)
-    this.rect(SX / 2, this.SZ / 2, -0.29, 0.45, null, ext, extC)
+    this.rect(hx + 1.4, hz + 1.4, y, 0.55, dim, ext, extC, extT, BOOT.outer[1])
+    this.rect(SX / 2, this.SZ / 2, y, 0.55, dim, ext, extC, extT, BOOT.inner[1])
+    this.rect(SX / 2, this.SZ / 2, -0.29, 0.45, null, ext, extC, extT, BOOT.inner[1] + 0.1)
     // 刻度：每 2 单位一短刻，每 10 单位一长刻
     for (let x = -Math.floor(hx / 2) * 2; x <= hx; x += 2) {
       const L = x % 10 === 0 ? 1.0 : 0.45
@@ -639,12 +952,12 @@ export class HoloScene {
     for (const sx of [-1, 1])
       for (const sz of [-1, 1]) proj.push(sx * hx, y, sz * hz, sx * hx * k, Y, sz * hz * k)
     proj.push(-hx * 0.5, y, -hz, -hx * 0.5 * k, Y, -hz * k, hx * 0.5, y, -hz, hx * 0.5 * k, Y, -hz * k)
-    this.rect(hx * k, hz * k, Y, 0.35, proj, ext, extC)
+    this.rect(hx * k, hz * k, Y, 0.35, proj, ext, extC, extT, BOOT.crown[1])
     // 台座的四条竖棱与投影线也向两端延伸
     for (const sx of [-1, 1])
       for (const sz of [-1, 1]) {
-        this.extendEdge([(sx * SX) / 2, -0.29, (sz * this.SZ) / 2], [(sx * SX) / 2, y, (sz * this.SZ) / 2], grid, 0.45, ext, extC)
-        this.extendEdge([sx * hx, y, sz * hz], [sx * hx * k, Y, sz * hz * k], grid, 0.35, ext, extC)
+        this.extendEdge([(sx * SX) / 2, -0.29, (sz * this.SZ) / 2], [(sx * SX) / 2, y, (sz * this.SZ) / 2], grid, 0.45, ext, extC, extT, BOOT.inner[1])
+        this.extendEdge([sx * hx, y, sz * hz], [sx * hx * k, Y, sz * hz * k], grid, 0.35, ext, extC, extT, BOOT.rise[1])
       }
 
     // 中线（虚线效果用短线段串）
@@ -652,13 +965,32 @@ export class HoloScene {
     for (let x = -hx; x < hx; x += 1.2) mid.push(x, y, 0, Math.min(hx, x + 0.5), y, 0)
     for (let z = -hz; z < hz; z += 1.2) mid.push(0, y, z, 0, y, Math.min(hz, z + 0.5))
 
+    const [f0, f1] = BOOT.frame
+    const brightT = timesOf(bright, (a, _b, i) => {
+      if (i < 4) return [f0, f1]
+      // 刻度：描线经过时弹出
+      const t = f0 + (f1 - f0) * perimeterFrac(a[0], a[2], hx, hz)
+      return [t, t + 0.12]
+    })
+    const dimT = timesOf(dim, (_a, _b, i) => [...(i < 4 ? BOOT.outer : BOOT.inner)] as [number, number])
+    const cornerT = timesOf(corner, (_a, _b, i) => {
+      const t = BOOT.corner[0] + Math.floor(i / 2) * 0.07
+      return [t, t + BOOT.corner[1] - BOOT.corner[0]]
+    })
+    const projT = timesOf(proj, (_a, _b, i) => (i < 6 ? [BOOT.rise[0] + i * 0.05, BOOT.rise[1] + i * 0.05] : [...BOOT.crown]))
+    // 中线：虚线从中心向两头依次点亮
+    const midT = timesOf(mid, (a) => {
+      const r = a[2] === 0 ? Math.abs(a[0]) / hx : Math.abs(a[2]) / hz
+      const t = BOOT.mid[0] + (BOOT.mid[1] - BOOT.mid[0]) * r
+      return [t, t + 0.06]
+    })
     this.frameGroup.add(
-      segments(bright, this.lineMat(grid.clone().multiplyScalar(1.3), 1.4)),
-      segments(dim, this.lineMat(grid.clone().multiplyScalar(0.55), 1)),
-      segments(corner, this.lineMat(linear(p.text).multiplyScalar(1.6), 2.2)),
-      segments(proj, this.lineMat(grid.clone().multiplyScalar(0.35), 1)),
-      segments(mid, this.lineMat(grid.clone().multiplyScalar(0.3), 1, 1, false)),
-      segments(ext, this.lineMat(null, 1), extC),
+      bootTimes(segments(bright, bootMaterial(this.lineMat(grid.clone().multiplyScalar(1.3), 1.4))), brightT),
+      bootTimes(segments(dim, bootMaterial(this.lineMat(grid.clone().multiplyScalar(0.55), 1), true)), dimT),
+      bootTimes(segments(corner, bootMaterial(this.lineMat(linear(p.text).multiplyScalar(1.6), 2.2), true)), cornerT),
+      bootTimes(segments(proj, bootMaterial(this.lineMat(grid.clone().multiplyScalar(0.35), 1), true)), projT),
+      bootTimes(segments(mid, bootMaterial(this.lineMat(grid.clone().multiplyScalar(0.3), 1, 1, false))), midT),
+      bootTimes(segments(ext, bootMaterial(this.lineMat(null, 1), true), extC), extT),
     )
     this.header = null
     if (this.world) {
@@ -693,9 +1025,10 @@ export class HoloScene {
     const outline: number[] = []
     const ext: number[] = []
     const extC: number[] = []
+    const extT: number[] = []
     const edge = (a: number[], b: number[], k: number) => {
       frame.push(a[0], a[1], a[2], b[0], b[1], b[2])
-      this.extendEdge(a, b, grid, k, ext, extC)
+      this.extendEdge(a, b, grid, k, ext, extC, extT, BOOT.pillar[1])
     }
     // 盒子四角的竖棱（上下边与台面外框、顶面外框共用）
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) edge([sx * X0, 0, sz * Z0], [sx * X0, top, sz * Z0], 0.4)
@@ -711,7 +1044,7 @@ export class HoloScene {
       for (let i = 0; i + 1 < prof.length; i++) outline.push(...pt(toU(i), prof[i] * kmH + 0.02), ...pt(toU(i + 1), prof[i + 1] * kmH + 0.02))
     }
     // 顶面：外框四边
-    this.rect(X0, Z0, top, 0.4, frame, ext, extC)
+    this.rect(X0, Z0, top, 0.4, frame, ext, extC, extT, BOOT.lid[1])
     // 顶面网格：每 10 个单位，交点处镂空（空当半宽 GAP），正中小十字（臂长 ARM）
     const GAP = 1.1
     const ARM = 0.5
@@ -731,12 +1064,36 @@ export class HoloScene {
     for (const x of xs) run(zs, -Z0, Z0, (a, b) => roof.push(x, top, a, x, top, b))
     for (const z of zs) run(xs, -X0, X0, (a, b) => roof.push(a, top, z, b, top, z))
     for (const x of xs) for (const z of zs) roof.push(x - ARM, top, z, x + ARM, top, z, x, top, z - ARM, x, top, z + ARM)
+    // 进入动画：四角竖棱升起，顶面外框描出；立面的竖格线自一端扫过、高程线逐级拉开；
+    // 顶面网格从中心向外铺开；最后地形的侧视轮廓沿立面一路描出
+    const frameT = timesOf(frame, (_a, _b, i) => (i < 4 ? [BOOT.pillar[0] + i * 0.06, BOOT.pillar[1] + i * 0.06] : [...BOOT.lid]))
+    const levelsT = timesOf(levels, (a, b) => {
+      if (Math.abs(a[1] - b[1]) < 1e-6) {
+        const t = BOOT.levels[0] + (a[1] / Math.max(1e-6, this.opts.sectionHeight)) * 0.5
+        return [t, t + 0.7]
+      }
+      const west = Math.abs(a[0] + X0) < 1e-3
+      const r = west ? (a[2] + Z0) / (2 * Z0) : (a[0] + X0) / (2 * X0)
+      const t = BOOT.facade[0] + (BOOT.facade[1] - BOOT.facade[0]) * r
+      return [t, t + 0.3]
+    })
+    const R = Math.hypot(X0, Z0)
+    const roofT = timesOf(roof, (a, b) => {
+      const t = BOOT.roof[0] + (BOOT.roof[1] - BOOT.roof[0]) * (Math.hypot((a[0] + b[0]) / 2, (a[2] + b[2]) / 2) / R)
+      return [t, t + 0.25]
+    })
+    const outlineT = timesOf(outline, (_a, _b, i, n) => {
+      const half = Math.max(1, n / 2)
+      const d = BOOT.outline[1] - BOOT.outline[0]
+      const t = BOOT.outline[0] + d * ((i % half) / half)
+      return [t, t + d / half + 0.02]
+    })
     this.sectionGroup.add(
-      segments(frame, this.lineMat(grid.clone().multiplyScalar(0.6), 1)),
-      segments(levels, this.lineMat(grid.clone().multiplyScalar(0.18), 1)),
-      segments(roof, this.lineMat(grid.clone().multiplyScalar(0.3), 1)),
-      segments(outline, this.lineMat(land.clone().multiplyScalar(0.9), 1.3)),
-      segments(ext, this.lineMat(null, 1), extC),
+      bootTimes(segments(frame, bootMaterial(this.lineMat(grid.clone().multiplyScalar(0.6), 1), true)), frameT),
+      bootTimes(segments(levels, bootMaterial(this.lineMat(grid.clone().multiplyScalar(0.18), 1), true)), levelsT),
+      bootTimes(segments(roof, bootMaterial(this.lineMat(grid.clone().multiplyScalar(0.3), 1))), roofT),
+      bootTimes(segments(outline, bootMaterial(this.lineMat(land.clone().multiplyScalar(0.9), 1.3))), outlineT),
+      bootTimes(segments(ext, bootMaterial(this.lineMat(null, 1), true), extC), extT),
     )
     // 高程读数：立在西面立面的北端外侧，正反两面可见；立面矮时隔几公里标一个，免得叠在一起
     const every = kmH > 0 ? Math.ceil(0.5 / kmH) : Infinity
@@ -746,15 +1103,16 @@ export class HoloScene {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(h * aspect, h).translate((-h * aspect) / 2, 0, 0), textMaterial(tex, 0.7, { side: THREE.DoubleSide }))
       m.rotation.y = Math.PI / 2
       m.position.set(-X0, km === 0 ? 0.25 : km * kmH, -Z0 - 0.4)
+      m.userData.boot = BOOT.levels[0] + 0.4 + km * 0.08
       this.sectionGroup.add(m)
     }
   }
 
   /**
    * 一条边向两端的延长线：从端点起先较亮的一段，再淡出到很远处（顶点色线性插值成渐隐）。
-   * 边本身不画（由各自的框线画），只写延长部分
+   * 边本身不画（由各自的框线画），只写延长部分。进入动画：at 秒起先射出较亮的一段，再一路拖向远处
    */
-  private extendEdge(a: number[], b: number[], color: THREE.Color, k: number, out: number[], outC: number[]) {
+  private extendEdge(a: number[], b: number[], color: THREE.Color, k: number, out: number[], outC: number[], outT: number[], at: number) {
     const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
     const L = Math.hypot(d[0], d[1], d[2]) || 1
     const u = d.map((v) => v / L)
@@ -767,6 +1125,7 @@ export class HoloScene {
     for (const [p, s] of [[b, 1], [a, -1]] as [number[], number][]) {
       seg(p, s, 0, NEAR, k * 0.7, k * 0.3)
       seg(p, s, NEAR, FAR, k * 0.3, 0)
+      outT.push(at, at + 0.3, at + 0.3, at + 1.3)
     }
   }
 
@@ -774,22 +1133,25 @@ export class HoloScene {
   private rulerLabels(hx: number, hz: number) {
     const w = this.world!
     const color = this.pal.grid
-    const put = (text: string, x: number, z: number) => {
+    // 读数在外框描线经过它所在的刻度时亮起
+    const [f0, f1] = BOOT.frame
+    const put = (text: string, x: number, z: number, fx: number, fz: number) => {
       const { mesh } = flatLabel(text, 'city', color, 0.34)
       mesh.position.set(x, 0.02, z)
+      mesh.userData.boot = f0 + (f1 - f0) * perimeterFrac(fx, fz, hx, hz) + 0.08
       this.frameGroup.add(mesh)
     }
     for (let x = -Math.floor(hx / 10) * 10; x <= hx; x += 10) {
       const { lon } = this.latLon((x / SX + 0.5) * (w.W - 1), 0)
       const t = fmtDeg(lon, 0, 'E', 'W')
-      put(t, x, hz + 1.9)
-      put(t, x, -hz - 1.9)
+      put(t, x, hz + 1.9, x, hz)
+      put(t, x, -hz - 1.9, x, -hz)
     }
     for (let z = -Math.floor(hz / 10) * 10; z <= hz; z += 10) {
       const { lat } = this.latLon(0, (z / this.SZ + 0.5) * (w.H - 1))
       const t = fmtDeg(lat, 0, 'N', 'S')
-      put(t, -hx - 2.4, z)
-      put(t, hx + 2.4, z)
+      put(t, -hx - 2.4, z, -hx, z)
+      put(t, hx + 2.4, z, hx, z)
     }
   }
 
@@ -798,6 +1160,15 @@ export class HoloScene {
     if (this.header) {
       disposeGroup(this.header)
       this.frameGroup.remove(this.header)
+    }
+    const width = SX + MARGIN * 2
+    if (this.headerCanvas) {
+      const c = this.headerCanvas
+      this.header = new THREE.Mesh(new THREE.PlaneGeometry(width, (width * c.height) / c.width), textMaterial(canvasTexture(c), 0.85, { side: THREE.DoubleSide }))
+      this.header.userData.boot = BOOT.header
+      this.frameGroup.add(this.header)
+      this.placeHeader()
+      return
     }
     const w = this.world!
     const p = this.pal
@@ -833,8 +1204,8 @@ export class HoloScene {
     label(CW - 40, 'SEED', w.params.seed.toUpperCase())
     label(CW - 420, 'SCALE', `${Math.round(w.W * w.kmPerCell).toLocaleString('en-US')} KM`)
     g.globalAlpha = 1
-    const width = SX + MARGIN * 2
     this.header = new THREE.Mesh(new THREE.PlaneGeometry(width, (width * CH) / CW), textMaterial(canvasTexture(cv), 0.75, { side: THREE.DoubleSide }))
+    this.header.userData.boot = BOOT.header
     this.frameGroup.add(this.header)
     this.placeHeader()
   }
@@ -843,7 +1214,12 @@ export class HoloScene {
     const m = this.header
     if (!m) return
     const height = (m.geometry as THREE.PlaneGeometry).parameters.height
-    m.position.set(0, this.sectionTop() + height / 2 + 0.6, -(this.SZ / 2 + MARGIN) - 1.4)
+    // 调用方的立牌（图表）以底边为轴向后仰 25°，从常用的俯视角度看过去不至于压得太扁
+    const lean = this.headerCanvas ? (25 * Math.PI) / 180 : 0
+    const y0 = this.sectionTop() + 0.6
+    const z0 = -(this.SZ / 2 + MARGIN) - 1.4
+    m.rotation.x = -lean
+    m.position.set(0, y0 + (height / 2) * Math.cos(lean), z0 - (height / 2) * Math.sin(lean))
   }
 
   /**
@@ -915,6 +1291,44 @@ export class HoloScene {
     this.lineGroup.add(inner, outer)
     this.coastLines = { inner, outer, segMass }
     this.recolorLines()
+    this.buildBorders()
+  }
+
+  /** 行政界线（区域图）：贴着地形画，国界用强调色，省界、地级界依次更暗；海上断续线描出每段的轮廓 */
+  private buildBorders() {
+    const a = this.world?.admin
+    if (!a) return
+    const p = this.pal
+    const lift = 0.05
+    const styles: [AdminBorder['kind'], THREE.Color, number, number][] = [
+      ['prefecture', linear(p.land).multiplyScalar(0.45), 0.7, 0.45],
+      ['province', linear(p.land).multiplyScalar(0.9), 1.1, 0.8],
+      ['national', linear(p.accent).multiplyScalar(1.5), 1.8, 1],
+    ]
+    const push = (pos: number[], pts: number[], closed: boolean) => {
+      const n = pts.length / 2
+      for (let i = 0; i + (closed ? 0 : 1) < n; i++) {
+        const j = (i + 1) % n
+        pos.push(this.toX(pts[2 * i]), this.heightAt(pts[2 * i], pts[2 * i + 1]) + lift, this.toZ(pts[2 * i + 1]))
+        pos.push(this.toX(pts[2 * j]), this.heightAt(pts[2 * j], pts[2 * j + 1]) + lift, this.toZ(pts[2 * j + 1]))
+      }
+    }
+    // 国界与断续线标为霓虹：片头片尾按 setIntro 的 neon 进度像灯管通电一样闪着亮起、熄灭
+    for (const [kind, color, width, opacity] of styles) {
+      const pos: number[] = []
+      for (const b of a.borders) if (b.kind === kind) push(pos, b.pts, false)
+      if (!pos.length) continue
+      const m = this.lineMat(color, width, opacity)
+      m.userData.neon = kind === 'national'
+      this.lineGroup.add(segments(pos, m))
+    }
+    const claims: number[] = []
+    for (const r of a.claims) push(claims, r, true)
+    if (claims.length) {
+      const m = this.lineMat(linear(p.accent).multiplyScalar(1.5), 1.6)
+      m.userData.neon = true
+      this.lineGroup.add(segments(claims, m))
+    }
   }
 
   /** 按锁定的陆块给海岸线上色 */
@@ -1018,10 +1432,11 @@ export class HoloScene {
   private annotatedCities() {
     const w = this.world
     if (!w) return []
-    return w.labels
-      .filter((l) => l.kind === 'capital' || l.kind === 'city')
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, ANNO_CITIES)
+    const cities = w.labels.filter((l) => l.kind === 'capital' || l.kind === 'city')
+    // 区域图指定了要标的城市（如中国的首都与直辖市）就只标这些
+    const chosen = cities.filter((l) => l.anno)
+    if (chosen.length) return chosen
+    return cities.sort((a, b) => b.weight - a.weight).slice(0, ANNO_CITIES)
   }
 
   /**
@@ -1048,32 +1463,52 @@ export class HoloScene {
       const { lat, lon } = this.latLon(cx, cy)
       return `${fmtDeg(lat, 1, 'N', 'S')} ${fmtDeg(lon, 1, 'E', 'W')}`
     }
-    // 引线高度错开三档，减少相邻标注的文字互相压住
-    this.annotatedCities().forEach((l, i) => {
+    // 引线高度错开三档，减少相邻标注的文字互相压住；指定了城市时（如北京、天津这样挨着的直辖市）错得更开
+    const cities = this.annotatedCities()
+    const chosen = cities.some((l) => l.anno)
+    cities.forEach((l, i) => {
       const x = this.toX(l.x)
       const z = this.toZ(l.y)
       const y = this.heightAt(l.x, l.y) + 0.03
       groundMark(x, y, z, ground)
       const e = w.elevation[Math.round(l.y) * w.W + Math.round(l.x)]
       const sub = `${fmtLL(l.x, l.y)} · ${Math.max(0, Math.round(e * 1000))} M`
-      place(annotation({ title: placeName(l), sub, lift: 4.5 + (i % 3) * 2.6 }, p.text, p.grid, leader), x, y, z)
+      place(annotation({ title: placeName(l), sub, lift: chosen ? 4.5 + (i % 2) * 5 : 4.5 + (i % 3) * 2.6 }, p.text, p.grid, leader), x, y, z)
     })
     const peaks = f.masses
       .map((m, i) => ({ m, i }))
       .filter(({ m }) => m.peak > 0.6)
       .sort((a, b) => b.m.cells - a.m.cells)
       .slice(0, ANNO_PEAKS)
-    for (const { m } of peaks) {
-      const x = this.toX(m.peakX)
-      const z = this.toZ(m.peakY)
-      const top = this.heightAt(m.peakX, m.peakY)
-      const range = this.nearestLabel(m.peakX, m.peakY, 'range')
-      const title = `${Math.round(m.peak * 1000).toLocaleString('en-US')} M`
-      const sub = `${range ? placeName(range) + ' · ' : ''}${fmtLL(m.peakX, m.peakY)}`
+    for (const { m, i } of peaks) {
+      // 有实测山峰（区域图）就标这块陆地上最高的实测山峰：名字与实测高程
+      const real = this.highestPeak(i)
+      const px = real ? real.x : m.peakX
+      const py = real ? real.y : m.peakY
+      const x = this.toX(px)
+      const z = this.toZ(py)
+      const top = this.heightAt(px, py)
+      const metres = real ? real.elev * 1000 : Math.round(m.peak * 1000)
+      const title = `${metres.toLocaleString('en-US', { maximumFractionDigits: 2 })} M`
+      const named = real ?? this.nearestLabel(px, py, 'range')
+      const sub = `${named ? placeName(named) + ' · ' : ''}${fmtLL(px, py)}`
       place(annotation({ title, sub, lift: 3.5, dimension: top }, p.grid, p.text, dim), x, top, z)
     }
     this.annoGroup.add(segments(ground, marks))
     this.faceCamera()
+  }
+
+  /** 某块陆地上最高的实测山峰（没有实测山峰时为 null） */
+  private highestPeak(mass: number) {
+    const w = this.world!
+    const f = this.f!
+    let best: NonNullable<World['peaks']>[number] | null = null
+    for (const pk of w.peaks ?? []) {
+      const i = Math.round(pk.y) * f.W + Math.round(pk.x)
+      if (f.near[i] !== mass) continue
+      if (!best || pk.elev > best.elev) best = pk
+    }
+    return best
   }
 
   /** 离格点最近的某类地名（在一定范围内） */
@@ -1113,7 +1548,7 @@ export class HoloScene {
     const w = this.container.clientWidth
     const h = this.container.clientHeight
     if (!w || !h) return
-    const pr = Math.min(window.devicePixelRatio || 1, 2)
+    const pr = this.fixedPr ?? Math.min(window.devicePixelRatio || 1, 2)
     this.renderer.setPixelRatio(pr)
     this.renderer.setSize(w, h, false)
     this.renderer.domElement.style.width = '100%'
@@ -1144,7 +1579,7 @@ export class HoloScene {
       } else this.hover(-1)
     }
     this.hud.tick()
-    if (!this.revealDone) this.dirty = true
+    if (!this.revealDone || this.bootAt !== null) this.dirty = true
     if (this.dirty) {
       this.dirty = false
       this.render()
@@ -1152,17 +1587,29 @@ export class HoloScene {
   }
 
   private render() {
-    // 开场：地形从后往前铺开，线与地名随后淡入
+    if (this.bootAt !== null) {
+      const t = this.clock.getElapsedTime() - this.bootAt
+      this.applyBoot(t * BOOT_SPEED)
+      this.floor.uniforms.uReach.value = smoothstep(0, 1, t / FLOOR_S) * FLOOR_FULL
+      if (t * BOOT_SPEED > BOOT_LEN + 0.5 && t > FLOOR_S) {
+        this.applyBoot(1e6)
+        this.floor.uniforms.uReach.value = 1e6
+        this.bootAt = null
+      }
+    }
+    // 开场：地形从后往前铺开，线与地名随后淡入（进入动画在播时，图框与线框盒交给它）
     if (!this.revealDone) {
       const rv = Math.min(1, (this.clock.getElapsedTime() - this.revealAt) / REVEAL_S)
       this.terrain.uniforms.uReveal.value = 1 - Math.pow(1 - rv, 3)
       // 线与文字面片（不论在哪个组里）一起淡入
       const fadeIn = smoothstep(0.55, 1, rv)
-      this.scene.traverse((c) => {
-        const mat = (c as THREE.Mesh).material
-        if (mat instanceof LineMaterial) mat.opacity = fadeIn * ((mat.userData.baseOpacity as number | undefined) ?? 1)
-        else if (mat instanceof THREE.MeshBasicMaterial && mat.map) mat.opacity = fadeIn
-      })
+      const groups = this.bootAt !== null ? [this.lineGroup, this.labelGroup, this.annoGroup] : [this.scene]
+      for (const g of groups)
+        g.traverse((c) => {
+          const mat = (c as THREE.Mesh).material
+          if (mat instanceof LineMaterial) mat.opacity = fadeIn * ((mat.userData.baseOpacity as number | undefined) ?? 1)
+          else if (mat instanceof THREE.MeshBasicMaterial && mat.map) mat.opacity = fadeIn
+        })
       this.annoGroup.visible = rv >= 1
       if (rv >= 1) this.revealDone = true
     }

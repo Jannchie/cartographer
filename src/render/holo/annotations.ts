@@ -69,7 +69,8 @@ export interface AnnotationSpec {
 /**
  * 一条标注的组（局部坐标：x 向右、y 向上；调用方让组整体绕 y 轴转向镜头）。
  * userData.tag 是引线与文字（调用方按镜头距离缩放，保持屏幕上大小相近），
- * userData.text 是文字面片（调用方让它后仰正对镜头）；尺寸线留在组里，始终按真实高度
+ * userData.text 是文字面片（调用方让它后仰正对镜头）；尺寸线留在组里，始终按真实高度。
+ * 引线分成竖直段与水平段两部分，出现动画见 revealAnnotation
  */
 export function annotation(spec: AnnotationSpec, color: string, subColor: string, lineMat: LineMaterial) {
   const g = new THREE.Group()
@@ -78,25 +79,52 @@ export function annotation(spec: AnnotationSpec, color: string, subColor: string
   const pad = 0.3
   const L = w + pad * 2
   const h = spec.lift
-  // 竖直引线与折线，端头短刻与起点的小横刻
-  const lead = [0, 0, 0, 0, h, 0, 0, h, 0, L, h, 0, L, h - 0.25, 0, L, h + 0.25, 0, -0.2, 0, 0, 0.2, 0, 0]
-  mesh.position.set(pad, h + 0.1, 0)
-  tag.add(segments(lead, lineMat), mesh)
+  // 竖直引线与起点的小横刻；顶端（head）是水平线、端头短刻与文字
+  const vert = segments([0, 0, 0, 0, h, 0, -0.2, 0, 0, 0.2, 0, 0], lineMat)
+  const head = new THREE.Group()
+  head.position.y = h
+  const horiz = segments([0, 0, 0, L, 0, 0, L, -0.25, 0, L, 0.25, 0], lineMat)
+  mesh.position.set(pad, 0.1, 0)
+  head.add(horiz, mesh)
+  tag.add(vert, head)
   g.add(tag)
+  let dim: LineSegments2 | null = null
   if (spec.dimension) {
     // 高程尺寸线：在左侧偏出一点，两端短刻；顶端一条延长线接回峰顶，两端各一对短斜线作箭头
     const d = spec.dimension
     const x = -0.45
-    const dim = [x, 0, 0, x, -d, 0]
-    dim.push(x - 0.12, 0, 0, x + 0.12, 0, 0, x - 0.12, -d, 0, x + 0.12, -d, 0)
-    dim.push(x - 0.2, 0, 0, 0, 0, 0)
-    dim.push(x, 0, 0, x - 0.08, -0.22, 0, x, 0, 0, x + 0.08, -0.22, 0)
-    dim.push(x, -d, 0, x - 0.08, -d + 0.22, 0, x, -d, 0, x + 0.08, -d + 0.22, 0)
-    g.add(segments(dim, lineMat))
+    const pts = [x, 0, 0, x, -d, 0]
+    pts.push(x - 0.12, 0, 0, x + 0.12, 0, 0, x - 0.12, -d, 0, x + 0.12, -d, 0)
+    pts.push(x - 0.2, 0, 0, 0, 0, 0)
+    pts.push(x, 0, 0, x - 0.08, -0.22, 0, x, 0, 0, x + 0.08, -0.22, 0)
+    pts.push(x, -d, 0, x - 0.08, -d + 0.22, 0, x, -d, 0, x + 0.08, -d + 0.22, 0)
+    dim = segments(pts, lineMat)
+    g.add(dim)
   }
   g.userData.tag = tag
   g.userData.text = mesh
+  g.userData.reveal = { vert, head, horiz, text: mesh, dim }
   return g
+}
+
+/**
+ * 标注的出现进度（0~1）：前 35% 竖直引线自地面升起（山峰的尺寸线同时自峰顶向下画出），
+ * 其后水平线自左向右伸出，文字随之横向刷开（面片与贴图一起截取，不压扁）。1 为完整显示
+ */
+export function revealAnnotation(g: THREE.Object3D, p: number) {
+  const r = g.userData.reveal as { vert: LineSegments2; head: THREE.Group; horiz: LineSegments2; text: THREE.Mesh; dim: LineSegments2 | null }
+  const v = Math.min(1, Math.max(0, p / 0.35))
+  const w = 1 - (1 - Math.min(1, Math.max(0, (p - 0.35) / 0.65))) ** 3
+  for (const l of [r.vert, r.dim]) {
+    if (!l) continue
+    l.visible = v > 0
+    l.scale.y = Math.max(v, 1e-4)
+  }
+  r.head.visible = w > 0
+  r.horiz.scale.x = Math.max(w, 1e-4)
+  r.text.scale.x = Math.max(w, 1e-4)
+  const map = (r.text.material as THREE.MeshBasicMaterial).map
+  if (map) map.repeat.x = w
 }
 
 /** 一组线段（每 6 个数一段），可带每端的顶点色 */
