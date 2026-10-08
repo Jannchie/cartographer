@@ -3,6 +3,7 @@ import type { World, WorldEdits, WorldParams } from './gen/types'
 import { loadWorld, saveWorld, worldKey } from './gen/cache'
 import { loadEarth } from './gen/earth/index'
 import { loadEarthFeatures, loadEarthGrid } from './gen/earth/real'
+import { loadChinaAdmin, loadChinaGrid } from './gen/earth/china'
 import { earthAreas, earthResOf } from './gen/earth/realWorld'
 import { inferAreas, type Area } from './gen/areas'
 import { smoothRivers, type SmoothRiver } from './render/rivers'
@@ -55,7 +56,8 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
       post({ id, type: 'progress', stage: '读取世界库', frac: 1 })
     } else if (world) post({ id, type: 'progress', stage: '读取缓存', frac: 1 })
     else {
-      if (params.earthReal) await Promise.all([loadEarthGrid(earthResOf(params)), loadEarthFeatures()])
+      if (params.region) await Promise.all([loadEarthGrid(earthResOf(params)), loadEarthFeatures(), loadChinaGrid(), loadChinaAdmin()])
+      else if (params.earthReal) await Promise.all([loadEarthGrid(earthResOf(params)), loadEarthFeatures()])
       else if (params.earth) await loadEarth()
       world = generateWorld(params, (stage, frac) => post({ id, type: 'progress', stage, frac }), edits ?? {}, cache)
       // 先写缓存再转移数组（转移后缓冲区就被清空了）

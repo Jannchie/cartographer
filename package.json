@@ -18,6 +18,8 @@
     "banner": "tsx scripts/banner.ts",
     "plates": "tsx scripts/plates.ts",
     "earth": "tsx scripts/earth.ts",
+    "china": "tsx scripts/china-real.ts",
+    "video": "tsx video/record.ts",
     "check:dmath": "tsx scripts/check-dmath.ts"
   },
   "dependencies": {
@@ -32,7 +34,9 @@
     "@vitejs/plugin-vue": "^6.0.9",
     "geotiff": "^3.0.5",
     "opencc-js": "^1.4.2",
+    "pinyin-pro": "^3.29.4",
     "pngjs": "^7.0.0",
+    "puppeteer-core": "^25.12.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.1"

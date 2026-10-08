@@ -1,5 +1,6 @@
 import { markRaw, reactive, toRaw, watch } from 'vue'
 import { latitudeOf } from '../../gen/climate'
+import { regionProjection } from '../../gen/earth/region'
 import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from '../../app/project'
 import { deleteWorld, getMeta, getWorld as getEntry, listWorlds, newWorldId, putMeta, putWorld, renameWorld, type LibraryMeta } from '../../app/library'
 import { EditorView, isSketchTool, type EditTool, type EditView } from '../../editor/editor'
@@ -34,6 +35,7 @@ export type Mode = '3d' | 'holo' | '2d' | 'edit' | 'areas'
 
 export const pct = (v: number) => `${Math.round(v * 100)}%`
 export const latFmt = (v: number) => `${Math.abs(v)}°${v > 0 ? 'N' : v < 0 ? 'S' : ''}`
+export const lonFmt = (v: number) => `${Math.abs(v)}°${v > 0 ? 'E' : v < 0 ? 'W' : ''}`
 
 // 预设：一键换一类世界
 export const PRESETS: { name: string; desc: string; p: Partial<WorldParams> }[] = [
@@ -45,6 +47,11 @@ export const PRESETS: { name: string; desc: string; p: Partial<WorldParams> }[] 
   { name: '类地球', desc: '全球全图：几块大陆隔着大洋，从赤道雨林到两极冰原', p: { globe: true, earth: false, earthReal: false, landRatio: 0.29, plates: 16, mountains: 1.1, coastRoughness: 0.6, rainfall: 1, temperature: 0, latNorth: 80, latSouth: -62 } },
   { name: '地球', desc: '真实地球的大陆、山脉与海深（ETOPO1），地名仍是虚构的', p: { globe: true, earth: true, earthReal: false, mountains: 1, coastRoughness: 0.5, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
   { name: '真实地球', desc: '高程、气候、群系、河湖与自然地物名称都取自真实数据；没有城市与国家', p: { globe: true, earth: true, earthReal: true, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
+  {
+    name: '中国',
+    desc: '中国区域图：真实地形（ETOPO 2022）、气候与河湖，省级与地级行政区划、国界与南海断续线；周边只显示地形',
+    p: { region: 'china', globe: false, earth: true, earthReal: true, width: 1450, rainfall: 1, temperature: 0 },
+  },
 ]
 
 /** 观感：上次选的预设 + 在其上的微调（旧版本存的字段缺了就用预设补上） */
@@ -323,6 +330,8 @@ export function markDirty() {
 }
 export function setParam<K extends keyof WorldParams>(k: K, v: WorldParams[K]) {
   ws.params[k] = v
+  // 改地图类型（全球图、地球底图、真实地球）就不再是区域图
+  if (k === 'globe' || k === 'earth' || k === 'earthReal') ws.params.region = undefined
   // 全球图的高度随纬度范围走；开关全球图时换宽高比
   // 关掉全球图时地球底图一并关掉（地球底图总是全球图，见 normalizeParams）
   if (k === 'globe' && !v) ws.params.earth = false
@@ -338,7 +347,10 @@ export function resetParams() {
 }
 /** 预设只填入参数，点「生成」才生效 */
 export function applyPreset(i: number) {
-  Object.assign(ws.params, PRESETS[i].p)
+  // 预设没写区域的就不是区域图；离开区域图时宽度回到默认（区域图的宽度另成一套）
+  const leaving = ws.params.region && !PRESETS[i].p.region
+  Object.assign(ws.params, { region: undefined }, PRESETS[i].p)
+  if (leaving) ws.params.width = DEFAULT_PARAMS.width
   normalizeParams(ws.params)
   markDirty()
   ws.preset = i
@@ -743,12 +755,22 @@ function probeAt(clientX: number, clientY: number) {
   }
   const i = cell.y * world.W + cell.x
   const e = world.elevation[i]
-  const lat = latitudeOf(world.params, cell.y, world.H)
+  const proj = regionProjection(world.params)
+  const [lon, lat] = proj ? proj.toLonLat(cell.x, cell.y) : [NaN, latitudeOf(world.params, cell.y, world.H)]
   const lake = !Number.isNaN(world.water[i]) && e > 0
-  const rows: [string, string][] = [
-    ['纬度', latFmt(Math.round(lat * 10) / 10)],
+  const rows: [string, string][] = [['纬度', latFmt(Math.round(lat * 10) / 10)]]
+  if (proj) rows.push(['经度', lonFmt(Math.round(lon * 10) / 10)])
+  // 区域图：所属的省级与地级行政区
+  const a = world.admin
+  const u = a ? a.unit[i] : -1
+  if (a && u >= 0) {
+    const unit = a.units[u]
+    rows.push(['省级', lang === 'zh' ? a.provinceFull[unit.province] : placeName(world.realms[unit.province])])
+    if (world.realms[unit.province] && unit.zh !== world.realms[unit.province].zh) rows.push(['地级', lang === 'zh' ? unit.full : placeName(unit)])
+  }
+  rows.push(
     [e > 0 ? '海拔' : '水深', `${Math.round(Math.abs(e) * 1000).toLocaleString()} m`],
-  ]
+  )
   if (lake) rows.push(['湖面', `${Math.round(world.water[i] * 1000).toLocaleString()} m`])
   rows.push(['年均温', `${world.temperature[i].toFixed(1)} °C`])
   if (e > 0) rows.push(['年降水', `${Math.round(world.precipitation[i]).toLocaleString()} mm`])
@@ -846,6 +868,7 @@ function requestStage() {
  */
 async function freeze() {
   const w = world
+  // 真实地球（含区域图）本来就是观测数据，不必定稿
   if (!w || edits.frozen || w.params.earthReal) return
   const { elev, basins } = await requestStage()
   if (world !== w) throw new Error('世界在定稿时变了，请重试')
@@ -910,7 +933,7 @@ function flash(msg: string) {
 
 /** 保存到世界库（即定稿）：已对应某个条目就覆盖它，asNew 时另存一条 */
 export async function saveWorld(asNew = false) {
-  if (!world || ws.busy || world.params.earthReal) return
+  if (!world || ws.busy) return
   try {
     await freeze()
     const w = world!
@@ -982,7 +1005,7 @@ export async function exportEntry(id: string) {
 
 /** 导出当前世界（先定稿） */
 export async function exportWorldFile() {
-  if (!world || ws.busy || world.params.earthReal) return
+  if (!world || ws.busy) return
   await freeze()
   const name = ws.entry?.name ?? worldTitle(world!)
   const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world!), name)
@@ -1114,6 +1137,13 @@ defineStrings([
   ['世界库', 'Library', 'ライブラリ'],
   ['世界库…', 'Library…', 'ライブラリ…'],
   ['关闭', 'Close', '閉じる'],
+  ['中国', 'China', '中国'],
+  ['中国区域图：真实地形（ETOPO 2022）、气候与河湖，省级与地级行政区划、国界与南海断续线；周边只显示地形', 'Regional map of China: observed terrain (ETOPO 2022), climate, rivers and lakes, with provinces, prefectures, the national boundary and the South China Sea dashed line; neighbouring areas show terrain only', '中国の地域図：実測の地形（ETOPO 2022）・気候・河川湖沼に、省級・地級の行政区画、国境と南シナ海の断続線。周辺は地形のみ'],
+  ['约 3.7 km / 格', 'About 3.7 km per cell', '1 マス約 3.7 km'],
+  ['约 1.85 km / 格（1′，生成较慢）', 'About 1.85 km per cell (1′, slower)', '1 マス約 1.85 km（1′、生成に時間がかかる）'],
+  ['经度', 'Longitude', '経度'],
+  ['省级', 'Province', '省級'],
+  ['地级', 'Prefecture', '地級'],
   ['保存到世界库', 'Save to library', 'ライブラリに保存'],
   ['保存到世界库：地形定稿成数据，之后与种子无关', 'Save to the library: the terrain is finalized as data and no longer depends on the seed', 'ライブラリに保存：地形をデータとして確定し、以後シードに依存しない'],
   ['已定稿', 'Finalized', '確定済み'],

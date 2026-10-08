@@ -5,6 +5,7 @@
  * - 地图格从数据格取值：一格覆盖多个数据格时取平均（覆盖层过半、群系取多数），否则双线性插值
  * - 本项目以"高程 ≤ 0"为海：陆地上低于海面的洼地（死海、卡塔拉）抬到海面以上一点，湖面按湖岸最低处定
  * - 没有观测的格（海洋、小岛）气温与降水用模型补上；地形、气候编辑过的格群系改用模型判定
+ * - 区域图（region）：地图格经投影换算成经纬度后取值，地形与海陆来自 1′ 的区域栅格，另有真实的行政区划与城市
  */
 import { Biome, EQUATOR_KM, type Label, type River, type World, type WorldEdits, type WorldParams } from '../types'
 import { classifyBiome, latitudeOf, precipitationField, temperatureField } from '../climate'
@@ -14,10 +15,13 @@ import { RNG, hashString } from '../rng'
 import * as dmath from '../dmath'
 import { COVER, earthFeatures, earthFeaturesLoaded, earthGrid, type EarthPlaceKind, type EarthRes } from './real'
 import { fillRings, type LonLatGrid } from './raster'
+import { regionProjection, REGION_INFO, type MapProjection } from './region'
+import { chinaAdminLayer, chinaGrid, sampleChina } from './china'
 
 type Progress = (stage: string, frac: number) => void
 
-export const earthResOf = (p: Pick<WorldParams, 'earthRes'>): EarthRes => p.earthRes ?? '15m'
+/** 区域图的格比 0.25° 细得多：气候与群系总用 5′ */
+export const earthResOf = (p: Pick<WorldParams, 'earthRes' | 'region'>): EarthRes => (p.region ? '5m' : p.earthRes ?? '15m')
 
 /** 地图网格（格心经度 −180 + (x + 0.5)·360/W，纬度 latitudeOf） */
 function mapGrid(W: number, H: number, p: WorldParams): LonLatGrid {
@@ -30,7 +34,8 @@ export function realEarthWorld(p: WorldParams, progress: Progress = () => {}, ed
   const W = p.width
   const H = p.height
   const N = W * H
-  const kmPerCell = EQUATOR_KM / W
+  const proj = regionProjection(p)
+  const kmPerCell = proj ? proj.kmPerCell : EQUATOR_KM / W
   const g = earthGrid(earthResOf(p))
   const rng = new RNG(hashString(`${p.seed}:earth`))
 
@@ -48,7 +53,8 @@ export function realEarthWorld(p: WorldParams, progress: Progress = () => {}, ed
   const votes = new Uint16Array(16)
   const colOf = (lon: number) => ((lon + 180) * g.W) / 360 - 0.5
   const rowOf = (lat: number) => ((90 - lat) * g.H) / 180 - 0.5
-  for (let y = 0; y < H; y++) {
+  if (proj) sampleRegion(proj, W, H, { e0, tReal, pReal, landF, lakeF, playaF, glacF, code })
+  else for (let y = 0; y < H; y++) {
     const lat = latitudeOf(p, y, H)
     const r0 = Math.max(0, Math.ceil(rowOf(lat + dLat / 2)))
     const r1 = Math.min(g.H - 1, Math.ceil(rowOf(lat - dLat / 2)) - 1)
@@ -209,14 +215,25 @@ export function realEarthWorld(p: WorldParams, progress: Progress = () => {}, ed
   // —— 河流：Natural Earth 河道投到地图格，流量按等级给 ——
   const { rivers, flow } = projectRivers(p, W, H, elev, lake)
 
-  // —— 自然地物名称 ——
+  // —— 自然地物名称；区域图另有行政区划与城市 ——
   progress('自然地物名称', 0.8)
   const draft = { W, H, elevation: elev, water, params: p } as World
   const generated = [...earthPlaces(draft).map(placeLabel(W)), ...riverLabels(p, W, H)]
+  let political: ReturnType<typeof chinaAdminLayer> | null = null
+  if (proj && p.region === 'china') {
+    progress('行政区划', 0.9)
+    political = chinaAdminLayer(proj, W, H, elev)
+    // 省级区划的驻地（capital）是行政区划图层里城市标签的序号；城市标签接在自然地物之后，序号要加上偏移
+    const offset = generated.length
+    for (const r of political.realms) if (r.capital >= 0) r.capital += offset
+    generated.push(...political.labels)
+  }
   const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || l.name, ja: l.ja || l.name })) : generated
+  const info = p.region ? REGION_INFO[p.region] : { en: 'Earth', zh: '地球', ja: '地球' }
 
   let land = 0
-  let peak = -Infinity
+  // 有实测山峰时，最高峰取实测（地形格是平均高程，山顶被削低）
+  let peak = political?.peaks.reduce((m, p) => Math.max(m, p.elev), -Infinity) ?? -Infinity
   let trench = Infinity
   for (let i = 0; i < N; i++) {
     if (elev[i] > 0) land++
@@ -237,13 +254,15 @@ export function realEarthWorld(p: WorldParams, progress: Progress = () => {}, ed
     coastDist,
     rivers,
     labels,
-    realm: new Int16Array(N).fill(-1),
-    realms: [],
+    realm: political?.realm ?? new Int16Array(N).fill(-1),
+    realms: political?.realms ?? [],
     roads: [],
-    worldName: edits.worldName ?? 'Earth',
-    worldNameZh: edits.worldNameZh ?? edits.worldName ?? '地球',
-    worldNameJa: edits.worldNameJa ?? edits.worldName ?? '地球',
+    worldName: edits.worldName ?? info.en,
+    worldNameZh: edits.worldNameZh ?? edits.worldName ?? info.zh,
+    worldNameJa: edits.worldNameJa ?? edits.worldName ?? info.ja,
     kmPerCell,
+    admin: political?.admin,
+    peaks: political?.peaks,
     stats: { land: land / N, peak, trench, lakes, rivers: rivers.length, ms: performance.now() - t0 },
   }
 }
@@ -286,19 +305,24 @@ function resolveBiome(c: number, h: number, t: number, pr: number): Biome {
 /** 等级 → 流量：最大的河（等级 0~1）与模拟世界的干流相当，等级 9 只略高于成河阈值 */
 const rankFlow = (W: number, r: number) => riverThreshold(W) * (1 + 70 * dmath.pow(0.55, r))
 
-/** 经纬度 → 地图格坐标（格心为整数） */
+/** 经纬度 → 地图格坐标（格心为整数）；区域图走投影 */
 function projector(p: WorldParams, W: number, H: number) {
+  const proj = regionProjection(p)
+  if (proj) return proj.toCell
   return (lon: number, lat: number): [number, number] => [((lon + 180) * W) / 360 - 0.5, ((p.latNorth - lat) / (p.latNorth - p.latSouth)) * (H - 1)]
 }
 
-/** 一条河段投到地图上：出了纬度范围、跨过 ±180° 的地方切开 */
+/** 一条河段投到地图上：出了地图范围、跨过 ±180° 的地方切开 */
 function riverRuns(c: number[], p: WorldParams, W: number, H: number): number[][] {
   const proj = projector(p, W, H)
+  const region = !!p.region
   const runs: number[][] = []
   let cur: number[] = []
   for (let k = 0; k < c.length; k += 2) {
-    const [x, y] = proj(c[k] / 100, c[k + 1] / 100)
-    const inside = y >= 0 && y <= H - 1
+    const lon = c[k] / 100
+    const lat = c[k + 1] / 100
+    const [x, y] = proj(lon, lat)
+    const inside = y >= 0 && y <= H - 1 && (!region || (x >= 0 && x <= W - 1 && inBounds(p, lon, lat)))
     const jump = cur.length >= 2 && Math.abs(x - cur[cur.length - 2]) > W / 2
     if (!inside || jump) {
       if (cur.length >= 4) runs.push(cur)
@@ -366,7 +390,18 @@ interface PlaceCells {
 /** 每个自然地物在地图上占的格（水域只算海面、湖只算湖面、其余只算陆地）；太小的不要 */
 export function earthPlaces(world: Pick<World, 'W' | 'H' | 'elevation' | 'water' | 'params'>): PlaceCells[] {
   const { W, H, elevation: e, water: w } = world
-  const grid = mapGrid(W, H, world.params)
+  const proj = regionProjection(world.params)
+  // 区域图：环先投到地图格坐标，再按格心填充
+  const grid: LonLatGrid = proj ? { W, H, lon0: -0.5, lat0: -0.5, dLon: 1, dLat: -1 } : mapGrid(W, H, world.params)
+  const ringOf = proj
+    ? (r: number[]) => {
+        // 先裁到投影的经纬度范围（大洋这类环会绕到地球另一侧），再投到地图格
+        const c = clipRing(r.map((v) => v / 100), proj.bounds)
+        const out = new Array<number>(c.length)
+        for (let k = 0; k < c.length; k += 2) [out[k], out[k + 1]] = proj.toCell(c[k], c[k + 1])
+        return out
+      }
+    : (r: number[]) => r.map((v) => v / 100)
   const out: PlaceCells[] = []
   const min = Math.max(3, Math.round((W / 1024) * (W / 1024) * 3))
   const cut = rankCut(W)
@@ -375,7 +410,7 @@ export function earthPlaces(world: Pick<World, 'W' | 'H' | 'elevation' | 'water'
     const member = WATER_KINDS.includes(pl.k) ? (i: number) => e[i] <= 0 && w[i] === 0 : pl.k === 'lake' ? (i: number) => w[i] > 0 : (i: number) => e[i] > 0 && !(w[i] > 0)
     const cells: number[] = []
     fillRings(
-      pl.rings.map((r) => r.map((v) => v / 100)),
+      pl.rings.map(ringOf),
       grid,
       (i) => member(i) && cells.push(i),
     )
@@ -615,4 +650,86 @@ export function earthAreas(world: World): Area[] {
     out.push({ id: `${kind}:${out.length}`, kind, name: l?.name ?? pl.n, zh: l?.zh ?? pl.zh ?? pl.n, ja: l?.ja ?? pl.ja, poly, at: l ? [l.x, l.y] : poleOf(pl.cells, W), label: li, cells: pl.cells.length })
   }
   return out
+}
+
+/**
+ * 区域图的取值：地图格心经投影换算成经纬度，地形与覆盖取 1′ 区域栅格（与地图格大小相当，双线性 / 最近格），
+ * 气温、降水与群系取全球 5′ 栅格（双线性 / 最近格）
+ */
+function sampleRegion(
+  proj: MapProjection,
+  W: number,
+  H: number,
+  o: { e0: Float32Array; tReal: Float32Array; pReal: Float32Array; landF: Float32Array; lakeF: Float32Array; playaF: Float32Array; glacF: Float32Array; code: Uint8Array },
+) {
+  const cg = chinaGrid()
+  const g = earthGrid('5m')
+  const bil = (a: Float32Array, fx: number, fy: number) => {
+    const x0 = Math.floor(fx)
+    const y0 = Math.max(0, Math.min(g.H - 2, Math.floor(fy)))
+    const tx = fx - x0
+    const ty = Math.max(0, Math.min(1, fy - y0))
+    const at = (c: number, r: number) => a[r * g.W + ((c + g.W) % g.W)]
+    const v00 = at(x0, y0)
+    const v10 = at(x0 + 1, y0)
+    const v01 = at(x0, y0 + 1)
+    const v11 = at(x0 + 1, y0 + 1)
+    // 有一角没有观测（海、小岛）就退回最近格
+    if (Number.isNaN(v00) || Number.isNaN(v10) || Number.isNaN(v01) || Number.isNaN(v11)) return at(Math.round(fx), Math.round(Math.max(0, Math.min(g.H - 1, fy))))
+    return (v00 + (v10 - v00) * tx) * (1 - ty) + (v01 + (v11 - v01) * tx) * ty
+  }
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x
+      const [lon, lat] = proj.toLonLat(x, y)
+      const fx = ((lon + 180) * g.W) / 360 - 0.5
+      const fy = ((90 - lat) * g.H) / 180 - 0.5
+      const j = Math.max(0, Math.min(g.H - 1, Math.round(fy))) * g.W + ((Math.round(fx) + g.W) % g.W)
+      const s = sampleChina(cg, lon, lat)
+      const cv = s ? s.cover : g.cover[j]
+      o.e0[i] = s ? s.elev : g.elev[j]
+      o.tReal[i] = bil(g.temp, fx, fy)
+      o.pReal[i] = bil(g.rain, fx, fy)
+      o.landF[i] = cv & COVER.land ? 1 : 0
+      o.lakeF[i] = cv & COVER.lake ? 1 : 0
+      o.playaF[i] = cv & COVER.playa ? 1 : 0
+      o.glacF[i] = cv & COVER.glacier ? 1 : 0
+      o.code[i] = g.biome[j]
+    }
+  }
+}
+
+/** 区域图：经纬度在不在投影的有效范围里 */
+function inBounds(p: WorldParams, lon: number, lat: number) {
+  const b = regionProjection(p)!.bounds
+  return lon >= b.lonW && lon <= b.lonE && lat >= b.latS && lat <= b.latN
+}
+
+/** Sutherland–Hodgman：把环（交替存储的经纬度）裁到经纬度矩形里 */
+function clipRing(r: number[], b: MapProjection['bounds']): number[] {
+  const edges: [number, number, boolean][] = [
+    [0, b.lonW, true],
+    [0, b.lonE, false],
+    [1, b.latS, true],
+    [1, b.latN, false],
+  ]
+  let pts = r
+  for (const [axis, v, lower] of edges) {
+    const n = pts.length / 2
+    if (!n) break
+    const out: number[] = []
+    const inside = (k: number) => (lower ? pts[2 * k + axis] >= v : pts[2 * k + axis] <= v)
+    for (let k = 0; k < n; k++) {
+      const j = (k + n - 1) % n
+      const ik = inside(k)
+      const ij = inside(j)
+      if (ik !== ij) {
+        const t = (v - pts[2 * j + axis]) / (pts[2 * k + axis] - pts[2 * j + axis])
+        out.push(pts[2 * j] + (pts[2 * k] - pts[2 * j]) * t, pts[2 * j + 1] + (pts[2 * k + 1] - pts[2 * j + 1]) * t)
+      }
+      if (ik) out.push(pts[2 * k], pts[2 * k + 1])
+    }
+    pts = out
+  }
+  return pts
 }

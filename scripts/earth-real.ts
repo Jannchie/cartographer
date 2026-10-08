@@ -24,6 +24,7 @@ import { fromFile } from 'geotiff'
 import * as OpenCC from 'opencc-js'
 import { fillRings, lonLatGrid, simplifyLine } from '../src/gen/earth/raster'
 import { RIVER_NAMES } from './earth-river-names'
+import { type Feature, geojson as readGeojson, linesOf, ringsOf, timedLog } from './natural-earth'
 
 const SRC = process.argv[2]
 if (!SRC) throw new Error('用法：tsx scripts/earth-real.ts <原始数据目录>')
@@ -34,8 +35,7 @@ const W5 = 4320
 const H5 = 2160
 const N5 = W5 * H5
 const g5 = lonLatGrid(W5, H5)
-const t0 = performance.now()
-const log = (s: string) => console.log(`[${((performance.now() - t0) / 1000).toFixed(1)}s] ${s}`)
+const log = timedLog()
 
 // —— 高程：60″ → 5′，5 × 5 块平均 ——
 async function loadElevation() {
@@ -121,23 +121,7 @@ function* readShpPolygons(path: string): Generator<number[][]> {
 }
 
 // —— GeoJSON ——
-type Feature = { properties: Record<string, any>; geometry: { type: string; coordinates: any } | null }
-const geojson = (name: string): Feature[] => JSON.parse(readFileSync(`${SRC}/ne/${name}.geojson`, 'utf8')).features
-/** 多边形 / 多多边形 → 扁平的环 */
-function ringsOf(f: Feature): number[][] {
-  const g = f.geometry
-  if (!g) return []
-  const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []
-  return polys.flatMap((p: number[][][]) => p.map((r) => r.flat()))
-}
-/** 线 / 多线 → 扁平的折线 */
-function linesOf(f: Feature): number[][] {
-  const g = f.geometry
-  if (!g) return []
-  if (g.type === 'LineString') return [g.coordinates.flat()]
-  if (g.type === 'MultiLineString') return g.coordinates.map((l: number[][]) => l.flat())
-  return []
-}
+const geojson = (name: string) => readGeojson(SRC, name)
 
 // —— 覆盖与群系（5′ 栅格化） ——
 const ENDORHEIC_SEAS = ['Caspian Sea']

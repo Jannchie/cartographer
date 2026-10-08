@@ -1,4 +1,5 @@
 import { isGlobe, type World } from '../../gen/types'
+import { regionProjection } from '../../gen/earth/region'
 import { cjkFont, lang, t, worldTitle } from '../../i18n'
 import { hash, type Fields } from './fields'
 import { HYPSO_STOPS, REALM_COLORS, type Theme } from './styles'
@@ -14,6 +15,42 @@ export function lonScale(world: World) {
   return world.kmPerCell / (111.32 * Math.cos((midLat * Math.PI) / 180))
 }
 
+/**
+ * 区域图的经纬网：每 step° 一条，投影后是折线（圆锥投影的经线汇聚、纬线成弧），格坐标。
+ * 经线记 lon、纬线记 lat，图框上的经纬度注记按它们与图框的交点放
+ */
+export function projectedGraticule(world: World, step = 10): { pts: number[]; lon?: number; lat?: number }[] {
+  const proj = regionProjection(world.params)
+  if (!proj) return []
+  const b = proj.bounds
+  const out: { pts: number[]; lon?: number; lat?: number }[] = []
+  for (let lat = Math.ceil(b.latS / step) * step; lat <= b.latN; lat += step) {
+    const pts: number[] = []
+    for (let lon = b.lonW; lon <= b.lonE + 1e-9; lon += 0.5) pts.push(...proj.toCell(lon, lat))
+    out.push({ pts, lat })
+  }
+  for (let lon = Math.ceil(b.lonW / step) * step; lon <= b.lonE; lon += step) {
+    const pts: number[] = []
+    for (let lat = b.latS; lat <= b.latN + 1e-9; lat += 0.5) pts.push(...proj.toCell(lon, lat))
+    out.push({ pts, lon })
+  }
+  return out
+}
+
+/** 折线与直线 x = v（axis 0）或 y = v（axis 1）的交点（另一个坐标） */
+function crossings(pts: number[], axis: 0 | 1, v: number): number[] {
+  const out: number[] = []
+  for (let i = 2; i < pts.length; i += 2) {
+    const a = pts[i - 2 + axis]
+    const c = pts[i + axis]
+    if ((a - v) * (c - v) > 0 || a === c) continue
+    const t = (v - a) / (c - a)
+    const o = 1 - axis
+    out.push(pts[i - 2 + o] + (pts[i + o] - pts[i - 2 + o]) * t)
+  }
+  return out
+}
+
 export function drawGraticule(ctx: CanvasRenderingContext2D, world: World, S: number, color: string) {
   const { W, H, params: p } = world
   const k = S / 2
@@ -21,6 +58,16 @@ export function drawGraticule(ctx: CanvasRenderingContext2D, world: World, S: nu
   ctx.strokeStyle = color
   ctx.lineWidth = 0.7 * k
   ctx.setLineDash([6 * k, 5 * k])
+  if (p.region) {
+    for (const g of projectedGraticule(world)) {
+      ctx.beginPath()
+      ctx.moveTo(g.pts[0] * S, g.pts[1] * S)
+      for (let i = 2; i < g.pts.length; i += 2) ctx.lineTo(g.pts[i] * S, g.pts[i + 1] * S)
+      ctx.stroke()
+    }
+    ctx.restore()
+    return
+  }
   const top = p.latNorth
   const bot = p.latSouth
   // 全球图 30° 一条（常见世界地图的间隔），其余 10°
@@ -691,6 +738,38 @@ export function drawFrameAt(
   ctx.strokeRect(M - bw, MY - bw, MW + bw * 2, MH + bw * 2)
   ctx.lineWidth = 2.4 * k
   ctx.strokeRect(M - bw - 6 * k, MY - bw - 6 * k, MW + bw * 2 + 12 * k, MH + bw * 2 + 12 * k)
+  if (p.region) {
+    // 区域图：经纬线是投影后的曲线，没有等距的刻度带；经纬度注记写在经纬线与地图边的交点外侧
+    ctx.lineWidth = 0.8 * k
+    ctx.fillStyle = ink
+    ctx.font = `500 ${11 * k}px ${theme.labels.text}`
+    ctx.textBaseline = 'middle'
+    const sx = (x: number) => geo.ox + x * geo.s
+    const sy = (y: number) => geo.oy + y * geo.s
+    const inY = (y: number) => y >= MY + 6 * k && y <= MY + MH - 6 * k
+    const inX = (x: number) => x >= M + 12 * k && x <= M + MW - 12 * k
+    // 内框四条边在格坐标里的位置（放大平移时只露出地图的一部分）
+    const top = (MY - geo.oy) / geo.s
+    const bottom = (MY + MH - geo.oy) / geo.s
+    const left = (M - geo.ox) / geo.s
+    const right = (M + MW - geo.ox) / geo.s
+    for (const g of projectedGraticule(world)) {
+      if (g.lon !== undefined) {
+        const t = `${Math.abs(g.lon)}°${g.lon > 0 ? 'E' : g.lon < 0 ? 'W' : ''}`
+        ctx.textAlign = 'center'
+        for (const x of crossings(g.pts, 1, top)) if (inX(sx(x))) ctx.fillText(t, sx(x), MY - bw - 12 * k)
+        for (const x of crossings(g.pts, 1, bottom)) if (inX(sx(x))) ctx.fillText(t, sx(x), MY + MH + bw + 12 * k)
+      } else if (g.lat !== undefined) {
+        const t = `${Math.abs(g.lat)}°${g.lat > 0 ? 'N' : g.lat < 0 ? 'S' : ''}`
+        ctx.textAlign = 'right'
+        for (const y of crossings(g.pts, 0, left)) if (inY(sy(y))) ctx.fillText(t, M - bw - 9 * k, sy(y))
+        ctx.textAlign = 'left'
+        for (const y of crossings(g.pts, 0, right)) if (inY(sy(y))) ctx.fillText(t, M + MW + bw + 9 * k, sy(y))
+      }
+    }
+    ctx.restore()
+    return
+  }
   const top = p.latNorth
   const bot = p.latSouth
   const yOf = (lat: number) => geo.oy + ((lat - top) / (bot - top)) * (H - 1) * geo.s

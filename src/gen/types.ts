@@ -1,5 +1,6 @@
 import type { Area } from './areas'
 import type { EarthRes } from './earth/real'
+import { regionHeight, regionProjection, type RegionId } from './earth/region'
 export interface WorldParams {
   seed: string
   width: number
@@ -30,6 +31,8 @@ export interface WorldParams {
   earth?: boolean
   /** 真实地球：在地球底图之上，气候、群系、河湖与自然地物名称也取自真实数据，不再模拟；没有城市、国家与道路 */
   earthReal?: boolean
+  /** 区域图：真实地球模板只铺一块区域（地图投影见 gen/earth/region.ts），不是全球图 */
+  region?: RegionId
   /** 真实地球数据的精度：15m 为 0.25°，5m 为 5′ */
   earthRes?: EarthRes
   /** 命名世界观（auto 按种子挑） */
@@ -62,16 +65,26 @@ export const reliefKm = (world: Pick<World, 'W' | 'kmPerCell'>) => {
   return world.kmPerCell <= ref ? world.kmPerCell : ref * Math.sqrt(Math.sqrt(world.kmPerCell / ref))
 }
 
-/** 是不是全球图（地球底图总是全球图） */
-export const isGlobe = (p: Pick<WorldParams, 'globe' | 'earth'>) => !!(p.globe || p.earth)
+/** 是不是全球图（地球底图总是全球图；区域图不是） */
+export const isGlobe = (p: Pick<WorldParams, 'globe' | 'earth' | 'region'>) => !p.region && !!(p.globe || p.earth)
 
 /** 全球图的高度：宽度对应 360° 经度，高度对应纬度范围（等经纬度格子）；不是全球图时宽高比 1.6 */
-export function globeHeight(p: Pick<WorldParams, 'width' | 'latNorth' | 'latSouth' | 'globe' | 'earth'>) {
+export function globeHeight(p: Pick<WorldParams, 'width' | 'latNorth' | 'latSouth' | 'globe' | 'earth' | 'region'>) {
   return isGlobe(p) ? Math.max(64, Math.round((p.width * Math.abs(p.latNorth - p.latSouth)) / 360)) : Math.round(p.width * 0.625)
 }
 
 /** 参数里可以推导的部分就地补齐：地球底图总是全球图；高度由宽度（全球图再加纬度范围）定。改动 width、纬度、globe、earth 之后调用 */
 export function normalizeParams(p: WorldParams) {
+  if (p.region) {
+    // 区域图：真实数据、投影铺满区域；纬度范围取图框中线的上下两端（模型补气温时用）
+    p.earthReal = p.earth = true
+    p.globe = false
+    p.height = regionHeight(p)
+    const proj = regionProjection(p)!
+    p.latNorth = Math.round(proj.toLonLat(p.width / 2, 0)[1])
+    p.latSouth = Math.round(proj.toLonLat(p.width / 2, p.height - 1)[1])
+    return
+  }
   if (p.earthReal) p.earth = true
   if (p.earth) p.globe = true
   p.height = globeHeight(p)
@@ -97,6 +110,7 @@ export const DEFAULT_PARAMS: WorldParams = {
   earthReal: false,
   earthRes: '15m',
   naming: 'auto',
+  region: undefined,
   settlements: true,
   terrainVariant: 0,
   placeVariant: 0,
@@ -162,6 +176,18 @@ export interface Label {
   span: number
   /** 沿线排字的路径（交替存储的格坐标，河流注记用） */
   path?: number[]
+  /** 在全息沙盘上带引线标注（区域图指定；没有任何注记指定时按规模取前几座城市） */
+  anno?: boolean
+}
+
+/** 实测的山峰（区域图）：格坐标与海拔（公里）；地形格是一片的平均高程，山顶比实测低 */
+export interface Peak {
+  name: string
+  zh: string
+  ja: string
+  x: number
+  y: number
+  elev: number
 }
 
 /** 城镇类地点（聚落阶段生成、聚落方案替换的那一类） */
@@ -178,6 +204,8 @@ export interface Realm {
   y: number
   /** 都城在 labels 中的下标 */
   capital: number
+  /** 不单独标注名称（直辖市、特别行政区：城市注记已经写了同一个名字） */
+  noLabel?: boolean
   area: number
   /** 标注点到国界/海岸的距离（格），用于决定国名字号 */
   room: number
@@ -264,6 +292,24 @@ export interface WorldEdits {
   areas?: Area[]
 }
 
+/** 行政界线（格坐标）：国界只画陆地上的一段，海岸不算 */
+export interface AdminBorder {
+  kind: 'national' | 'province' | 'prefecture'
+  pts: number[]
+}
+
+/** 真实行政区划（区域图才有）：省级行政区记在 realm / realms 上，这里是地级单位与界线 */
+export interface AdminLayer {
+  borders: AdminBorder[]
+  /** 海上断续线：每段一个多边形（格坐标） */
+  claims: number[][]
+  /** 每格所属的地级单位，-1 为不属于任何单位 */
+  unit: Int16Array
+  units: { name: string; zh: string; ja: string; full: string; province: number }[]
+  /** 省级行政区的全称（realms 里是简称） */
+  provinceFull: string[]
+}
+
 export interface World {
   params: WorldParams
   W: number
@@ -292,5 +338,9 @@ export interface World {
   worldNameJa: string
   /** 每格代表的公里数 */
   kmPerCell: number
+  /** 真实行政区划（只有区域图有） */
+  admin?: AdminLayer
+  /** 实测山峰（只有区域图有） */
+  peaks?: Peak[]
   stats: { land: number; peak: number; trench: number; lakes: number; rivers: number; ms: number }
 }

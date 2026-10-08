@@ -66,14 +66,19 @@ const worldScales: { key: NumKey; label: string; min: number; max: number; step:
   { key: 'latSouth', label: '南缘纬度', min: -88, max: 60, step: 1, fmt: latFmt },
 ]
 const RES = [
-  { value: '768x480', label: '快', title: '768 × 480' },
-  { value: '1024x640', label: '标准', title: '1024 × 640' },
-  { value: '1536x960', label: '精细', title: '1536 × 960' },
+  { value: '768', label: '快', title: '768 × 480' },
+  { value: '1024', label: '标准', title: '1024 × 640' },
+  { value: '1536', label: '精细', title: '1536 × 960' },
 ]
-// 分辨率只定宽度，高度随之推导（全球图还随纬度范围，见 normalizeParams）
+// 区域图（中国）：按每格公里数给两档，精细一档与 1′ 地形数据同精度
+const RES_REGION = [
+  { value: '1450', label: '标准', title: '约 3.7 km / 格' },
+  { value: '2890', label: '精细', title: '约 1.85 km / 格（1′，生成较慢）' },
+]
+// 分辨率只定宽度，高度随之推导（全球图还随纬度范围、区域图随投影范围，见 normalizeParams）
 const res = computed({
-  get: () => `${p.width}x${Math.round(p.width * 0.625)}`,
-  set: (v: string) => W.setParam('width', Number(v.split('x')[0])),
+  get: () => String(p.width),
+  set: (v: string) => W.setParam('width', Number(v)),
 })
 
 const v = ws.view3d
@@ -208,7 +213,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </template>
       <p v-if="ws.sketch && !p.earth" class="plan-note">{{ t('规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。') }}</p>
       <Fold label="高级参数" id="advanced">
-        <Field label="分辨率" :class="{ locked: ws.frozen }"><Seg v-model="res" :options="RES" /></Field>
+        <Field label="分辨率" :class="{ locked: ws.frozen }"><Seg v-model="res" :options="p.region ? RES_REGION : RES" /></Field>
         <Legend
           :class="{ locked: ws.frozen }"
           :items="[
@@ -218,7 +223,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
           ]"
           @toggle="(i) => (i === 2 ? W.setParam('earthReal', !p.earthReal) : i ? W.setParam('earth', !p.earth) : W.setParam('globe', !isGlobe(p)))"
         />
-        <Field v-if="p.earthReal" label="数据精度" title="真实地球数据的网格：0.25° 约 1 MB，5′ 约 9 MB（精细分辨率下更清楚）">
+        <Field v-if="p.earthReal && !p.region" label="数据精度" title="真实地球数据的网格：0.25° 约 1 MB，5′ 约 9 MB（精细分辨率下更清楚）">
           <Seg :model-value="p.earthRes ?? '15m'" :options="EARTH_RES_OPTS" @update:model-value="(v) => W.setParam('earthRes', v as EarthRes)" />
         </Field>
         <Scale

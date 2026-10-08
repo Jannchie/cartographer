@@ -85,6 +85,10 @@ export class LabelLayer {
       vertical,
       halo,
     })
+    if (L.uniform) {
+      const size = labelPx(L.uniform.tier, zh, labelK)
+      return { font: `${L.uniform.weight} ${size}px ${L.text}, ${cjkFont(lang, true)}`, size, color: L.uniform.color, spacing: zh ? 0.08 : 0.02, upper: false, vertical: false, halo: true }
+    }
     const it = zh ? '' : 'italic'
     // 占全图的面积比
     const share = weight / (this.world.W * this.world.H)
@@ -517,7 +521,9 @@ export class LabelLayer {
     const { world, S, theme } = this
     const k = S / 2
     const order: Kind[] = ['ocean', 'realm', 'continent', 'capital', 'range', 'sea', 'city', 'river', 'island', 'bay', 'lake', 'desert', 'basin', 'forest']
-    const capitals = new Set(theme.realms ? world.realms.map((r) => r.capital) : [])
+    // 政区图与带真实行政区划的区域图标注政区名（省会按首府的样式画）
+    const realms = !!(theme.realms || world.admin)
+    const capitals = new Set(realms ? world.realms.map((r) => r.capital) : [])
     type Item = { kind: Kind; weight: number; label?: Label; realm?: number; area?: Area }
     // 由区域推出来的地名按区域画（名字、位置可能改过）；其余照原注记
     const areas = this.areaList ?? []
@@ -538,10 +544,10 @@ export class LabelLayer {
       }
       items.push({ kind: a.kind, weight: label.weight, label, area: a })
     }
-    if (theme.realms) world.realms.forEach((r, i) => items.push({ kind: 'realm', weight: r.area, realm: i }))
+    if (realms) world.realms.forEach((r, i) => !r.noLabel && items.push({ kind: 'realm', weight: r.area, realm: i }))
     // 政区图上大陆名让位给国名
     const list = items
-      .filter((it) => !(theme.realms && it.kind === 'continent'))
+      .filter((it) => !(realms && it.kind === 'continent'))
       .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || b.weight - a.weight)
     const areaOf = labelCtx(this.ctx).beginLabel ? this.areas() : () => undefined
     for (const it of list) {
@@ -549,7 +555,7 @@ export class LabelLayer {
         const r = world.realms[it.realm!]
         const st = this.style('realm', r.area)
         const c = REALM_COLORS[r.color]
-        const col = `rgb(${c.map((v) => Math.round(v * 0.42)).join(',')})`
+        const col = this.theme.labels.uniform?.color ?? `rgb(${c.map((v) => Math.round(v * 0.42)).join(',')})`
         const name = placeName(r)
         for (const [ox, oy] of [[0, 0], [0, -30 * k], [0, 30 * k], [-50 * k, 0], [50 * k, 0]]) {
           if (world.realm[Math.round(r.y + oy / S) * world.W + Math.round(r.x + ox / S)] !== it.realm) continue
@@ -564,7 +570,9 @@ export class LabelLayer {
       }
       const st = this.style(it.kind, l.weight)
       const name = placeName(l)
-      if (it.kind === 'range') {
+      // 统一样式（游戏地图式）的地名一律水平紧排，不顺山脊弯排、不随走向倾斜
+      const flat = !!this.theme.labels.uniform
+      if (it.kind === 'range' && !flat) {
         // 山脉名顺着山脊排；山太短、弯得太急或放不下时照直排
         const line = this.spine(it.area ? this.polyCells(it.area) : rangeCells(world, l))
         if (line && this.curved(name, line.map(([x, y]) => [x * S, y * S] as [number, number]), st)) continue
@@ -582,7 +590,7 @@ export class LabelLayer {
       for (const [ox, oy] of offs) {
         const i = Math.round(l.y + oy / S) * world.W + Math.round(l.x + ox / S)
         if (water && !(world.elevation[i] < 0)) continue
-        if (this.text(name, l.x * S + ox, l.y * S + oy, st.vertical ? 0 : l.angle, st, true, undefined, water, undefined, areaOf(it))) break
+        if (this.text(name, l.x * S + ox, l.y * S + oy, st.vertical || flat ? 0 : l.angle, st, true, undefined, water, undefined, areaOf(it))) break
       }
     }
   }
