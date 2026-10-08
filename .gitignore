@@ -1,3 +1,6 @@
 node_modules
 dist
 public/_preview
+*.stackdump
+# 由脚本从原始数据生成：中国区域图（scripts/china-real.ts）与路网开通年份（video/expressway/data/build.ts，含 GPL-3.0 数据）
+public/china/

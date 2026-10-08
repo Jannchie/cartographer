@@ -50,6 +50,9 @@ interface PackedWorld {
   worldNameZh: string
   worldNameJa: string
   stats: World['stats']
+  /** 行政区划（区域图）：每格所属单位压缩存放，其余照原样 */
+  admin?: Omit<NonNullable<World['admin']>, 'unit'> & { unit: Packed }
+  peaks?: World['peaks']
 }
 
 type Packed = { t: 'f32' | 'u8' | 'i16'; d: string }
@@ -112,6 +115,8 @@ async function packWorld(w: World): Promise<PackedWorld> {
     worldNameZh: w.worldNameZh,
     worldNameJa: w.worldNameJa,
     stats: w.stats,
+    admin: w.admin && { ...w.admin, unit: await packTA(w.admin.unit) },
+    peaks: w.peaks,
   }
 }
 
@@ -143,6 +148,8 @@ async function unpackWorld(p: PackedWorld, params: WorldParams): Promise<World> 
     worldNameZh: p.worldNameZh,
     worldNameJa: p.worldNameJa,
     stats: p.stats,
+    admin: p.admin && { ...p.admin, unit: (await unpackTA(p.admin.unit)) as Int16Array },
+    peaks: p.peaks,
   }
 }
 

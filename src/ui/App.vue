@@ -21,7 +21,7 @@ import { ws } from './world/world'
 const worldExports = computed(() => [
   { label: 'PNG', title: '导出当前视图的图片', icon: IconImage, run: W.exportPng },
   ...(ws.mode === '2d' || ws.mode === 'areas' ? [{ label: 'SVG', title: '纸图的矢量版本，可无损放大', icon: IconShapes, run: W.exportSvg }] : []),
-  ...(ws.params.earthReal ? [] : [{ label: '世界文件', title: '整个世界的数据（.json），导入后直接显示，与种子无关', icon: IconDatabase, run: W.exportWorldFile }]),
+  { label: '世界文件', title: '整个世界的数据（.json），导入后直接显示，与种子无关', icon: IconDatabase, run: W.exportWorldFile },
 ])
 const settleExports = computed(() =>
   S.ss.mode === 'sandbox'
@@ -114,7 +114,7 @@ watchEffect(() => {
           <button type="button" class="wordmark" :title="t('回到首页')" @click="app.module = 'home'">Cartographer</button>
           <div class="file">
             <button v-show="app.module === 'world'" type="button" class="link" :title="t('保存的世界、导入与导出')" @click="W.openLibrary()"><Icon :icon="IconLibrary" :size="14" />{{ t('世界库') }}</button>
-            <button v-show="app.module === 'world' && !ws.params.earthReal" type="button" class="link" :disabled="ws.busy" :title="t('保存到世界库：地形定稿成数据，之后与种子无关')" @click="W.saveWorld()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
+            <button v-show="app.module === 'world'" type="button" class="link" :disabled="ws.busy" :title="t('保存到世界库：地形定稿成数据，之后与种子无关')" @click="W.saveWorld()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
             <LangSelect />
           </div>
         </div>

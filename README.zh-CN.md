@@ -46,6 +46,20 @@ pnpm dev        # 打开 http://localhost:5190
 | **提瓦特** | **水墨** | **等高线** |
 | <img src="docs/images/zh/world-teyvat.webp" width="260"> | <img src="docs/images/zh/world-ink.webp" width="260"> | <img src="docs/images/zh/world-topo.webp" width="260"> |
 
+### 基于观测数据的模板
+
+除程序生成的世界外，另有两个基于观测数据的模板：
+
+- **地球**：全球，5′ 或 15′ 分辨率。高程取自 NOAA ETOPO 2022，气候取自 WorldClim 2.1，生物群系取自 RESOLVE Ecoregions 2017，海岸线、湖泊、河流与地名取自 Natural Earth。
+- **中国**：兰伯特等角圆锥投影（标准纬线 25° N 与 47° N）的区域图，1′ 分辨率，省级与地级行政区划取自 DataV.GeoAtlas。中国以外的区域仅显示地形。国界与争议地区按中华人民共和国官方立场处理。
+
+原始数据不随仓库分发，需另行下载后以下列命令转换；各数据集的下载地址列于对应脚本的开头。
+
+```bash
+pnpm tsx scripts/earth-real.ts <原始数据目录>   # 生成 public/earth/
+pnpm china <原始数据目录>                        # 生成 public/china/
+```
+
 ## 聚落
 
 人口滑块可将同一城镇从数十人的村落连续扩展至数万人的城市，也可播放扩张动画。地形以世界坐标定义，城镇扩张时山地、河流与海岸位置保持不变。
@@ -118,6 +132,10 @@ pnpm showcase                                                      # 重新生�
 
 另有 `preview:png`（生物群系预览及各生成阶段耗时）与 `shade:png`（仅含地形晕渲的底图）。
 
+## 视频
+
+`video/` 收录基于全息视图的程序化视频。每个视频是一个页面，画面内容只取决于帧号；`pnpm video <名称> <输出.mp4>` 在 Chrome 中逐帧渲染，并以 ffmpeg 编码为 3840 × 2160 的视频。第一部视频《中国高速公路网 1988–2025》按年份呈现全国高速公路网的逐段建成，并同步显示官方统计里程。数据准备、预览与录制方法见 [video/README.md](video/README.md)。
+
 ## 许可证
 
-[MIT](LICENSE)
+代码以 [MIT](LICENSE) 许可证发布。脚本生成的数据沿用其来源的许可，来源列于各脚本与 [video/README.md](video/README.md)。

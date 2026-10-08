@@ -34,16 +34,19 @@ export interface EarthFeatures {
 const grids = new Map<EarthRes, EarthGrid>()
 let features: EarthFeatures | null = null
 
-/** 读 public/earth 下的文件并解 gzip：浏览器（含 Worker）走 fetch，Node 脚本直接读文件 */
-async function readGz(path: string): Promise<ArrayBuffer> {
+/** 读 public/earth 下的文件并解 gzip */
+const readGz = (path: string) => readPublicGz(`earth/${path}`)
+
+/** 读 public 下的 gzip 文件并解压：浏览器（含 Worker）走 fetch，Node 脚本直接读文件 */
+export async function readPublicGz(path: string): Promise<ArrayBuffer> {
   let body: BodyInit
   const nodeProcess = (globalThis as { process?: { versions?: { node?: string } } }).process
   if (typeof window === 'undefined' && nodeProcess?.versions?.node) {
     const fs = 'node:fs/promises'
     const { readFile } = (await import(/* @vite-ignore */ fs)) as { readFile: (u: URL) => Promise<Uint8Array> }
-    body = new Uint8Array(await readFile(new URL(`../../../public/earth/${path}`, import.meta.url)))
+    body = new Uint8Array(await readFile(new URL(`../../../public/${path}`, import.meta.url)))
   } else {
-    const res = await fetch(`${import.meta.env.BASE_URL}earth/${path}`)
+    const res = await fetch(`${import.meta.env.BASE_URL}${path}`)
     if (!res.ok) throw new Error(`真实地球数据加载失败：${path}（${res.status}）`)
     body = await res.blob()
   }

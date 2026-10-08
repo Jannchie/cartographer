@@ -15,6 +15,7 @@ import {
 } from './furniture'
 import { fitRiversToCoast } from './riverMouth'
 import { drawRoads } from './roads'
+import { drawAdmin } from './admin'
 import { drawGlyphs } from './glyphs'
 import { LabelLayer } from './labels'
 import { FANTASY_GLYPHS, THEMES, themeById, type AtlasOpts, type StyleId, type Theme } from './styles'
@@ -134,6 +135,7 @@ export function drawMapOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme:
   if (theme.glyphs) drawGlyphs(ctx, f, FANTASY_GLYPHS)
   // 道路画在山形、树林符号之上：翻山的路段也看得见
   drawRoads(ctx, world.roads, S, theme.roads)
+  drawAdmin(ctx, world, S, theme)
   if (opts.graticule && theme.graticule) drawGraticule(ctx, world, S, theme.graticule)
   furniture?.(true)
   drawCompass(ctx, theme, cx, cy, compassR)

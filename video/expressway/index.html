@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>中国高速公路网 1988–2025</title>
+    <style>
+      @font-face {
+        font-family: 'Berkeley Mono';
+        src: url('https://cdn.jannchie.com/fonts/variants/BerkeleyMono-Regular.woff2') format('woff2');
+        font-weight: 400;
+        font-display: block;
+      }
+      @font-face {
+        font-family: 'Berkeley Mono';
+        src: url('https://cdn.jannchie.com/fonts/variants/BerkeleyMono-Bold.woff2') format('woff2');
+        font-weight: 700;
+        font-display: block;
+      }
+      html,
+      body {
+        margin: 0;
+        background: #000;
+        overflow: hidden;
+      }
+      #stage,
+      #overlay {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <canvas id="overlay" width="1920" height="1080"></canvas>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

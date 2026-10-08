@@ -24,6 +24,11 @@ export interface LabelTheme {
   city_marker: 'dot' | 'castle' | 'square' | 'star'
   /** 不描边的注记类型（默认海洋、海、大陆：大字直接压在浅色底图上）；彩色底图上的白字要全部描边 */
   noHalo?: string[]
+  /**
+   * 所有注记同一个样式（游戏地图式：不分级别，同一字体、字号与颜色，一律描边）：
+   * weight 字重，tier 字号级别（见 labelSize），字体取 text 并接无衬线的中日文字体
+   */
+  uniform?: { weight: string; tier: number; color: string }
 }
 
 export interface RoadStyle {
@@ -580,9 +585,11 @@ export const THEMES: Theme[] = [
       city: '#ffffff',
       halo: 'rgba(24, 32, 30, 0.7)',
       vertical: [],
-      caps: true,
+      caps: false,
       city_marker: 'dot',
       noHalo: [],
+      // 原神地图的地名只有一种：同一字号的白色无衬线字，深色描边
+      uniform: { weight: '500', tier: 1, color: '#ffffff' },
     },
   },
   {
