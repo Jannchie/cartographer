@@ -42,7 +42,7 @@ export interface WorldCache {
 
 /** 影响板块造山的参数与规划草图版本（不含地形画笔） */
 function plateKey(p: WorldParams, edits?: WorldEdits) {
-  return JSON.stringify([p.seed, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, !!p.globe, !!p.earth, sketchOf(p, edits) ? edits!.sketchRev ?? 1 : 0])
+  return JSON.stringify([p.seed, p.terrainVariant ?? 0, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, !!p.globe, !!p.earth, sketchOf(p, edits) ? edits!.sketchRev ?? 1 : 0])
 }
 
 /** 影响地形阶段的参数、规划草图与地形编辑版本 */
@@ -64,12 +64,21 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   const N = W * H
   // 全球图：宽度是赤道一周
   const kmPerCell = (isGlobe(p) ? EQUATOR_KM : MAP_KM) / W
-  const rng = new RNG(hashString(p.seed))
-  const rTerrain = rng.fork()
-  const rErode = rng.fork()
-  const rClimate = rng.fork()
+  const { seed, terrainVariant } = p
+  const rng = new RNG(hashString(seed))
+  let rTerrain = rng.fork()
+  let rErode = rng.fork()
+  let rClimate = rng.fork()
   const rNames = rng.fork()
   const rPlace = rng.fork()
+  // 地形方案、聚落方案：另起随机数流；0 时沿用种子本身的流（与没有这两个参数时逐位相同）
+  if (terrainVariant) {
+    const tv = new RNG(hashString(`${seed}#terrain${terrainVariant}`))
+    rTerrain = tv.fork()
+    rErode = tv.fork()
+    rClimate = tv.fork()
+  }
+  const rSettle = p.placeVariant ? new RNG(hashString(`${seed}#places${p.placeVariant}`)) : null
 
   const key = terrainKey(p, edits)
   let stage = cache?.stage?.key === key ? cache.stage : undefined
@@ -91,7 +100,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   progress('命名与标注', 0.95)
   const namer = new Namer(p, rNames)
   const settle = p.settlements !== false
-  const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, namer, rPlace, terr.basins, settle)
+  const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, namer, rPlace, terr.basins, rSettle, settle)
   // 地点编辑：用户改过的列表整体替换生成结果（政区按新的都城重算）；缺译名的旧数据用英文名兜底
   const ja = new JaNamer()
   let labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || l.name, ja: l.ja || ja.name(l.kind, l.name) })) : generated
@@ -106,7 +115,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     // 国界、道路的坡度代价按晕渲同样的夸张比例算：全球图每格几十公里，真实坡度太缓，道路会直接翻山
     const slopeKm = reliefKm({ W, kmPerCell })
     progress('划分政区', 0.96)
-    const map = realmMap(elev, hydro.flow, labels, W, H, slopeKm, riverThreshold(W), rPlace.fork())
+    const map = realmMap(elev, hydro.flow, labels, W, H, slopeKm, riverThreshold(W), (rSettle ?? rPlace).fork())
     progress('道路与航线', 0.97)
     const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, slopeKm, riverThreshold(W))
     places = { key: pk, map, roads }
@@ -160,7 +169,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
 
 /** 影响地面（高度、气候、水文、群系）的全部输入：除命名以外的参数 + 地形与气候编辑 */
 export function groundKey(p: WorldParams, edits: WorldEdits = {}) {
-  const { naming: _naming, settlements: _settlements, ...rest } = p
+  const { naming: _naming, settlements: _settlements, placeVariant: _placeVariant, ...rest } = p
   return JSON.stringify([terrainKey(p, edits), rest, arrayHash(edits.temp), arrayHash(edits.rain)])
 }
 
@@ -576,6 +585,8 @@ function makeLabels(
   namer: Namer,
   rng: RNG,
   basins: { x: number; y: number; r: number }[],
+  /** 聚落方案的随机数流：给城镇选址更大的扰动，换出另一套城镇 */
+  settle: RNG | null = null,
   /** 只有地形的阶段不选城镇址（城镇在最后，跳过不影响前面的地物与命名） */
   withTowns = true,
 ): Label[] {
@@ -810,7 +821,7 @@ function makeLabels(
       const gx = elev[i + 1] - elev[i - 1]
       const gy = elev[i + W] - elev[i - W]
       s -= dmath.hypot(gx, gy) * 6
-      score[i] = s + rng.next() * 0.35
+      score[i] = s + (settle ? settle.next() * 0.9 : rng.next() * 0.35)
     }
   }
   const cand: number[] = []

@@ -4,7 +4,7 @@ import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits 
 import { EditorView, isSketchTool, type EditTool, type EditView } from '../../editor/editor'
 import { bumpSketch, sketchFromWorld } from '../../gen/sketch'
 import { autoContinents, floodLand, regionAnchor } from '../../editor/layers'
-import { BIOME_NAMES, DEFAULT_PARAMS, normalizeParams, type Label, type World, type WorldEdits, type WorldParams } from '../../gen/types'
+import { BIOME_NAMES, DEFAULT_PARAMS, isSettlement, normalizeParams, type Label, type World, type WorldEdits, type WorldParams } from '../../gen/types'
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
 import { earthAreas } from '../../gen/earth/realWorld'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
@@ -177,7 +177,8 @@ let sceneStale = false
 /** 生成当前世界时发给 Worker 的编辑（编辑视图的预览只叠加之后新画的部分） */
 let genEdits: WorldEdits = {}
 let sentEdits: WorldEdits = {}
-const undoStack: WorldEdits[] = []
+/** 撤销记录：编辑快照 + 当时的地形、聚落方案（换方案也能撤销） */
+const undoStack: { edits: WorldEdits; terrainVariant: number; placeVariant: number }[] = []
 /** 上次完整重建时的地面版本与地点位置：都没变时只需换地名 */
 let lastGround = ''
 let lastPlaces = ''
@@ -447,7 +448,11 @@ export function generate(quiet = false) {
   p.seed = p.seed.trim() || 'world'
   // 链接、旧存档里带的高度可能与宽度、纬度范围对不上
   normalizeParams(p)
-  // 换了种子：编辑是针对旧世界的，询问后清除；规划草图保留（同一份规划换一套随机细节）
+  // 换了种子：方案编号从头算；编辑是针对旧世界的，询问后清除；规划草图保留（同一份规划换一套随机细节）
+  if (p.seed !== editsSize.seed) {
+    p.terrainVariant = 0
+    p.placeVariant = 0
+  }
   if (p.seed !== editsSize.seed && hasEdits(edits)) {
     const sketch = edits.sketch
     const others = hasEdits({ ...edits, sketch: undefined })
@@ -822,7 +827,11 @@ function scheduleRegen() {
 }
 /** pin 为 false：草图编辑改的是大陆本身，不钉住地点（城镇、地名随新的海陆重新生成） */
 function pushUndo(pin = true) {
-  undoStack.push(snapshotEdits({ ...edits, labels: world && edits.labels ? world.labels.map((l) => ({ ...l })) : edits.labels }))
+  undoStack.push({
+    edits: snapshotEdits({ ...edits, labels: world && edits.labels ? world.labels.map((l) => ({ ...l })) : edits.labels }),
+    terrainVariant: ws.params.terrainVariant ?? 0,
+    placeVariant: ws.params.placeVariant ?? 0,
+  })
   if (undoStack.length > 30) undoStack.shift()
   // 一开始编辑就把现有地点钉住：之后改地形、改气候重算时，城镇与地名不会整体洗牌
   if (pin && !edits.labels && world) {
@@ -849,7 +858,9 @@ function releasePlaces() {
 export function undo() {
   const prev = undoStack.pop()
   if (!prev) return
-  edits = prev
+  edits = prev.edits
+  ws.params.terrainVariant = prev.terrainVariant
+  ws.params.placeVariant = prev.placeVariant
   edits.terrainRev = (edits.terrainRev ?? 0) + 1
   editor?.refreshEdits(edits)
   syncSketch()
@@ -889,6 +900,13 @@ defineStrings([
   ['移除草图，大陆回到按陆地比例随机生成', 'Remove the sketch and go back to random continents', 'スケッチを外し、大陸をランダム生成に戻す'],
   ['退出规划', 'Leave plan', '計画を終了'],
   ['聚落与道路', 'Settlements & roads', '集落と道路'],
+  ['地形方案', 'Terrain variant', '地形案'],
+  ['聚落方案', 'Settlement variant', '集落案'],
+  ['同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成', 'Another set of terrain details for the same seed (a sketch keeps its continents and ranges); places are regenerated for the new terrain', '同じシードで地形の細部を作り直す（スケッチがあれば大陸と山脈は保たれる）。地点は新しい地形に合わせて作り直す'],
+  ['地形不变，换一套城镇选址、国界与道路', 'Same terrain, another set of town sites, borders and roads', '地形はそのままに、町の位置・国境・道路を作り直す'],
+  ['上一个方案', 'Previous variant', '前の案'],
+  ['原样', 'Original', '元の案'],
+  ['下一个方案', 'Next variant', '次の案'],
   ['城镇、国家、道路与航线；关掉时只生成地形、气候、水系与自然地物，先定地形再放聚落', 'Towns, realms, roads and sea routes; turn off to generate only terrain, climate, water and natural features, and add settlements later', '町・国・道路・航路。オフにすると地形・気候・水系・自然地物だけを生成し、集落は後から置けます'],
   ['第一阶段：只有地形', 'Stage 1: terrain only', '第1段階：地形のみ'],
   ['第二阶段：聚落与道路', 'Stage 2: settlements & roads', '第2段階：集落と道路'],
@@ -937,6 +955,31 @@ function pinWorldName() {
   edits.worldNameZh = world.worldNameZh
   edits.worldNameJa = world.worldNameJa
 }
+/**
+ * 换地形方案：同一种子、同一份草图，换一套造山、侵蚀与气候的随机细节。
+ * 钉住的地点、大洲与区域是贴着旧地形摆的，一并放开，按新地形重新生成（可撤销）
+ */
+export function setTerrainVariant(n: number) {
+  n = Math.max(0, Math.round(n))
+  if (n === (ws.params.terrainVariant ?? 0)) return
+  pushUndo(false)
+  pinWorldName()
+  releasePlaces()
+  ws.params.terrainVariant = n
+  generate(ws.mode === 'edit')
+}
+/** 换聚落方案：地面不变，换一套城镇选址与国界；钉住的自然地物名称保留，钉住的城镇放开 */
+export function setPlaceVariant(n: number) {
+  n = Math.max(0, Math.round(n))
+  if (n === (ws.params.placeVariant ?? 0)) return
+  pushUndo(false)
+  pinWorldName()
+  if (edits.labels) edits.labels = edits.labels.filter((l) => !isSettlement(l))
+  if (editor?.selected && isSettlement(editor.selected)) editor.select(null)
+  ws.params.placeVariant = n
+  generate(ws.mode === 'edit')
+}
+
 /**
  * 两阶段生成：关掉时只有地形、气候、水系与自然地物名称；打开时在同一片地面上放城镇、划政区、修道路。
  * 地面沿用缓存，切换只重算地点这一级
