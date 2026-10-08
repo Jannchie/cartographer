@@ -1,7 +1,8 @@
 import { markRaw, reactive, toRaw, watch } from 'vue'
 import { latitudeOf } from '../../gen/climate'
 import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from '../../app/project'
-import { EditorView, type EditTool, type EditView } from '../../editor/editor'
+import { EditorView, isSketchTool, type EditTool, type EditView } from '../../editor/editor'
+import { bumpSketch, sketchFromWorld } from '../../gen/sketch'
 import { autoContinents, floodLand, regionAnchor } from '../../editor/layers'
 import { BIOME_NAMES, DEFAULT_PARAMS, normalizeParams, type Label, type World, type WorldEdits, type WorldParams } from '../../gen/types'
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
@@ -20,7 +21,7 @@ import { DEFAULT_TIME } from '../../render/aerial/daylight'
 import { buildPhysicalTexture, textureCanvases } from '../../render/texture'
 import type { WorkerIn, WorkerOut } from '../../worker'
 import GenWorker from '../../worker?worker'
-import { lang, onLang, placeName, worldTitle } from '../../i18n'
+import { defineStrings, lang, onLang, placeName, worldTitle } from '../../i18n'
 import { app, download, initialQuery, registerRoute, paramSig, storeGet, storeSet, syncRoute } from '../app'
 import { t } from '../i18n'
 import { isTypingTarget } from '../keys'
@@ -133,6 +134,10 @@ export const ws = reactive({
   insp: null as { name: string; zh: string; ja: string; kind: Label['kind'] } | null,
   /** 选中的大洲 */
   region: null as { name: string; zh: string; ja: string } | null,
+  /** 有规划草图（大陆形状与山脉走向由草图决定） */
+  sketch: false,
+  /** 选中的草图山脉 */
+  range: null as { height: number; width: number } | null,
   /** 自动运镜中 */
   touring: false,
 })
@@ -442,14 +447,19 @@ export function generate(quiet = false) {
   p.seed = p.seed.trim() || 'world'
   // 链接、旧存档里带的高度可能与宽度、纬度范围对不上
   normalizeParams(p)
-  // 换了种子：编辑是针对旧世界的，询问后清除
+  // 换了种子：编辑是针对旧世界的，询问后清除；规划草图保留（同一份规划换一套随机细节）
   if (p.seed !== editsSize.seed && hasEdits(edits)) {
-    if (!window.confirm(t('换种子会生成一个全新的世界，当前的编辑将被清除。继续吗？'))) {
+    const sketch = edits.sketch
+    const others = hasEdits({ ...edits, sketch: undefined })
+    const ask = sketch ? '换种子会按同一份草图重新生成细节，草图以外的编辑将被清除。继续吗？' : '换种子会生成一个全新的世界，当前的编辑将被清除。继续吗？'
+    if (others && !window.confirm(t(ask))) {
       p.seed = editsSize.seed
       return
     }
-    edits = {}
+    edits = sketch ? keepEdits('sketch', 'sketchRev') : {}
     undoStack.length = 0
+    editor?.refreshEdits(edits)
+    syncSketch()
   }
   // 换了分辨率：编辑按比例重采样
   if ((p.width !== editsSize.W || p.height !== editsSize.H) && hasEdits(edits)) edits = resampleEdits(edits, editsSize.W, editsSize.H, p.width, p.height)
@@ -795,6 +805,8 @@ export async function openProject(f: File) {
     edits = doc.edits
     editsSize = { W: ws.params.width, H: ws.params.height, seed: ws.params.seed }
     undoStack.length = 0
+    editor?.refreshEdits(edits)
+    syncSketch()
     generate()
   } catch (err) {
     window.alert(t('无法打开：') + t(err instanceof Error ? err.message : String(err)))
@@ -808,15 +820,31 @@ function scheduleRegen() {
   clearTimeout(regenTimer)
   regenTimer = window.setTimeout(() => generate(true), 350)
 }
-function pushUndo() {
-  undoStack.push(snapshotEdits({ ...edits, labels: world ? world.labels.map((l) => ({ ...l })) : edits.labels }))
+/** pin 为 false：草图编辑改的是大陆本身，不钉住地点（城镇、地名随新的海陆重新生成） */
+function pushUndo(pin = true) {
+  undoStack.push(snapshotEdits({ ...edits, labels: world && edits.labels ? world.labels.map((l) => ({ ...l })) : edits.labels }))
   if (undoStack.length > 30) undoStack.shift()
   // 一开始编辑就把现有地点钉住：之后改地形、改气候重算时，城镇与地名不会整体洗牌
-  if (!edits.labels && world) {
+  if (pin && !edits.labels && world) {
     edits.labels = world.labels.map((l) => ({ ...l }))
-    edits.worldName = world.worldName
-    edits.worldNameZh = world.worldNameZh
+    pinWorldName()
   }
+}
+/** 重置编辑时保留的字段：其余丢弃，地形版本号换新（地形可能因此改变） */
+function keepEdits(...keys: (keyof WorldEdits)[]): WorldEdits {
+  const out: WorldEdits = { terrainRev: (edits.terrainRev ?? 0) + 1 }
+  for (const k of keys) (out as Record<string, unknown>)[k] = edits[k]
+  return out
+}
+const WORLD_NAME_KEYS = ['worldName', 'worldNameZh', 'worldNameJa'] as const
+/** 放开钉住的地点、大洲与区域：按当前地形重新生成 */
+function releasePlaces() {
+  edits.labels = undefined
+  edits.regions = undefined
+  edits.regionMeta = undefined
+  edits.areas = undefined
+  editor?.select(null)
+  editor?.refreshEdits(edits)
 }
 export function undo() {
   const prev = undoStack.pop()
@@ -824,13 +852,120 @@ export function undo() {
   edits = prev
   edits.terrainRev = (edits.terrainRev ?? 0) + 1
   editor?.refreshEdits(edits)
+  syncSketch()
   scheduleRegen()
 }
 export function clearEdits() {
-  if (!hasEdits(edits) || !window.confirm(t('清除全部编辑，恢复为程序生成的原样？'))) return
+  // 规划草图不算在内（退出规划另有按钮）：清除的是草图之上的画笔、地点与大洲
+  if (!hasEdits({ ...edits, sketch: undefined }) || !window.confirm(t(edits.sketch ? '清除草图以外的全部编辑？' : '清除全部编辑，恢复为程序生成的原样？'))) return
   pushUndo()
-  edits = { terrainRev: (edits.terrainRev ?? 0) + 1 }
+  edits = keepEdits('sketch', 'sketchRev')
   editor?.refreshEdits(edits)
+  scheduleRegen()
+}
+
+// —— 规划草图 ——
+defineStrings([
+  ['从零规划', 'Plan from scratch', 'ゼロから計画'],
+  ['画出大陆轮廓与山脉走向，其余细节按种子随机生成；之后随时改草图重算。', 'Draw the continents and the run of the mountains; everything else is generated from the seed. Change the sketch at any time to regenerate.', '大陸の輪郭と山脈の走向を描くと、残りはシードから生成されます。スケッチはいつでも修正して再計算できます。'],
+  ['从一片汪洋开始，圈出大陆', 'Start from open ocean and outline the continents', '一面の海から始めて大陸を囲む'],
+  ['空白画布', 'Blank canvas', '白紙から'],
+  ['以当前世界的海陆与主要山脉为底稿，在上面修改', 'Start from the land, sea and main ranges of the current world', '現在の世界の海陸と主な山脈を下絵にする'],
+  ['当前世界', 'Current world', '現在の世界'],
+  ['规划草图', 'Sketch', '計画スケッチ'],
+  ['圈地', 'Lasso', '囲む'],
+  ['陆地', 'Land', '陸地'],
+  ['海洋', 'Ocean', '海洋'],
+  ['山脉', 'Range', '山脈'],
+  ['拖动圈出一块陆地；按住 Alt 圈出海洋', 'Drag to outline land; hold Alt to outline sea', 'ドラッグで陸地を囲む。Alt を押しながらで海'],
+  ['画笔涂出陆地', 'Paint land', 'ブラシで陸地を塗る'],
+  ['画笔涂成海洋：挖出海湾、海峡', 'Paint sea: cut bays and straits', 'ブラシで海にする：湾や海峡を刻む'],
+  ['拖动画出山脉的走向；点选已有山脉可拖动、调高度与宽度', 'Drag to draw the run of a range; click a range to move it or set its height and width', 'ドラッグで山脈の走向を描く。既存の山脈をクリックで移動・高さと幅の調整'],
+  ['山脉高度', 'Range height', '山脈の高さ'],
+  ['山体宽度', 'Range width', '山体の幅'],
+  ['删除这条山脉', 'Delete this range', 'この山脈を削除'],
+  ['地点编辑过后会固定不动；按当前的海陆重新生成全部城镇与地名', 'Places stay fixed once edited; regenerate all towns and names for the current land', '地点は編集後に固定されます。現在の海陸に合わせて町と地名をすべて作り直す'],
+  ['重排地点', 'Re-place towns', '地点を再配置'],
+  ['移除草图，大陆回到按陆地比例随机生成', 'Remove the sketch and go back to random continents', 'スケッチを外し、大陸をランダム生成に戻す'],
+  ['退出规划', 'Leave plan', '計画を終了'],
+  ['草图', 'Sketch', 'スケッチ'],
+  ['规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。', 'A sketch is in use: continents and mountain ranges follow it, land ratio has no effect, and plates only add minor uplands.', '計画スケッチ使用中：大陸の形と山脈はスケッチに従い、陸地比率は効かず、プレートは副次的な山地のみ生みます。'],
+  ['拖动圈出陆地 · 按住 Alt 圈出海洋 · 右键或 Shift 拖动平移 · Ctrl+Z 撤销', 'Drag to outline land · Alt to outline sea · right-drag or Shift to pan · Ctrl+Z undo', 'ドラッグで陸地を囲む · Alt で海 · 右ドラッグか Shift で移動 · Ctrl+Z 元に戻す'],
+  ['拖动画山脉脊线 · 点选山脉后拖动整条或拖顶点 · Delete 删除 · 右键或 Shift 拖动平移 · Ctrl+Z 撤销', 'Drag to draw a ridge · click a range, then drag it or its vertices · Delete removes · right-drag or Shift to pan · Ctrl+Z undo', 'ドラッグで稜線を描く · 山脈を選んで全体か頂点をドラッグ · Delete で削除 · 右ドラッグか Shift で移動 · Ctrl+Z 元に戻す'],
+  ['换种子会按同一份草图重新生成细节，草图以外的编辑将被清除。继续吗？', 'A new seed regenerates the details from the same sketch; edits other than the sketch will be cleared. Continue?', 'シードを変えると同じスケッチで細部を作り直し、スケッチ以外の編集は消去されます。続けますか？'],
+  ['清除草图以外的全部编辑？', 'Clear all edits except the sketch?', 'スケッチ以外の編集をすべて消去しますか？'],
+  ['退出规划？草图将被移除，大陆回到随机生成（可撤销）。', 'Leave the plan? The sketch is removed and continents are generated randomly again (undoable).', '計画を終了しますか？スケッチを外し、大陸はランダム生成に戻ります（元に戻せます）。'],
+])
+function syncSketch() {
+  ws.sketch = !!edits.sketch
+  if (!edits.sketch && isSketchTool(ws.tool)) setTool('select')
+  showRangeInspector(editor?.selectedRange ?? -1)
+}
+/**
+ * 开始从零规划：from 为 world 时以当前世界的海陆与高地为底稿，blank 为一片汪洋。
+ * 原先的地形画笔、地点与大洲都是针对随机大陆的，一并清掉（可撤销）
+ */
+export function startSketch(from: 'world' | 'blank') {
+  if (!world || ws.params.earth) return
+  pushUndo(false)
+  const { W, H } = world
+  const sketch = from === 'world' ? sketchFromWorld(world.elevation, W, H, world.kmPerCell) : { land: new Float32Array(W * H), ranges: [] }
+  edits = { ...keepEdits(...WORLD_NAME_KEYS), sketch }
+  bumpSketch(edits)
+  editor?.refreshEdits(edits)
+  syncSketch()
+  setTool(from === 'world' ? 'ridge' : 'lasso')
+  scheduleRegen()
+}
+/** 世界名钉住：之后重算时世界名不变 */
+function pinWorldName() {
+  if (!world || edits.worldName) return
+  edits.worldName = world.worldName
+  edits.worldNameZh = world.worldNameZh
+  edits.worldNameJa = world.worldNameJa
+}
+/** 退出规划：去掉草图，回到按陆地比例、板块随机生成的大陆 */
+export function endSketch() {
+  if (!edits.sketch || !window.confirm(t('退出规划？草图将被移除，大陆回到随机生成（可撤销）。'))) return
+  pushUndo(false)
+  edits = keepEdits(...WORLD_NAME_KEYS)
+  editor?.refreshEdits(edits)
+  syncSketch()
+  scheduleRegen()
+}
+/** 地点被钉住后不再随大陆变化：按当前草图重新生成全部城镇与地名（大洲划分也重做） */
+export function regenPlaces() {
+  if (!edits.labels && !edits.regions) return
+  pushUndo(false)
+  releasePlaces()
+  generate(true)
+}
+function showRangeInspector(i: number) {
+  rangeEditing = false
+  const r = edits.sketch?.ranges[i]
+  ws.range = r ? { height: r.height, width: r.width } : null
+}
+/** 调山脉的高度、宽度：拖动滑杆只记一次撤销 */
+let rangeEditing = false
+export function setRange(patch: Partial<{ height: number; width: number }>) {
+  const i = editor?.selectedRange ?? -1
+  const r = edits.sketch?.ranges[i]
+  if (!r || !ws.range) return
+  if (!rangeEditing) pushUndo(false)
+  rangeEditing = true
+  Object.assign(r, patch)
+  Object.assign(ws.range, patch)
+  bumpSketch(edits)
+  editor?.draw()
+  scheduleRegen()
+}
+export function deleteRange() {
+  const i = editor?.selectedRange ?? -1
+  if (!edits.sketch?.ranges[i]) return
+  pushUndo(false)
+  edits.sketch.ranges.splice(i, 1)
+  bumpSketch(edits)
+  editor!.selectRange(-1)
   scheduleRegen()
 }
 function ensureEditor() {
@@ -854,6 +989,7 @@ function ensureEditor() {
       },
       onSelect: showInspector,
       onRegionSelect: showRegionInspector,
+      onRangeSelect: showRangeInspector,
     }),
   )
   Object.assign(editor.brush, toRaw(ws.brush))
@@ -1163,6 +1299,7 @@ window.addEventListener('keydown', (e) => {
       return
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && editor?.selected) deleteSelected()
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && ws.tool === 'ridge' && ws.range) deleteRange()
   }
   if (e.ctrlKey || e.metaKey || e.altKey || typing) return
   if (e.key === 'r' || e.key === 'R') randomSeed()

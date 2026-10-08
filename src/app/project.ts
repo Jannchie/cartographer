@@ -1,5 +1,6 @@
 import type { Area } from '../gen/areas'
-import type { Label, WorldEdits, WorldParams } from '../gen/types'
+import { bumpSketch } from '../gen/sketch'
+import type { Label, SketchRange, WorldEdits, WorldParams } from '../gen/types'
 
 /**
  * 项目文档：一份可保存、可重放的世界——种子与参数 + 用户的全部编辑。
@@ -21,6 +22,8 @@ export interface ProjectDoc {
       worldNameZh?: string
       worldNameJa?: string
       areas?: Area[]
+      /** 规划草图：陆地意图（压缩）与山脉折线 */
+      sketch?: { land: string; ranges: SketchRange[] }
     }
   }
 }
@@ -54,6 +57,7 @@ export async function serializeProject(params: WorldParams, edits: WorldEdits): 
   e.worldNameZh = edits.worldNameZh
   e.worldNameJa = edits.worldNameJa
   if (edits.areas) e.areas = edits.areas
+  if (edits.sketch) e.sketch = { land: await packF32(edits.sketch.land), ranges: edits.sketch.ranges }
   return JSON.stringify(doc)
 }
 
@@ -75,6 +79,10 @@ export async function parseProject(text: string): Promise<{ params: WorldParams;
   edits.worldNameZh = e.worldNameZh
   edits.worldNameJa = e.worldNameJa
   if (e.areas) edits.areas = e.areas
+  if (e.sketch) {
+    edits.sketch = { land: await unpackF32(e.sketch.land), ranges: e.sketch.ranges }
+    bumpSketch(edits)
+  }
   return { params: doc.world.params, edits }
 }
 
@@ -99,7 +107,7 @@ export function resampleEdits(edits: WorldEdits, W0: number, H0: number, W: numb
   }
   const sx = (W - 1) / (W0 - 1)
   const sy = (H - 1) / (H0 - 1)
-  return {
+  const out: WorldEdits = {
     terrain: rs(edits.terrain),
     temp: rs(edits.temp),
     rain: rs(edits.rain),
@@ -111,27 +119,34 @@ export function resampleEdits(edits: WorldEdits, W0: number, H0: number, W: numb
     worldNameJa: edits.worldNameJa,
     terrainRev: (edits.terrainRev ?? 0) + 1,
     areas: edits.areas?.map((a) => ({ ...a, poly: a.poly.map(([x, y]) => [x * sx, y * sy] as [number, number]), at: [a.at[0] * sx, a.at[1] * sy] as [number, number] })),
+    sketch: edits.sketch && {
+      land: rs(edits.sketch.land) ?? new Float32Array(W * H),
+      ranges: edits.sketch.ranges.map((r) => ({ ...r, pts: r.pts.map((v, j) => v * (j % 2 ? sy : sx)) })),
+    },
   }
+  if (out.sketch) bumpSketch(out)
+  return out
 }
 
 export function hasEdits(e: WorldEdits) {
-  return !!(e.terrain || e.temp || e.rain || e.labels || e.regions || e.areas)
+  return !!(e.terrain || e.temp || e.rain || e.labels || e.regions || e.areas || e.sketch)
 }
 
-/** 撤销用的快照（数组复制一份） */
+/**
+ * 撤销用的快照：会被原地修改的数组与列表复制一份，其余标量直接共用。
+ * 草图的陆地掩码写时复制：快照与当前共用同一份，编辑器动笔改陆地前先换成副本（见 EditorView.ownLand）
+ */
 export function snapshotEdits(e: WorldEdits): WorldEdits {
   return {
+    ...e,
     terrain: e.terrain && Float32Array.from(e.terrain),
     temp: e.temp && Float32Array.from(e.temp),
     rain: e.rain && Float32Array.from(e.rain),
     labels: e.labels?.map((l) => ({ ...l })),
     regions: e.regions && Int16Array.from(e.regions),
     regionMeta: e.regionMeta?.map((m) => ({ ...m })),
-    worldName: e.worldName,
-    worldNameZh: e.worldNameZh,
-    worldNameJa: e.worldNameJa,
-    terrainRev: e.terrainRev,
     areas: e.areas?.map((a) => ({ ...a, poly: a.poly.map((p) => [p[0], p[1]] as [number, number]), at: [a.at[0], a.at[1]] as [number, number] })),
+    sketch: e.sketch && { land: e.sketch.land, ranges: e.sketch.ranges.map((r) => ({ ...r, pts: r.pts.slice() })) },
   }
 }
 

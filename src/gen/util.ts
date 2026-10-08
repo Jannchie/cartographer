@@ -1,3 +1,5 @@
+import * as dmath from './dmath'
+
 export const INF = 1e20
 
 export function clamp(x: number, a: number, b: number): number {
@@ -183,4 +185,46 @@ export function neighbors8(W: number): { off: Int32Array; dx: Int8Array; dy: Int
     dist[k] = k < 4 ? 1 : Math.SQRT2
   }
   return { off, dx, dy, dist }
+}
+
+/** Ramer–Douglas–Peucker 折线简化（交替存储的坐标）：偏离弦线不超过 tol 的点去掉 */
+export function simplifyLine(pts: number[], tol: number) {
+  const n = pts.length / 2
+  if (n <= 2) return pts
+  const keep = new Uint8Array(n)
+  keep[0] = keep[n - 1] = 1
+  const stack: [number, number][] = [[0, n - 1]]
+  while (stack.length) {
+    const [a, b] = stack.pop()!
+    const ax = pts[a * 2]
+    const ay = pts[a * 2 + 1]
+    const dx = pts[b * 2] - ax
+    const dy = pts[b * 2 + 1] - ay
+    const len = dmath.hypot(dx, dy) || 1
+    let best = -1
+    let bd = tol
+    for (let k = a + 1; k < b; k++) {
+      const d = Math.abs((pts[k * 2] - ax) * dy - (pts[k * 2 + 1] - ay) * dx) / len
+      if (d > bd) ((bd = d), (best = k))
+    }
+    if (best >= 0) {
+      keep[best] = 1
+      stack.push([a, best], [best, b])
+    }
+  }
+  const out: number[] = []
+  for (let k = 0; k < n; k++) if (keep[k]) out.push(pts[k * 2], pts[k * 2 + 1])
+  return out
+}
+
+/** 有符号距离（格）：inside 为 1 的格取到外部的距离（正），其余取到内部的距离（负） */
+export function signedDistance(inside: Uint8Array, W: number, H: number) {
+  const N = W * H
+  const outside = new Uint8Array(N)
+  for (let i = 0; i < N; i++) outside[i] = 1 - inside[i]
+  const dIn = edt(inside, W, H)
+  const dOut = edt(outside, W, H)
+  const out = new Float32Array(N)
+  for (let i = 0; i < N; i++) out[i] = inside[i] ? dOut[i] : -dIn[i]
+  return out
 }

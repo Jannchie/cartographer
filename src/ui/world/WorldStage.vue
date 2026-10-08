@@ -42,7 +42,11 @@ const hint = computed(() =>
         ? '拖动平移 · 滚轮缩放 · 方向键平移 · +/− 缩放 · 双击或 0 复位 · R 随机'
         : ws.mode === 'areas'
           ? '点选区域 · 拖顶点改边界 · 拖边中点加顶点 · 双击顶点删除 · 拖名字挪注记 · Ctrl+Z 撤销'
-          : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销',
+          : ws.tool === 'lasso'
+            ? '拖动圈出陆地 · 按住 Alt 圈出海洋 · 右键或 Shift 拖动平移 · Ctrl+Z 撤销'
+            : ws.tool === 'ridge'
+              ? '拖动画山脉脊线 · 点选山脉后拖动整条或拖顶点 · Delete 删除 · 右键或 Shift 拖动平移 · Ctrl+Z 撤销'
+              : '左键绘制 / 选取 · 右键或 Shift 拖动平移 · 滚轮缩放 · Alt+滚轮 画笔大小 · Ctrl+Z 撤销',
 )
 </script>
 

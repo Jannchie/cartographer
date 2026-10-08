@@ -1375,6 +1375,20 @@ select.lang:hover {
 .sub > * + * {
   margin-top: 10px;
 }
+/* 编辑页顶部的规划草图块：与下面的编辑工具用分隔线隔开 */
+.plan {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.plan > * + * {
+  margin-top: 10px;
+}
+.plan-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
 .inspector {
   padding-top: 14px;
   border-top: 1px solid var(--rule-2);
@@ -2510,3 +2524,4 @@ select.lang:hover {
   display: block;
   flex: none;
 }
+

@@ -166,6 +166,9 @@ export function dropletErosion(
   const landIdx: number[] = []
   for (let i = 0; i < W * H; i++) if (h[i] > 0) landIdx.push(i)
   if (landIdx.length === 0) return
+  // 雨滴总数按全图格数给：陆地极少时（草图几乎全是海）同几格会被反复冲刷而发散，按每格 8 滴封顶
+  //（侵蚀强度 ≤ 2、陆地比例 ≥ 0.12 时达不到上限）
+  count = Math.min(count, landIdx.length * 8)
 
   for (let d = 0; d < count; d++) {
     if (onProgress && (d & 16383) === 0) onProgress(d / count)
