@@ -1,10 +1,11 @@
 import { Noise } from './noise'
 import { RNG } from './rng'
-import type { WorldParams } from './types'
+import type { WorldParams, WorldSketch } from './types'
 import { edt, quantile, smoothstep, clamp } from './util'
 import * as dmath from './dmath'
 import { earthElevation } from './earth/index'
 import { latitudeOf } from './climate'
+import { sampleField, sketchFields } from './sketch'
 
 interface Plate {
   x: number
@@ -29,8 +30,10 @@ export interface TerrainResult {
  * 板块构造 + 分形噪声 → 原始地形。
  * 大陆由扭曲的低频噪声与板块偏置共同决定；山脉出现在汇聚板块边界，
  * 离散边界在陆上形成裂谷、在洋底形成洋中脊；洋-洋汇聚产生岛弧。
+ * 有规划草图时：海陆取自草图的海岸线（再叠扭曲与噪声做出分形海岸），造山带沿草图的山脉折线，
+ * 板块汇聚只留下三成作为次级山地；海平面固定在草图海岸线上，不再按陆地比例取分位数。
  */
-export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): TerrainResult {
+export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number, sketch?: WorldSketch): TerrainResult {
   const { width: W, height: H } = p
   const N = W * H
   const A = W / H
@@ -79,6 +82,11 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
   const d2 = new Float64Array(K)
   const gain = 0.44 + 0.14 * p.coastRoughness
   const mStr = p.mountains
+  const sf = sketch && sketch.land.length === N ? sketchFields(sketch, W, H, kmPerCell) : null
+  // 草图海岸线的扭曲幅度（格）与海岸噪声幅度
+  const warpCells = 0.035 * H * (0.4 + p.coastRoughness)
+  const coastAmp = 0.06 + 0.16 * p.coastRoughness
+  const plateMtn = sf ? 0.3 : 1
 
   // 低频噪声（域扭曲、各种掩码，最短周期约 H/17 格）在粗网格上求值再双线性插值，
   // 省掉每格一半的 simplex 调用
@@ -170,7 +178,18 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       const bd = (d2[i2] - d2[i1]) / (2 * cl)
       const conv = ((P1.vx - P2.vx) * cx + (P1.vy - P2.vy) * cy) / cl
 
-      const cont = 0.62 * nCont.fbm(su * 1.7, sv * 1.7, 8, 2, gain) + bias
+      let cont: number
+      let rgv = 0
+      let plv = 0
+      if (sf) {
+        // 草图：在扭曲后的位置查海岸距离与山脉隆起，山脉也跟着弯折，不是笔直的管子
+        const wx = x + warpCells * (lf[0] + 0.6 * lf[2])
+        const wy = y + warpCells * (lf[1] + 0.6 * lf[3])
+        const sd = sampleField(sf.coast, W, H, wx, wy) / (0.05 * H)
+        cont = (0.22 * sd) / (1 + Math.abs(sd)) + coastAmp * nCont.fbm(su * 1.7, sv * 1.7, 8, 2, gain)
+        rgv = sampleField(sf.ridge, W, H, wx, wy)
+        plv = sampleField(sf.plateau, W, H, wx, wy)
+      } else cont = 0.62 * nCont.fbm(su * 1.7, sv * 1.7, 8, 2, gain) + bias
       const landF = smoothstep(-0.2, 0.15, cont)
 
       // 汇聚边界 → 造山带
@@ -185,10 +204,14 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       // 离散边界：陆上裂谷、洋底洋中脊
       const div = smoothstep(0.1, 1, -conv)
       // ridged ≥ 0：权重恰为 0 的噪声项不求值，结果逐位不变
-      const r = g * up !== 0 || (div !== 0 && landF <= 0.5) ? nMnt.ridged(su * 7, sv * 7, 7) : 0
+      const r = g * up !== 0 || rgv > 0.004 || (div !== 0 && landF <= 0.5) ? nMnt.ridged(su * 7, sv * 7, 7) : 0
       let t = g * up * chain * (0.3 + 0.7 * landF) * (0.25 + 1.05 * r)
       // 造山带后方的高原
       t += gw * up * landF * 0.16 * chain
+      t *= plateMtn
+      // 草图山脉：沿折线的主脊（起伏比板块造山带小一些，用户画的走向不会被断成几截）+ 两侧高原
+      if (rgv > 0.004) t += rgv * (0.55 + 0.45 * chain) * (0.3 + 0.7 * landF) * (0.25 + 1.05 * r)
+      if (plv > 0.004) t += plv * landF * 0.16 * (0.55 + 0.45 * chain)
       const br = bd / 0.022
       const rg = dmath.exp(-(br * br)) * div
       t += rg * (landF > 0.5 ? -0.1 : 0.08 * (0.5 + r))
@@ -207,15 +230,17 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
       const i = y * W + x
       // 边缘渐沉入海
       const ed = Math.min(u, A - u, v, 1 - v)
-      const fall = 1 - smoothstep(0.0, 0.14, ed)
+      // 草图的海陆由用户决定，图边不强制沉入海
+      const fall = sf ? 0 : 1 - smoothstep(0.0, 0.14, ed)
       raw[i] = cont + t * 0.95 + hills + upland - 0.75 * fall * fall
       tect[i] = t
-      activeRaw[i] = g * up
+      activeRaw[i] = Math.max(g * up * plateMtn, Math.min(1, rgv))
     }
   }
 
   // —— 海平面：按陆地比例取分位数 ——
-  const sea = quantile(raw, 1 - p.landRatio)
+  // 草图：海平面取在使陆地面积与草图相同的分位数上（丘陵、山脉让海岸附近整体偏高，固定取 0 会让陆地向海外扩）
+  const sea = sf ? sketchSeaLevel(raw, sketch!.land) : quantile(raw, 1 - p.landRatio)
   const elev = new Float32Array(N)
   const uplift = new Float32Array(N)
   for (let i = 0; i < N; i++) {
@@ -240,7 +265,7 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number): Terra
   const nB = new Noise(rng.fork())
   for (const b of basins) {
     const floor = rng.range(0.25, 0.7)
-    const rim = rng.range(1.4, 2.6) * mStr
+    const rim = rng.range(1.4, 2.6) * mStr * (sf ? 0.5 : 1)
     const R = b.r * 1.7
     const x0 = Math.max(0, Math.floor(b.x - R)), x1 = Math.min(W - 1, Math.ceil(b.x + R))
     const y0 = Math.max(0, Math.floor(b.y - R)), y1 = Math.min(H - 1, Math.ceil(b.y + R))
@@ -373,6 +398,18 @@ export function buildEarthTerrain(p: WorldParams, rng: RNG): TerrainResult {
     }
   }
   return { elev, uplift, active: new Float32Array(N), basins: [] }
+}
+
+function sketchSeaLevel(raw: Float32Array, land: Float32Array) {
+  let n = 0
+  for (let i = 0; i < land.length; i++) if (land[i] >= 0.5) n++
+  if (n === 0) {
+    // 全是海：海平面略高于最高点
+    let mx = -Infinity
+    for (let i = 0; i < raw.length; i++) mx = Math.max(mx, raw[i])
+    return mx + 1e-3
+  }
+  return quantile(raw, 1 - n / land.length)
 }
 
 function lerpN(a: number, b: number, t: number) {

@@ -178,6 +178,26 @@ export interface River {
   flow: Float32Array
 }
 
+/** 规划草图里的一条山脉：沿折线隆起，高度、宽度可调，细部仍由噪声与侵蚀生成 */
+export interface SketchRange {
+  /** 交替存储的 x, y（格坐标） */
+  pts: number[]
+  /** 高度倍率 0.2 ~ 2（1 约与板块汇聚边界的造山带相当） */
+  height: number
+  /** 山体半宽（km） */
+  width: number
+}
+
+/**
+ * 从零规划的草图：用户指定大陆轮廓与山脉走向，生成时取代随机的大陆噪声与板块造山；
+ * 海岸细节、丘陵、盆地、侵蚀与水系仍按种子随机生成。
+ */
+export interface WorldSketch {
+  /** 陆地意图 0~1（W×H），0.5 为海岸线 */
+  land: Float32Array
+  ranges: SketchRange[]
+}
+
 /**
  * 用户对生成结果的编辑。所有增量图都是 W×H（与 params.width/height 对应）。
  * 生成流程会把它们叠加进对应阶段，于是改完参数重新生成时编辑不会丢。
@@ -201,6 +221,10 @@ export interface WorldEdits {
   worldNameJa?: string
   /** 地形编辑的版本号：变了才需要重算侵蚀 */
   terrainRev?: number
+  /** 从零规划的草图（有它时大陆形状与山脉走向由草图决定，陆地比例不再起作用） */
+  sketch?: WorldSketch
+  /** 草图的版本号：变了才需要重算造山 */
+  sketchRev?: number
   /** 有名字的区域（区域视图里改过就存完整的列表，替换自动推断的；见 gen/areas.ts）。不影响地形，不发给生成线程 */
   areas?: Area[]
 }

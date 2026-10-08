@@ -1,5 +1,7 @@
 import type { Label, World, WorldEdits } from '../gen/types'
 import { cjkFont, lang, placeName, t } from '../i18n'
+import { bumpSketch, fillPolygon, nearestOnLine, paintLand, RANGE_DEFAULT } from '../gen/sketch'
+import { simplifyLine } from '../gen/util'
 import { ELEV_RAMP, RAIN_RAMP, REGION_COLORS, TEMP_RAMP, floodLand, isolines, rampColor, type IsoGroup, type Ramp } from './layers'
 
 /**
@@ -7,20 +9,28 @@ import { ELEV_RAMP, RAIN_RAMP, REGION_COLORS, TEMP_RAMP, floodLand, isolines, ra
  *  - 地形画笔（抬升 / 下沉 / 抹平）：改的是侵蚀前的"地形意图"，松手后重新演算侵蚀、水系与气候；
  *  - 气候画笔（升温 / 降温 / 增雨 / 减雨）；
  *  - 大洲：点选陆块建立大洲，画笔加入 / 移出；
- *  - 地点：选中后改名、改类型、拖动、删除，或点击空白处新增。
- * 底图随画笔切换：地形 → 分层设色 + 等高线，气温 / 降水 → 热力图 + 等值线，大洲 → 区域着色。
+ *  - 地点：选中后改名、改类型、拖动、删除，或点击空白处新增；
+ *  - 规划草图（有草图时）：陆地 / 海洋画笔、套索圈出陆地（按住 Alt 圈出海洋）、画山脉脊线，
+ *    点选山脉后可整条拖动或拖动顶点。
+ * 底图随画笔切换：地形 → 分层设色 + 等高线，气温 / 降水 → 热力图 + 等值线，大洲 → 区域着色，草图 → 海陆两色 + 脊线。
  */
 
-export type EditTool = 'select' | 'raise' | 'lower' | 'smooth' | 'warm' | 'cool' | 'wet' | 'dry' | 'place' | 'region' | 'regionAdd' | 'regionErase'
-export type EditView = 'relief' | 'elevation' | 'temperature' | 'rain' | 'regions'
+export type EditTool =
+  | 'select' | 'raise' | 'lower' | 'smooth' | 'warm' | 'cool' | 'wet' | 'dry' | 'place' | 'region' | 'regionAdd' | 'regionErase'
+  | 'land' | 'sea' | 'lasso' | 'ridge'
+export type EditView = 'relief' | 'elevation' | 'temperature' | 'rain' | 'regions' | 'sketch'
+
+export const SKETCH_TOOLS: EditTool[] = ['land', 'sea', 'lasso', 'ridge']
+export const isSketchTool = (t: EditTool) => SKETCH_TOOLS.includes(t)
 
 export interface EditorCallbacks {
   /** 一笔画完（或地点增删改完）：kind 决定需要重算到哪一步 */
-  onCommit: (kind: 'terrain' | 'climate' | 'labels' | 'regions') => void
-  /** 一笔开始前：用于撤销 */
-  onBeforeEdit: () => void
+  onCommit: (kind: 'terrain' | 'climate' | 'labels' | 'regions' | 'sketch') => void
+  /** 一笔开始前：用于撤销。pin 为 false 时不把现有地点钉住（草图改的是大陆本身，地点应随之重新生成） */
+  onBeforeEdit: (pin?: boolean) => void
   onSelect: (label: Label | null) => void
   onRegionSelect: (id: number) => void
+  onRangeSelect: (index: number) => void
 }
 
 /** 每种画笔默认对应的底图 */
@@ -37,6 +47,10 @@ const TOOL_VIEW: Record<EditTool, EditView> = {
   region: 'regions',
   regionAdd: 'regions',
   regionErase: 'regions',
+  land: 'sketch',
+  sea: 'sketch',
+  lasso: 'sketch',
+  ridge: 'sketch',
 }
 
 /** 每种地点在编辑图上的样式 */
@@ -82,7 +96,19 @@ export class EditorView {
   private view = { x: 0, y: 0, k: 1 }
   private raf = 0
   private mouse = { x: -1, y: -1, inside: false }
-  private drag: { mode: 'pan' | 'paint' | 'move'; x: number; y: number; vx: number; vy: number; label?: Label } | null = null
+  private drag: {
+    mode: 'pan' | 'paint' | 'move' | 'lasso' | 'ridge' | 'rangeMove' | 'vertex'
+    x: number
+    y: number
+    vx: number
+    vy: number
+    label?: Label
+    /** 套索 / 新脊线的路径（格坐标）；拖动山脉时是拖动前的折线 */
+    path?: number[]
+    /** 拖动的顶点序号；套索里借作"圈出海洋"的标记 */
+    vertex?: number
+    moved?: boolean
+  } | null = null
   private dirty = { x0: 1e9, y0: 1e9, x1: -1, y1: -1 }
   tool: EditTool = 'select'
   /** 手动指定的底图；null 表示随画笔自动切换 */
@@ -90,6 +116,8 @@ export class EditorView {
   brush = { radius: 18, strength: 0.5 }
   selected: Label | null = null
   selectedRegion = -1
+  /** 选中的草图山脉（下标） */
+  selectedRange = -1
   showNames = true
 
   constructor(
@@ -141,6 +169,7 @@ export class EditorView {
   /** 编辑数据被外部替换（撤销、清除、打开项目、自动划分）后重画 */
   refreshEdits(edits: WorldEdits) {
     this.edits = edits
+    if (this.selectedRange >= 0 && !edits.sketch?.ranges[this.selectedRange]) this.selectRange(-1)
     this.full()
   }
 
@@ -262,6 +291,7 @@ export class EditorView {
     const rn = this.edits.rain
     const grn = this.genEdits.rain
     const regions = this.edits.regions
+    const sk = this.edits.sketch?.land.length === W * H ? this.edits.sketch.land : null
     const k = 22 / w.kmPerCell
     const rgb = [0, 0, 0]
     for (let y = y0; y <= y1; y++) {
@@ -293,6 +323,14 @@ export class EditorView {
             rgb[2] = 66
             s = 1
           }
+        } else if (mode === 'sketch' && sk) {
+          // 草图：规划的海陆两色，淡淡透出生成结果的地表色与山体阴影
+          const l = sk[i] >= 0.5
+          const m = 0.62
+          rgb[0] = c.data[i * 4] * (1 - m) + (l ? 206 : 46) * m
+          rgb[1] = c.data[i * 4 + 1] * (1 - m) + (l ? 192 : 74) * m
+          rgb[2] = c.data[i * 4 + 2] * (1 - m) + (l ? 152 : 104) * m
+          s = h > 0 ? 0.8 + 0.2 * sh : 1
         } else {
           rgb[0] = c.data[i * 4]
           rgb[1] = c.data[i * 4 + 1]
@@ -386,6 +424,13 @@ export class EditorView {
       out.push(...isolines(this.liveElevation(), W, H, [[0.0005, 'rgba(15,20,25,0.7)', 1]]))
       return out
     }
+    if (mode === 'sketch') {
+      // 草图海岸线（亮）与生成的海岸线（暗）
+      const out = isolines(this.liveElevation(), W, H, [[0.0005, 'rgba(10,20,30,0.55)', 0.9]])
+      const sk = this.edits.sketch
+      if (sk?.land.length === W * H) out.push(...isolines(sk.land, W, H, [[0.5, 'rgba(255,244,214,0.95)', 1.6]], 1))
+      return out
+    }
     if (mode === 'rain') {
       const f = this.liveField('rain')
       // 海上不画等降水量线
@@ -449,6 +494,7 @@ export class EditorView {
     ctx.strokeStyle = 'rgba(0,0,0,0.5)'
     ctx.lineWidth = 1
     ctx.strokeRect(x - 0.5, y - 0.5, w.W * k + 1, w.H * k + 1)
+    if (this.viewMode === 'sketch') this.renderSketch(ctx)
     // 地点
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -488,7 +534,7 @@ export class EditorView {
       }
     }
     // 画笔光标
-    if (this.mouse.inside && this.isBrush()) {
+    if (this.mouse.inside && this.isBrush() && this.tool !== 'lasso' && this.tool !== 'ridge') {
       ctx.beginPath()
       ctx.arc(this.mouse.x, this.mouse.y, this.brush.radius * k, 0, Math.PI * 2)
       ctx.strokeStyle = 'rgba(255,255,255,0.85)'
@@ -501,8 +547,92 @@ export class EditorView {
     }
   }
 
+  /** 草图：山脉（半透明的山体带 + 脊线，选中的带顶点手柄）与正在画的套索、脊线 */
+  private renderSketch(ctx: CanvasRenderingContext2D) {
+    const w = this.world!
+    const sk = this.edits.sketch
+    if (!sk) return
+    const { x, y, k } = this.view
+    const trace = (pts: number[]) => {
+      ctx.beginPath()
+      ctx.moveTo(x + pts[0] * k, y + pts[1] * k)
+      for (let j = 2; j < pts.length; j += 2) ctx.lineTo(x + pts[j] * k, y + pts[j + 1] * k)
+    }
+    ctx.save()
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    sk.ranges.forEach((r, idx) => {
+      const sel = idx === this.selectedRange
+      trace(r.pts)
+      ctx.strokeStyle = sel ? 'rgba(255,210,122,0.28)' : 'rgba(120,70,40,0.22)'
+      ctx.lineWidth = Math.max(4, (2 * r.width * k) / w.kmPerCell)
+      ctx.stroke()
+      trace(r.pts)
+      ctx.strokeStyle = sel ? '#ffd27a' : 'rgba(90,45,25,0.95)'
+      ctx.lineWidth = 1.5 + 1.5 * r.height
+      ctx.stroke()
+      if (sel) {
+        for (let j = 0; j < r.pts.length; j += 2) {
+          ctx.beginPath()
+          ctx.arc(x + r.pts[j] * k, y + r.pts[j + 1] * k, 4, 0, Math.PI * 2)
+          ctx.fillStyle = '#1b1b1b'
+          ctx.fill()
+          ctx.strokeStyle = '#ffd27a'
+          ctx.lineWidth = 1.5
+          ctx.stroke()
+        }
+      }
+    })
+    const d = this.drag
+    if (d?.path && d.path.length >= 4 && (d.mode === 'lasso' || d.mode === 'ridge')) {
+      trace(d.path)
+      if (d.mode === 'lasso') {
+        ctx.closePath()
+        ctx.fillStyle = d.vertex ? 'rgba(46,74,104,0.35)' : 'rgba(206,192,152,0.35)'
+        ctx.fill()
+        ctx.setLineDash([5, 4])
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1.3
+      } else {
+        ctx.strokeStyle = 'rgba(90,45,25,0.95)'
+        ctx.lineWidth = 3
+      }
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
   private isBrush() {
     return this.tool !== 'select' && this.tool !== 'place' && this.tool !== 'region'
+  }
+
+  selectRange(i: number) {
+    this.selectedRange = i
+    this.cb.onRangeSelect(i)
+    this.draw()
+  }
+
+  /** 屏幕点附近的草图山脉：先看选中山脉的顶点，再看各条脊线（像素距离 8 以内） */
+  private hitRange(sx: number, sy: number): { range: number; vertex: number } | null {
+    const sk = this.edits.sketch
+    if (!sk) return null
+    const c = this.toCell(sx, sy)
+    const tol = 8 / this.view.k
+    const sel = sk.ranges[this.selectedRange]
+    if (sel) {
+      const h = nearestOnLine(sel.pts, c.x, c.y)
+      if (h.vertexDist < tol) return { range: this.selectedRange, vertex: h.vertex }
+    }
+    let best = -1
+    let bd = tol
+    sk.ranges.forEach((r, i) => {
+      const h = nearestOnLine(r.pts, c.x, c.y)
+      if (h.dist < bd) {
+        bd = h.dist
+        best = i
+      }
+    })
+    return best >= 0 ? { range: best, vertex: -1 } : null
   }
 
   /** 屏幕点附近的地点（像素距离 14 以内，取最近） */
@@ -572,6 +702,16 @@ export class EditorView {
     const y1 = Math.min(H - 1, Math.ceil(c.y + R))
     if (x1 < x0 || y1 < y0) return
     const tool = this.tool
+    if (tool === 'land' || tool === 'sea') {
+      const sk = this.edits.sketch
+      if (!sk || sk.land.length !== N) return
+      const b = paintLand(sk.land, W, H, c.x, c.y, R, tool === 'land' ? 1 : 0, Math.min(1, this.brush.strength * 0.8 * Math.max(0.3, dt / 0.03)))
+      bumpSketch(this.edits)
+      this.markDirty(b.x0, b.y0, b.x1, b.y1)
+      this.refresh()
+      this.draw()
+      return
+    }
     if (tool === 'regionAdd' || tool === 'regionErase') {
       const reg = this.edits.regions
       const sel = this.selectedRegion
@@ -649,6 +789,39 @@ export class EditorView {
     this.draw()
   }
 
+  /** 撤销快照与当前编辑共用陆地掩码（写时复制）：这一笔要改陆地，先换成自己的副本 */
+  private ownLand() {
+    const sk = this.edits.sketch
+    if (sk) sk.land = Float32Array.from(sk.land)
+  }
+
+  /** 套索圈完：填成陆地（或海洋）；脊线画完：简化成折线，作为新山脉加入并选中。太短的一笔当作点击空白，取消选中 */
+  private finishStroke(mode: 'lasso' | 'ridge', path: number[], toSea: boolean) {
+    const w = this.world
+    const sk = this.edits.sketch
+    if (!w || !sk) return
+    let len = 0
+    for (let j = 2; j < path.length; j += 2) len += Math.hypot(path[j] - path[j - 2], path[j + 1] - path[j - 1])
+    if (len * this.view.k < 12) {
+      if (mode === 'ridge') this.selectRange(-1)
+      this.draw()
+      return
+    }
+    this.cb.onBeforeEdit(false)
+    if (mode === 'lasso') {
+      this.ownLand()
+      const b = fillPolygon(sk.land, w.W, w.H, path, toSea ? 0 : 1)
+      if (b) this.markDirty(b.x0, b.y0, b.x1, b.y1)
+      this.refresh()
+    } else {
+      sk.ranges.push({ pts: simplifyLine(path, Math.max(0.6, 3 / this.view.k)), ...RANGE_DEFAULT })
+      this.selectRange(sk.ranges.length - 1)
+    }
+    bumpSketch(this.edits)
+    this.cb.onCommit('sketch')
+    this.draw()
+  }
+
   private bind() {
     const el = this.canvas
     let last = 0
@@ -676,9 +849,27 @@ export class EditorView {
         this.drag = { mode: 'pan', x: p.x, y: p.y, vx: this.view.x, vy: this.view.y }
         return
       }
+      if (this.tool === 'lasso' || this.tool === 'ridge') {
+        const sk = this.edits.sketch
+        if (!sk) return
+        const c = this.toCell(p.x, p.y)
+        if (this.tool === 'ridge') {
+          const hit = this.hitRange(p.x, p.y)
+          if (hit) {
+            if (hit.range !== this.selectedRange) this.selectRange(hit.range)
+            this.cb.onBeforeEdit(false)
+            const r = sk.ranges[hit.range]
+            this.drag = { mode: hit.vertex >= 0 ? 'vertex' : 'rangeMove', x: p.x, y: p.y, vx: 0, vy: 0, path: r.pts.slice(), vertex: hit.vertex }
+            return
+          }
+        }
+        this.drag = { mode: this.tool, x: p.x, y: p.y, vx: 0, vy: 0, path: [c.x, c.y], vertex: this.tool === 'lasso' && e.altKey ? 1 : 0 }
+        return
+      }
       if (this.isBrush()) {
         if ((this.tool === 'regionAdd' || this.tool === 'regionErase') && this.selectedRegion < 0) return
-        this.cb.onBeforeEdit()
+        this.cb.onBeforeEdit(!isSketchTool(this.tool))
+        if (this.tool === 'land' || this.tool === 'sea') this.ownLand()
         this.drag = { mode: 'paint', x: p.x, y: p.y, vx: 0, vy: 0 }
         last = performance.now()
         this.stamp(p.x, p.y, 0.03)
@@ -729,6 +920,28 @@ export class EditorView {
           this.stamp(d.x, d.y, 0.02)
           len -= step
         }
+      } else if ((d?.mode === 'lasso' || d?.mode === 'ridge') && d.path) {
+        // 屏幕上移动超过 3 像素才记一个点
+        const n = d.path.length
+        const c = this.toCell(p.x, p.y)
+        if (Math.hypot(c.x - d.path[n - 2], c.y - d.path[n - 1]) * this.view.k >= 3) d.path.push(c.x, c.y)
+      } else if ((d?.mode === 'rangeMove' || d?.mode === 'vertex') && d.path) {
+        const r = this.edits.sketch?.ranges[this.selectedRange]
+        if (r) {
+          const ox = (p.x - d.x) / this.view.k
+          const oy = (p.y - d.y) / this.view.k
+          if (d.mode === 'vertex') {
+            const j = d.vertex! * 2
+            r.pts[j] = d.path[j] + ox
+            r.pts[j + 1] = d.path[j + 1] + oy
+          } else {
+            for (let j = 0; j < r.pts.length; j += 2) {
+              r.pts[j] = d.path[j] + ox
+              r.pts[j + 1] = d.path[j + 1] + oy
+            }
+          }
+          d.moved = d.moved || Math.hypot(p.x - d.x, p.y - d.y) > 2
+        }
       } else if (d?.mode === 'pan') {
         this.view.x = d.vx + p.x - d.x
         this.view.y = d.vy + p.y - d.y
@@ -745,8 +958,15 @@ export class EditorView {
       if (!d) return
       if (d.mode === 'paint') {
         const t = this.tool
-        this.cb.onCommit(t === 'raise' || t === 'lower' || t === 'smooth' ? 'terrain' : t === 'regionAdd' || t === 'regionErase' ? 'regions' : 'climate')
+        this.cb.onCommit(t === 'raise' || t === 'lower' || t === 'smooth' ? 'terrain' : t === 'regionAdd' || t === 'regionErase' ? 'regions' : isSketchTool(t) ? 'sketch' : 'climate')
         this.scheduleIso()
+      } else if (d.mode === 'lasso' || d.mode === 'ridge') this.finishStroke(d.mode, d.path!, !!d.vertex)
+      else if (d.mode === 'rangeMove' || d.mode === 'vertex') {
+        if (d.moved) {
+          bumpSketch(this.edits)
+          this.cb.onCommit('sketch')
+        }
+        this.draw()
       } else if (d.mode === 'move' && d.label && (d.label.x !== d.vx || d.label.y !== d.vy)) this.cb.onCommit('labels')
     }
     el.addEventListener('pointerup', end)

@@ -11,7 +11,7 @@ import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
 import { realEarthWorld } from './earth/realWorld'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
 import { Biome, EQUATOR_KM, isGlobe, MAP_KM, reliefKm, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
-import { blur, edt, neighbors8 } from './util'
+import { blur, neighbors8, signedDistance } from './util'
 import * as dmath from './dmath'
 
 export type Progress = (stage: string, frac: number) => void
@@ -40,9 +40,19 @@ export interface WorldCache {
   places?: { key: string; map: RealmMap; roads: World['roads'] }
 }
 
-/** 影响地形阶段的参数与地形编辑版本 */
+/** 影响板块造山的参数与规划草图版本（不含地形画笔） */
+function plateKey(p: WorldParams, edits?: WorldEdits) {
+  return JSON.stringify([p.seed, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, !!p.globe, !!p.earth, sketchOf(p, edits) ? edits!.sketchRev ?? 1 : 0])
+}
+
+/** 影响地形阶段的参数、规划草图与地形编辑版本 */
 export function terrainKey(p: WorldParams, edits?: WorldEdits) {
-  return JSON.stringify([p.seed, p.width, p.height, p.landRatio, p.plates, p.mountains, p.coastRoughness, p.erosion, p.latNorth, p.latSouth, !!p.globe, !!p.earth, edits?.terrain ? edits.terrainRev ?? 1 : 0])
+  return plateKey(p, edits) + '|' + (edits?.terrain ? edits.terrainRev ?? 1 : 0)
+}
+
+/** 起作用的规划草图：地球底图不用草图 */
+function sketchOf(p: WorldParams, edits?: WorldEdits) {
+  return p.earth ? undefined : edits?.sketch
 }
 
 export function generateWorld(p: WorldParams, progress: Progress = () => {}, edits: WorldEdits = {}, cache?: WorldCache): World {
@@ -148,6 +158,7 @@ export function groundKey(p: WorldParams, edits: WorldEdits = {}) {
   const { naming: _naming, ...rest } = p
   return JSON.stringify([terrainKey(p, edits), rest, arrayHash(edits.temp), arrayHash(edits.rain)])
 }
+
 
 function arrayHash(a?: ArrayLike<number>) {
   if (!a) return 0
@@ -294,13 +305,13 @@ function terrainStage(
   cache?: WorldCache,
 ): TerrainStage {
   const N = W * H
-  // 板块造山与地形编辑无关：连续画笔重算时沿用
-  const pk = terrainKey(p)
+  // 板块造山与地形画笔无关：连续画笔重算时沿用（草图改了才重算）
+  const pk = plateKey(p, edits)
   let base = cache?.plates?.key === pk ? cache.plates.terr : undefined
   if (base) progress('沿用板块与造山', 0.18)
   else {
     progress('板块运动与造山', 0.02)
-    base = p.earth ? buildEarthTerrain(p, rTerrain) : buildTerrain(p, rTerrain, kmPerCell)
+    base = p.earth ? buildEarthTerrain(p, rTerrain) : buildTerrain(p, rTerrain, kmPerCell, sketchOf(p, edits))
     if (cache) cache.plates = { key: pk, terr: base }
   }
   const terr = { ...base, elev: base.elev.slice(), uplift: base.uplift.slice() }
@@ -388,18 +399,9 @@ function protectedBasins(elev: Float32Array, W: number, H: number): Map<number, 
 }
 
 export function signedCoastDist(elev: Float32Array, W: number, H: number) {
-  const N = W * H
-  const land = new Uint8Array(N)
-  const sea = new Uint8Array(N)
-  for (let i = 0; i < N; i++) {
-    land[i] = elev[i] > 0 ? 1 : 0
-    sea[i] = 1 - land[i]
-  }
-  const dl = edt(land, W, H)
-  const ds = edt(sea, W, H)
-  const out = new Float32Array(N)
-  for (let i = 0; i < N; i++) out[i] = land[i] ? ds[i] : -dl[i]
-  return out
+  const land = new Uint8Array(W * H)
+  for (let i = 0; i < land.length; i++) land[i] = elev[i] > 0 ? 1 : 0
+  return signedDistance(land, W, H)
 }
 
 export function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number) {

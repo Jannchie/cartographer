@@ -1,4 +1,5 @@
 import { Biome, type Label, type Road } from './types'
+import { simplifyLine } from './util'
 import * as dmath from './dmath'
 
 /**
@@ -184,7 +185,7 @@ export function buildRoads(
         if (path && path.length > 1) emit(segs, path, roadCell, 'minor')
       }
       const cells = [ends[0], ...l.path, ends[1]]
-      roads.push({ kind: 'sea', pts: smooth(simplify(cells.map((c) => cellXY(c, g)).flat(), 1.2 * r), 2) })
+      roads.push({ kind: 'sea', pts: smooth(simplifyLine(cells.map((c) => cellXY(c, g)).flat(), 1.2 * r), 2) })
     }
   }
   return [...finish(segs, g), ...roads]
@@ -579,7 +580,7 @@ function finish(segs: Seg[], g: Grid): Road[] {
     for (let k = 1; k < s.cells.length; k++) {
       if (k < s.cells.length - 1 && !anchor.has(s.cells[k])) continue
       const piece = s.cells.slice(from, k + 1)
-      out.push({ kind: s.kind, pts: smooth(simplify(piece.map((c) => cellXY(c, g)).flat(), 0.7 * g.r), 2) })
+      out.push({ kind: s.kind, pts: smooth(simplifyLine(piece.map((c) => cellXY(c, g)).flat(), 0.7 * g.r), 2) })
       from = k
     }
   }
@@ -587,34 +588,6 @@ function finish(segs: Seg[], g: Grid): Road[] {
 }
 
 /** Ramer–Douglas–Peucker（交替存储的 x, y） */
-function simplify(pts: number[], tol: number) {
-  const n = pts.length / 2
-  if (n <= 2) return pts
-  const keep = new Uint8Array(n)
-  keep[0] = keep[n - 1] = 1
-  const stack: [number, number][] = [[0, n - 1]]
-  while (stack.length) {
-    const [a, b] = stack.pop()!
-    const ax = pts[a * 2]
-    const ay = pts[a * 2 + 1]
-    const dx = pts[b * 2] - ax
-    const dy = pts[b * 2 + 1] - ay
-    const len = dmath.hypot(dx, dy) || 1
-    let best = -1
-    let bd = tol
-    for (let k = a + 1; k < b; k++) {
-      const d = Math.abs((pts[k * 2] - ax) * dy - (pts[k * 2 + 1] - ay) * dx) / len
-      if (d > bd) ((bd = d), (best = k))
-    }
-    if (best >= 0) {
-      keep[best] = 1
-      stack.push([a, best], [best, b])
-    }
-  }
-  const out: number[] = []
-  for (let k = 0; k < n; k++) if (keep[k]) out.push(pts[k * 2], pts[k * 2 + 1])
-  return out
-}
 
 /** Chaikin 细分：折线变成柔和的曲线（端点保持不动） */
 function smooth(pts: number[], iters: number) {

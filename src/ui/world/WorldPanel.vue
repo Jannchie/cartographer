@@ -7,8 +7,12 @@ import {
   IconDices,
   IconDropletOff,
   IconEraser,
+  IconMap,
   IconMapPinPlus,
+  IconMountain,
+  IconPen,
   IconReset,
+  IconShapes,
   IconSnowflake,
   IconSun,
   IconTerrainLower,
@@ -17,6 +21,7 @@ import {
   IconTrash,
   IconUndo,
   IconWand,
+  IconWaves,
   type Icon as IconDef,
 } from '@jannchie/icons'
 import { computed } from 'vue'
@@ -132,6 +137,7 @@ const EDIT_VIEWS: { value: 'auto' | EditView; label: string }[] = [
   { value: 'temperature', label: '气温' },
   { value: 'rain', label: '降水' },
   { value: 'regions', label: '大洲' },
+  { value: 'sketch', label: '草图' },
 ]
 const KINDS: [Label['kind'], string][] = [
   ['capital', '首都'],
@@ -150,7 +156,14 @@ const EARTH_RES_OPTS = [
   { value: '15m', label: '0.25°', title: '1440 × 720 网格，约 28 km' },
   { value: '5m', label: '5′', title: '4320 × 2160 网格，约 9 km' },
 ]
-const brushTool = computed(() => !['select', 'place', 'region'].includes(ws.tool))
+// 规划草图的工具（有草图时显示在编辑工具上方）
+const PLAN_TOOLS: { value: EditTool; label: string; title: string; icon: IconDef<string> }[] = [
+  { value: 'lasso', label: '圈地', title: '拖动圈出一块陆地；按住 Alt 圈出海洋', icon: IconShapes },
+  { value: 'land', label: '陆地', title: '画笔涂出陆地', icon: IconPen },
+  { value: 'sea', label: '海洋', title: '画笔涂成海洋：挖出海湾、海峡', icon: IconWaves },
+  { value: 'ridge', label: '山脉', title: '拖动画出山脉的走向；点选已有山脉可拖动、调高度与宽度', icon: IconMountain },
+]
+const brushTool = computed(() => !['select', 'place', 'region', 'lasso', 'ridge'].includes(ws.tool))
 const regionTool = computed(() => ws.tool.startsWith('region'))
 const val = (e: Event) => (e.target as HTMLInputElement).value
 </script>
@@ -176,6 +189,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       <Field label="命名" title="地名的世界观：同一个地名在中英日三种语言里意思一致">
         <Dropdown :options="NAMING_STYLES.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => W.setParam('naming', n)" />
       </Field>
+      <p v-if="ws.sketch && !p.earth" class="plan-note">{{ t('规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。') }}</p>
       <Fold label="高级参数" id="advanced">
         <Field label="分辨率"><Seg v-model="res" :options="RES" /></Field>
         <Legend
@@ -286,6 +300,29 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
     </Section>
 
     <Section v-if="ws.mode === 'edit'" v-show="ws.tab === 'view'">
+      <div v-if="!p.earth" class="plan">
+        <template v-if="!ws.sketch">
+          <h3>{{ t('从零规划') }}</h3>
+          <p class="plan-note">{{ t('画出大陆轮廓与山脉走向，其余细节按种子随机生成；之后随时改草图重算。') }}</p>
+          <div class="pair">
+            <button type="button" :title="t('从一片汪洋开始，圈出大陆')" @click="W.startSketch('blank')"><Icon :icon="IconShapes" :size="14" />{{ t('空白画布') }}</button>
+            <button type="button" :title="t('以当前世界的海陆与主要山脉为底稿，在上面修改')" @click="W.startSketch('world')"><Icon :icon="IconMap" :size="14" />{{ t('当前世界') }}</button>
+          </div>
+        </template>
+        <template v-else>
+          <h3>{{ t('规划草图') }}</h3>
+          <Seg :cols="4" :options="PLAN_TOOLS" :model-value="ws.tool" @update:model-value="W.setTool" />
+          <div v-if="ws.range && ws.tool === 'ridge'" class="sub">
+            <Scale label="山脉高度" :min="0.2" :max="2" :step="0.05" :reset="1" :fmt="x100" :model-value="ws.range.height" @update:model-value="(x) => W.setRange({ height: x })" />
+            <Scale label="山体宽度" :min="20" :max="500" :step="10" :reset="140" :fmt="(x) => `${Math.round(x)} km`" :model-value="ws.range.width" @update:model-value="(x) => W.setRange({ width: x })" />
+            <button type="button" class="danger" :title="t('删除（Delete）')" @click="W.deleteRange()"><Icon :icon="IconTrash" :size="14" />{{ t('删除这条山脉') }}</button>
+          </div>
+          <div class="pair">
+            <button type="button" :title="t('地点编辑过后会固定不动；按当前的海陆重新生成全部城镇与地名')" @click="W.regenPlaces()"><Icon :icon="IconDices" :size="14" />{{ t('重排地点') }}</button>
+            <button type="button" :title="t('移除草图，大陆回到按陆地比例随机生成')" @click="W.endSketch()"><Icon :icon="IconReset" :size="14" />{{ t('退出规划') }}</button>
+          </div>
+        </template>
+      </div>
       <Seg :cols="3" :options="TOOLS" :model-value="ws.tool" @update:model-value="W.setTool" />
       <Field label="底图">
         <Dropdown :options="EDIT_VIEWS" :model-value="ws.editView" @update:model-value="W.setEditView" />
