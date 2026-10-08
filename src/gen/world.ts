@@ -10,7 +10,7 @@ import { RNG, hashString } from './rng'
 import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
 import { realEarthWorld } from './earth/realWorld'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
-import { Biome, EQUATOR_KM, isGlobe, MAP_KM, reliefKm, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
+import { Biome, EQUATOR_KM, isGlobe, isSettlement, MAP_KM, reliefKm, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
 import { blur, neighbors8, signedDistance } from './util'
 import * as dmath from './dmath'
 
@@ -90,14 +90,19 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   // —— 地名与标注 ——
   progress('命名与标注', 0.95)
   const namer = new Namer(p, rNames)
-  const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, namer, rPlace, terr.basins)
+  const settle = p.settlements !== false
+  const generated = makeLabels(p, elev, biome, coastDist, hydro, temperature, precipitation, W, H, namer, rPlace, terr.basins, settle)
   // 地点编辑：用户改过的列表整体替换生成结果（政区按新的都城重算）；缺译名的旧数据用英文名兜底
   const ja = new JaNamer()
-  const labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || l.name, ja: l.ja || ja.name(l.kind, l.name) })) : generated
+  let labels = edits.labels ? edits.labels.map((l) => ({ ...l, zh: l.zh || l.name, ja: l.ja || ja.name(l.kind, l.name) })) : generated
+  // 聚落阶段：关掉时去掉城镇；打开时若钉住的地点里没有城镇（在只有地形的阶段编辑过地点），补上生成的城镇
+  if (!settle) labels = labels.filter((l) => !isSettlement(l))
+  else if (edits.labels && !labels.some(isSettlement)) labels = [...labels, ...generated.filter(isSettlement)]
   // 政区划分与道路只取决于地面和地点的位置、类型，与名字无关：只改命名时沿用
   const pk = gk + '|' + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
   let places = cache?.places?.key === pk ? cache.places : undefined
-  if (!places) {
+  if (!settle) places = { key: pk, map: { realm: new Int16Array(N).fill(-1), realms: [], hints: [] }, roads: [] }
+  else if (!places) {
     // 国界、道路的坡度代价按晕渲同样的夸张比例算：全球图每格几十公里，真实坡度太缓，道路会直接翻山
     const slopeKm = reliefKm({ W, kmPerCell })
     progress('划分政区', 0.96)
@@ -108,7 +113,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     if (cache) cache.places = places
   }
   const realm = places.map.realm.slice()
-  const realms = nameRealms(places.map, namer)
+  const realms = settle ? nameRealms(places.map, namer) : []
   const roads = places.roads
   const genName = namer.name('world')
   const worldName = edits.worldName ?? genName.en
@@ -155,7 +160,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
 
 /** 影响地面（高度、气候、水文、群系）的全部输入：除命名以外的参数 + 地形与气候编辑 */
 export function groundKey(p: WorldParams, edits: WorldEdits = {}) {
-  const { naming: _naming, ...rest } = p
+  const { naming: _naming, settlements: _settlements, ...rest } = p
   return JSON.stringify([terrainKey(p, edits), rest, arrayHash(edits.temp), arrayHash(edits.rain)])
 }
 
@@ -571,6 +576,8 @@ function makeLabels(
   namer: Namer,
   rng: RNG,
   basins: { x: number; y: number; r: number }[],
+  /** 只有地形的阶段不选城镇址（城镇在最后，跳过不影响前面的地物与命名） */
+  withTowns = true,
 ): Label[] {
   const N = W * H
   const labels: Label[] = []
@@ -774,6 +781,7 @@ function makeLabels(
     })
   }
 
+  if (!withTowns) return labels
   // —— 城市：宜居度评分 + 最小间距 ——
   const score = new Float32Array(N)
   const thr = riverThreshold(W)

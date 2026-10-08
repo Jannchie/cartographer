@@ -888,6 +888,14 @@ defineStrings([
   ['重排地点', 'Re-place towns', '地点を再配置'],
   ['移除草图，大陆回到按陆地比例随机生成', 'Remove the sketch and go back to random continents', 'スケッチを外し、大陸をランダム生成に戻す'],
   ['退出规划', 'Leave plan', '計画を終了'],
+  ['聚落与道路', 'Settlements & roads', '集落と道路'],
+  ['城镇、国家、道路与航线；关掉时只生成地形、气候、水系与自然地物，先定地形再放聚落', 'Towns, realms, roads and sea routes; turn off to generate only terrain, climate, water and natural features, and add settlements later', '町・国・道路・航路。オフにすると地形・気候・水系・自然地物だけを生成し、集落は後から置けます'],
+  ['第一阶段：只有地形', 'Stage 1: terrain only', '第1段階：地形のみ'],
+  ['第二阶段：聚落与道路', 'Stage 2: settlements & roads', '第2段階：集落と道路'],
+  ['生成聚落与道路', 'Generate settlements & roads', '集落と道路を生成'],
+  ['回到只有地形', 'Back to terrain only', '地形のみに戻る'],
+  ['地形满意后，在这片地面上放置城镇、划分国家、修建道路', 'Once the terrain is right, place towns, draw realms and build roads on it', '地形が決まったら、町を置き、国を分け、道路を敷く'],
+  ['去掉城镇、国家与道路，继续修改地形', 'Remove towns, realms and roads to keep working on the terrain', '町・国・道路を外して地形の修正を続ける'],
   ['草图', 'Sketch', 'スケッチ'],
   ['规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。', 'A sketch is in use: continents and mountain ranges follow it, land ratio has no effect, and plates only add minor uplands.', '計画スケッチ使用中：大陸の形と山脈はスケッチに従い、陸地比率は効かず、プレートは副次的な山地のみ生みます。'],
   ['拖动圈出陆地 · 按住 Alt 圈出海洋 · 右键或 Shift 拖动平移 · Ctrl+Z 撤销', 'Drag to outline land · Alt to outline sea · right-drag or Shift to pan · Ctrl+Z undo', 'ドラッグで陸地を囲む · Alt で海 · 右ドラッグか Shift で移動 · Ctrl+Z 元に戻す'],
@@ -915,14 +923,30 @@ export function startSketch(from: 'world' | 'blank') {
   editor?.refreshEdits(edits)
   syncSketch()
   setTool(from === 'world' ? 'ridge' : 'lasso')
+  // 规划先定地形：聚落与道路留到地形满意之后再生成
+  if (ws.params.settlements !== false) {
+    pinWorldName()
+    ws.params.settlements = false
+  }
   scheduleRegen()
 }
-/** 世界名钉住：之后重算时世界名不变 */
+/** 世界名钉住：政区命名会消耗命名序列，开关聚落前后生成的世界名会不同 */
 function pinWorldName() {
   if (!world || edits.worldName) return
   edits.worldName = world.worldName
   edits.worldNameZh = world.worldNameZh
   edits.worldNameJa = world.worldNameJa
+}
+/**
+ * 两阶段生成：关掉时只有地形、气候、水系与自然地物名称；打开时在同一片地面上放城镇、划政区、修道路。
+ * 地面沿用缓存，切换只重算地点这一级
+ */
+export function setSettlements(on: boolean) {
+  if ((ws.params.settlements !== false) === on) return
+  pinWorldName()
+  ws.params.settlements = on
+  if (!on && ws.tool === 'place') setTool('select')
+  generate(ws.mode === 'edit')
 }
 /** 退出规划：去掉草图，回到按陆地比例、板块随机生成的大陆 */
 export function endSketch() {
