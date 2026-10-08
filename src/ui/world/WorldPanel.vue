@@ -44,6 +44,7 @@ import Scale from '../kit/Scale.vue'
 import Section from '../kit/Section.vue'
 import Seg from '../kit/Seg.vue'
 import Swatches from '../kit/Swatches.vue'
+import Variant from '../kit/Variant.vue'
 import AreaPanel from './AreaPanel.vue'
 import * as W from './world'
 import { latFmt, pct, ws } from './world'
@@ -196,6 +197,10 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         :items="[{ label: '聚落与道路', on: p.settlements !== false, title: '城镇、国家、道路与航线；关掉时只生成地形、气候、水系与自然地物，先定地形再放聚落' }]"
         @toggle="W.setSettlements(p.settlements === false)"
       />
+      <template v-if="!p.earthReal">
+        <Variant label="地形方案" title="同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成" :model-value="p.terrainVariant ?? 0" @update:model-value="W.setTerrainVariant" />
+        <Variant label="聚落方案" title="地形不变，换一套城镇选址、国界与道路" :disabled="p.settlements === false" :model-value="p.placeVariant ?? 0" @update:model-value="W.setPlaceVariant" />
+      </template>
       <p v-if="ws.sketch && !p.earth" class="plan-note">{{ t('规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。') }}</p>
       <Fold label="高级参数" id="advanced">
         <Field label="分辨率"><Seg v-model="res" :options="RES" /></Field>
@@ -328,6 +333,8 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
             <button type="button" :title="t('地点编辑过后会固定不动；按当前的海陆重新生成全部城镇与地名')" @click="W.regenPlaces()"><Icon :icon="IconDices" :size="14" />{{ t('重排地点') }}</button>
             <button type="button" :title="t('移除草图，大陆回到按陆地比例随机生成')" @click="W.endSketch()"><Icon :icon="IconReset" :size="14" />{{ t('退出规划') }}</button>
           </div>
+          <Variant label="地形方案" title="同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成" :model-value="p.terrainVariant ?? 0" @update:model-value="W.setTerrainVariant" />
+          <Variant label="聚落方案" title="地形不变，换一套城镇选址、国界与道路" :disabled="p.settlements === false" :model-value="p.placeVariant ?? 0" @update:model-value="W.setPlaceVariant" />
           <button v-if="p.settlements === false" type="button" class="wide" :title="t('地形满意后，在这片地面上放置城镇、划分国家、修建道路')" @click="W.setSettlements(true)"><Icon :icon="IconMapPinPlus" :size="14" />{{ t('生成聚落与道路') }}</button>
           <button v-else type="button" class="wide" :title="t('去掉城镇、国家与道路，继续修改地形')" @click="W.setSettlements(false)"><Icon :icon="IconMountain" :size="14" />{{ t('回到只有地形') }}</button>
         </template>

@@ -39,6 +39,10 @@ export interface WorldParams {
    * 先定地形、再放聚落的两阶段流程；地面不受影响，开关之间不重算地形
    */
   settlements?: boolean
+  /** 地形方案：同一种子下换一套造山、侵蚀与气候的随机细节（0 为种子本身的方案）。有草图时即"同一份规划、另一种细节" */
+  terrainVariant?: number
+  /** 聚落方案：同一片地面上换一套城镇选址与国界（0 为种子本身的方案） */
+  placeVariant?: number
 }
 
 /** 区域图的宽度（公里）；全球图按赤道一周 */
@@ -91,6 +95,8 @@ export const DEFAULT_PARAMS: WorldParams = {
   earthRes: '15m',
   naming: 'auto',
   settlements: true,
+  terrainVariant: 0,
+  placeVariant: 0,
 }
 
 export const Biome = {

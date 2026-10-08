@@ -961,6 +961,21 @@ select.lang:hover {
   background: var(--paper-2);
   color: var(--ink);
 }
+/* 方案切换：箭头一直可见，编号宽一些放得下"原样" */
+.variant .counter-ctl button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+}
+.variant .counter-ctl button:disabled {
+  opacity: 0.25 !important;
+}
+.variant .counter-ctl b {
+  width: auto;
+  min-width: 38px;
+  cursor: default;
+}
 .counter-ctl button:disabled {
   opacity: 0 !important;
   cursor: default;
