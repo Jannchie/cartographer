@@ -163,6 +163,8 @@ const PLAN_TOOLS: { value: EditTool; label: string; title: string; icon: IconDef
   { value: 'sea', label: '海洋', title: '画笔涂成海洋：挖出海湾、海峡', icon: IconWaves },
   { value: 'ridge', label: '山脉', title: '拖动画出山脉的走向；点选已有山脉可拖动、调高度与宽度', icon: IconMountain },
 ]
+// 只有地形的阶段没有城镇可放
+const tools = computed(() => (p.settlements === false ? TOOLS.filter((x) => x.value !== 'place') : TOOLS))
 const brushTool = computed(() => !['select', 'place', 'region', 'lasso', 'ridge'].includes(ws.tool))
 const regionTool = computed(() => ws.tool.startsWith('region'))
 const val = (e: Event) => (e.target as HTMLInputElement).value
@@ -189,6 +191,11 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       <Field label="命名" title="地名的世界观：同一个地名在中英日三种语言里意思一致">
         <Dropdown :options="NAMING_STYLES.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => W.setParam('naming', n)" />
       </Field>
+      <Legend
+        v-if="!p.earthReal"
+        :items="[{ label: '聚落与道路', on: p.settlements !== false, title: '城镇、国家、道路与航线；关掉时只生成地形、气候、水系与自然地物，先定地形再放聚落' }]"
+        @toggle="W.setSettlements(p.settlements === false)"
+      />
       <p v-if="ws.sketch && !p.earth" class="plan-note">{{ t('规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。') }}</p>
       <Fold label="高级参数" id="advanced">
         <Field label="分辨率"><Seg v-model="res" :options="RES" /></Field>
@@ -310,7 +317,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
           </div>
         </template>
         <template v-else>
-          <h3>{{ t('规划草图') }}</h3>
+          <h3>{{ t('规划草图') }} · {{ t(p.settlements === false ? '第一阶段：只有地形' : '第二阶段：聚落与道路') }}</h3>
           <Seg :cols="4" :options="PLAN_TOOLS" :model-value="ws.tool" @update:model-value="W.setTool" />
           <div v-if="ws.range && ws.tool === 'ridge'" class="sub">
             <Scale label="山脉高度" :min="0.2" :max="2" :step="0.05" :reset="1" :fmt="x100" :model-value="ws.range.height" @update:model-value="(x) => W.setRange({ height: x })" />
@@ -321,9 +328,11 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
             <button type="button" :title="t('地点编辑过后会固定不动；按当前的海陆重新生成全部城镇与地名')" @click="W.regenPlaces()"><Icon :icon="IconDices" :size="14" />{{ t('重排地点') }}</button>
             <button type="button" :title="t('移除草图，大陆回到按陆地比例随机生成')" @click="W.endSketch()"><Icon :icon="IconReset" :size="14" />{{ t('退出规划') }}</button>
           </div>
+          <button v-if="p.settlements === false" type="button" class="wide" :title="t('地形满意后，在这片地面上放置城镇、划分国家、修建道路')" @click="W.setSettlements(true)"><Icon :icon="IconMapPinPlus" :size="14" />{{ t('生成聚落与道路') }}</button>
+          <button v-else type="button" class="wide" :title="t('去掉城镇、国家与道路，继续修改地形')" @click="W.setSettlements(false)"><Icon :icon="IconMountain" :size="14" />{{ t('回到只有地形') }}</button>
         </template>
       </div>
-      <Seg :cols="3" :options="TOOLS" :model-value="ws.tool" @update:model-value="W.setTool" />
+      <Seg :cols="3" :options="tools" :model-value="ws.tool" @update:model-value="W.setTool" />
       <Field label="底图">
         <Dropdown :options="EDIT_VIEWS" :model-value="ws.editView" @update:model-value="W.setEditView" />
       </Field>

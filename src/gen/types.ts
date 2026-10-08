@@ -34,6 +34,11 @@ export interface WorldParams {
   earthRes?: EarthRes
   /** 命名世界观（auto 按种子挑） */
   naming: NamingStyle
+  /**
+   * 生成聚落与道路（城镇、国家、道路与航线）。关掉时只生成地形、气候、水系与自然地物名称——
+   * 先定地形、再放聚落的两阶段流程；地面不受影响，开关之间不重算地形
+   */
+  settlements?: boolean
 }
 
 /** 区域图的宽度（公里）；全球图按赤道一周 */
@@ -85,6 +90,7 @@ export const DEFAULT_PARAMS: WorldParams = {
   earthReal: false,
   earthRes: '15m',
   naming: 'auto',
+  settlements: true,
 }
 
 export const Biome = {
@@ -148,6 +154,9 @@ export interface Label {
   /** 沿线排字的路径（交替存储的格坐标，河流注记用） */
   path?: number[]
 }
+
+/** 城镇类地点（聚落阶段生成、聚落方案替换的那一类） */
+export const isSettlement = (l: Pick<Label, 'kind'>) => l.kind === 'city' || l.kind === 'capital'
 
 export interface Realm {
   name: string
