@@ -47,6 +47,8 @@ function plateKey(p: WorldParams, edits?: WorldEdits) {
 
 /** 影响地形阶段的参数、规划草图与地形编辑版本 */
 export function terrainKey(p: WorldParams, edits?: WorldEdits) {
+  // 定稿的世界：地形只取决于定稿高度与之后的画笔，与种子、参数、草图无关
+  if (edits?.frozen) return `frozen|${edits.frozenRev ?? 1}|${p.width}x${p.height}|${edits.terrain ? edits.terrainRev ?? 1 : 0}`
   return plateKey(p, edits) + '|' + (edits?.terrain ? edits.terrainRev ?? 1 : 0)
 }
 
@@ -58,6 +60,8 @@ function sketchOf(p: WorldParams, edits?: WorldEdits) {
 export function generateWorld(p: WorldParams, progress: Progress = () => {}, edits: WorldEdits = {}, cache?: WorldCache): World {
   // 真实地球：不走模拟流水线，直接取真实数据（数据要事先 await loadEarthGrid / loadEarthFeatures）
   if (p.earthReal) return realEarthWorld(p, progress, edits)
+  // 定稿的世界：随机数流取定稿时的种子与地形方案，与界面上的种子无关
+  if (edits.frozen) p = { ...p, seed: edits.frozen.seed, terrainVariant: edits.frozen.terrainVariant }
   const t0 = performance.now()
   const W = p.width
   const H = p.height
@@ -123,6 +127,13 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   }
   const realm = places.map.realm.slice()
   const realms = settle ? nameRealms(places.map, namer) : []
+  // 定稿时的国名按都城对应回去：地形改了、政区重算之后，同一座都城的国家仍叫原来的名字
+  if (edits.realmNames) {
+    for (const r of realms) {
+      const m = edits.realmNames[labels[r.capital]?.name]
+      if (m) Object.assign(r, { name: m.name, zh: m.zh, ja: m.ja ?? r.ja })
+    }
+  }
   const roads = places.roads
   const genName = namer.name('world')
   const worldName = edits.worldName ?? genName.en
@@ -319,6 +330,7 @@ function terrainStage(
   cache?: WorldCache,
 ): TerrainStage {
   const N = W * H
+  if (edits.frozen && edits.frozen.elev.length === N) return frozenStage(edits, W, H, key, progress)
   // 板块造山与地形画笔无关：连续画笔重算时沿用（草图改了才重算）
   const pk = plateKey(p, edits)
   let base = cache?.plates?.key === pk ? cache.plates.terr : undefined
@@ -399,6 +411,47 @@ function terrainStage(
   fillSmallDepressions(elev, W, H, 80, 0.06)
 
   return { key, elev, basins: terr.basins }
+}
+
+/**
+ * 定稿世界的地形：定稿高度 + 之后的地形画笔。画笔直接改侵蚀后的高度（不再整体重跑侵蚀，别处一格不变），
+ * 改过的格子与紧邻处做几遍掩码平滑，把笔触边缘揉进周围地形，再填掉新出现的小坑
+ */
+function frozenStage(edits: WorldEdits, W: number, H: number, key: string, progress: Progress): TerrainStage {
+  progress('读取定稿地形', 0.3)
+  const N = W * H
+  const elev = Float32Array.from(edits.frozen!.elev)
+  const d = edits.terrain
+  if (d && d.length === N) {
+    const touched = new Uint8Array(N)
+    for (let i = 0; i < N; i++) {
+      if (d[i] === 0) continue
+      elev[i] += d[i]
+      const x = i % W
+      const y = (i - x) / W
+      for (let oy = -2; oy <= 2; oy++) {
+        for (let ox = -2; ox <= 2; ox++) {
+          const xx = x + ox
+          const yy = y + oy
+          if (xx >= 0 && yy >= 0 && xx < W && yy < H) touched[yy * W + xx] = 1
+        }
+      }
+    }
+    const tmp = new Float32Array(N)
+    for (let pass = 0; pass < 2; pass++) {
+      tmp.set(elev)
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          const i = y * W + x
+          if (!touched[i]) continue
+          const m = (tmp[i - 1] + tmp[i + 1] + tmp[i - W] + tmp[i + W] + tmp[i - W - 1] + tmp[i - W + 1] + tmp[i + W - 1] + tmp[i + W + 1]) / 8
+          elev[i] = tmp[i] * 0.6 + m * 0.4
+        }
+      }
+    }
+    fillSmallDepressions(elev, W, H, 80, 0.06)
+  }
+  return { key, elev, basins: edits.frozen!.basins }
 }
 
 function protectedBasins(elev: Float32Array, W: number, H: number): Map<number, number> {

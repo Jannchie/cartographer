@@ -28,7 +28,7 @@ import { computed } from 'vue'
 import type { EditTool, EditView } from '../../editor/editor'
 import type { Label, WorldParams } from '../../gen/types'
 import type { EarthRes } from '../../gen/earth/real'
-import { DEFAULT_PARAMS, isGlobe } from '../../gen/types'
+import { DEFAULT_PARAMS, isGlobe, SHAPE_PARAMS } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
@@ -174,7 +174,12 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
 <template>
   <div class="panel-body">
     <Section v-show="ws.tab === 'gen'">
-      <div class="seed">
+      <div v-if="ws.frozen" class="frozen-note">
+        <h3>{{ t('已定稿') }}<template v-if="ws.entry"> · {{ ws.entry.name }}</template></h3>
+        <p>{{ t('地形已是数据，与种子无关：种子与地形参数不再起作用，地形画笔直接修改这份地形；气候、水系、聚落仍可调整与重算。') }}</p>
+        <button type="button" class="link" :title="t('去掉定稿地形，重新由种子、参数与草图生成')" @click="W.unfreeze()">{{ t('回到规划') }}</button>
+      </div>
+      <div class="seed" :class="{ locked: ws.frozen }">
         <input
           :value="p.seed"
           spellcheck="false"
@@ -186,7 +191,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         />
         <button type="button" class="dice" :title="t('随机种子并生成（R）')" @click="W.randomSeed()"><Icon :icon="IconDices" :size="14" />{{ t('随机') }}</button>
       </div>
-      <Field label="地形预设" title="一键换一类世界的参数，点「生成」后生效">
+      <Field label="地形预设" title="一键换一类世界的参数，点「生成」后生效" :class="{ locked: ws.frozen }">
         <Dropdown :options="W.PRESETS.map((x, i) => ({ value: i, label: x.name, desc: x.desc }))" :model-value="ws.preset" placeholder="自定义" @update:model-value="W.applyPreset" />
       </Field>
       <Field label="命名" title="地名的世界观：同一个地名在中英日三种语言里意思一致">
@@ -198,13 +203,14 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         @toggle="W.setSettlements(p.settlements === false)"
       />
       <template v-if="!p.earthReal">
-        <Variant label="地形方案" title="同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成" :model-value="p.terrainVariant ?? 0" @update:model-value="W.setTerrainVariant" />
+        <Variant :class="{ locked: ws.frozen }" label="地形方案" title="同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成" :model-value="p.terrainVariant ?? 0" @update:model-value="W.setTerrainVariant" />
         <Variant label="聚落方案" title="地形不变，换一套城镇选址、国界与道路" :disabled="p.settlements === false" :model-value="p.placeVariant ?? 0" @update:model-value="W.setPlaceVariant" />
       </template>
       <p v-if="ws.sketch && !p.earth" class="plan-note">{{ t('规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。') }}</p>
       <Fold label="高级参数" id="advanced">
-        <Field label="分辨率"><Seg v-model="res" :options="RES" /></Field>
+        <Field label="分辨率" :class="{ locked: ws.frozen }"><Seg v-model="res" :options="RES" /></Field>
         <Legend
+          :class="{ locked: ws.frozen }"
           :items="[
             { label: '全球图', on: isGlobe(p), title: '横跨 360° 经度的世界全图：比例尺按赤道，高度随纬度范围' },
             { label: '地球底图', on: !!p.earth, title: '大陆、山脉与海深取自真实地球（ETOPO1）；陆地比例、板块数不再起作用' },
@@ -219,6 +225,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
           v-for="s in worldScales"
           :key="s.key"
           v-bind="s"
+          :class="{ locked: ws.frozen && (SHAPE_PARAMS as readonly string[]).includes(s.key) }"
           :model-value="p[s.key]"
           :reset="(ws.applied ?? DEFAULT_PARAMS)[s.key]"
           reset-tip="双击回到当前生成的值"
@@ -312,7 +319,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
     </Section>
 
     <Section v-if="ws.mode === 'edit'" v-show="ws.tab === 'view'">
-      <div v-if="!p.earth" class="plan">
+      <div v-if="!p.earth && !ws.frozen" class="plan">
         <template v-if="!ws.sketch">
           <h3>{{ t('从零规划') }}</h3>
           <p class="plan-note">{{ t('画出大陆轮廓与山脉走向，其余细节按种子随机生成；之后随时改草图重算。') }}</p>

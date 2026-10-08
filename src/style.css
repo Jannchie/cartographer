@@ -2540,3 +2540,156 @@ select.lang:hover {
   flex: none;
 }
 
+/* ———————————————————— 世界库 ———————————————————— */
+.library {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(20, 18, 15, 0.55);
+  animation: rise 0.25s var(--ease);
+}
+.library-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 100%);
+  max-height: min(720px, 100%);
+  padding: 22px 24px 24px;
+  background: var(--paper);
+  background-image: var(--grain);
+  color: var(--ink);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+}
+.library-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule-2);
+}
+.library-head h2 {
+  margin: 0;
+  font-family: var(--cjk-serif);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.library-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.library-close {
+  display: inline-flex;
+  padding: 2px;
+  color: var(--ink-2);
+}
+.library-close:hover {
+  color: var(--ink);
+}
+.library-empty {
+  margin: 28px 0 8px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
+  margin: 0;
+  padding: 18px 2px 2px;
+  overflow-y: auto;
+  list-style: none;
+}
+.library-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.library-thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 1.6;
+  overflow: hidden;
+  background: var(--paper-3);
+  border: 1px solid var(--rule-2);
+  transition: border-color 0.15s;
+}
+.library-thumb:hover,
+.library-card.current .library-thumb {
+  border-color: var(--ink);
+}
+.library-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.library-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.library-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.library-meta strong {
+  overflow: hidden;
+  font-family: var(--cjk-serif);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+.library-meta input {
+  font-size: 14px;
+}
+.library-meta small {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.library-card-actions {
+  display: flex;
+  gap: 14px;
+}
+.danger-link:hover {
+  color: #a3412c;
+  text-decoration-color: #a3412c;
+}
+/* 侧边栏里的定稿说明 */
+.frozen-note {
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: var(--paper-2);
+}
+.frozen-note h3 {
+  margin: 0 0 4px;
+}
+.frozen-note p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.locked {
+  opacity: 0.4;
+  pointer-events: none;
+}

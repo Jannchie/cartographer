@@ -1,4 +1,4 @@
-import { generateWorld, groundKey, type WorldCache } from './gen/world'
+import { generateWorld, groundKey, terrainKey, type WorldCache } from './gen/world'
 import type { World, WorldEdits, WorldParams } from './gen/types'
 import { loadWorld, saveWorld, worldKey } from './gen/cache'
 import { loadEarth } from './gen/earth/index'
@@ -8,10 +8,15 @@ import { inferAreas, type Area } from './gen/areas'
 import { smoothRivers, type SmoothRiver } from './render/rivers'
 import { physicalTexturePixels, type TexturePixels } from './render/texture'
 
-/** ground：主线程已有贴图的地面版本；与这次相同时不再算贴图 */
-export type WorkerIn = { id: number; params: WorldParams; edits?: WorldEdits; ground?: string }
+/**
+ * ground：主线程已有贴图的地面版本；与这次相同时不再算贴图。
+ * world：打开世界库里存的世界——不演算，只补主线程要用的派生数据（平滑河流、贴图、区域）。
+ * want 为 stage：只要当前世界侵蚀结束时的地形（定稿用），没有缓存就先演算一遍
+ */
+export type WorkerIn = { id: number; params: WorldParams; edits?: WorldEdits; ground?: string; world?: World; want?: 'stage' }
 export type WorkerOut =
   | { id: number; type: 'progress'; stage: string; frac: number }
+  | { id: number; type: 'stage'; elev: Float32Array; basins: { x: number; y: number; r: number }[] }
   | {
       id: number
       type: 'done'
@@ -31,13 +36,24 @@ const cache: WorldCache = {}
 const pristine = (e?: WorldEdits) => !e || Object.values(e).every((v) => v === undefined)
 
 self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
-  const { id, params, edits, ground: have } = ev.data
+  const { id, params, edits, ground: have, world: opened, want } = ev.data
   const post = (m: WorkerOut, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer)
   try {
-    const key = pristine(edits) ? worldKey(params) : null
+    if (want === 'stage') {
+      const tk = terrainKey(params, edits)
+      if (cache.stage?.key !== tk) generateWorld(params, (stage, frac) => post({ id, type: 'progress', stage, frac }), edits ?? {}, cache)
+      const elev = cache.stage!.elev.slice()
+      post({ id, type: 'stage', elev, basins: cache.stage!.basins.map((b) => ({ ...b })) }, [elev.buffer])
+      return
+    }
+    const key = !opened && pristine(edits) ? worldKey(params) : null
     let world = key ? await loadWorld(key) : null
-    const cached = !!world
-    if (world) post({ id, type: 'progress', stage: '读取缓存', frac: 1 })
+    // 打开的世界与缓存一样没有演算：统计里不显示演算耗时
+    const cached = !!world || !!opened
+    if (opened) {
+      world = opened
+      post({ id, type: 'progress', stage: '读取世界库', frac: 1 })
+    } else if (world) post({ id, type: 'progress', stage: '读取缓存', frac: 1 })
     else {
       if (params.earthReal) await Promise.all([loadEarthGrid(earthResOf(params)), loadEarthFeatures()])
       else if (params.earth) await loadEarth()
