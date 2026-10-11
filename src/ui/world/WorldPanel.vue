@@ -31,6 +31,7 @@ import type { EarthRes } from '../../gen/earth/real'
 import { DEFAULT_PARAMS, isGlobe, SHAPE_PARAMS } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
+import { themeById } from '../../render/atlas/styles'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
 import { HOLO_PALETTES } from '../../render/holo/palettes'
 import { DEFAULT_TIME, fmtTime } from '../../render/aerial/daylight'
@@ -125,6 +126,10 @@ const POLITICAL_OPTS = [
   { value: 'realms', label: '国家' },
   { value: 'cultures', label: '文化' },
 ]
+// 政区专题风格总要着色：不给"无"，选着"无"时显示它默认的模式
+const politicalDefault = computed(() => themeById(ws.atlasStyle).politicalDefault)
+const politicalOpts = computed(() => (politicalDefault.value ? POLITICAL_OPTS.slice(1) : POLITICAL_OPTS))
+const politicalShown = computed(() => (ws.political === 'off' && politicalDefault.value ? politicalDefault.value : ws.political))
 
 // 编辑工具：三列的图标工具栏（选取 · 地形 · 气候 · 大洲）
 const TOOLS: { value: EditTool; label: string; title: string; icon: IconDef<string> }[] = [
@@ -323,7 +328,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       <Swatches :items="atlasSwatches" :model-value="ws.atlasStyle" @update:model-value="W.setAtlasStyle" />
       <Legend :items="atlasToggles" @toggle="(i) => (i < atlasKeys.length ? W.setAtlasOpt(atlasKeys[i], !ws.atlasOpts[atlasKeys[i]]) : W.setOrnaments(!ws.ornaments))" />
       <Field v-if="ws.hasPolitical" label="政区" title="按国家或文化给陆地着色，画出伯爵领界与国界">
-        <Seg :options="POLITICAL_OPTS" :model-value="ws.political" @update:model-value="(v) => W.setPolitical(v as 'off' | 'realms' | 'cultures')" />
+        <Seg :options="politicalOpts" :model-value="politicalShown" @update:model-value="(v) => W.setPolitical(v as 'off' | 'realms' | 'cultures')" />
       </Field>
     </Section>
 

@@ -47,6 +47,8 @@ Six paper-map styles are available, each with label placement, scale bar and fra
 | **Teyvat** | **Ink wash** | **Topographic** |
 | <img src="docs/images/en/world-teyvat.webp" width="260"> | <img src="docs/images/en/world-ink.webp" width="260"> | <img src="docs/images/en/world-topo.webp" width="260"> |
 
+Two further styles are made for political maps: **Political atlas** (flat pastel realm colours, white county lines and a darker band inside each border) and **Strategy** (heraldic colours over shaded relief with bold borders). In every style, the political switch colours the land by realm or by culture, using borders and colours that match the style: dotted borders on parchment, vermilion brush lines in ink wash, magenta dash-dot lines on the topographic map.
+
 ### Observed data
 
 Besides procedurally generated worlds, two templates are built from observed data:

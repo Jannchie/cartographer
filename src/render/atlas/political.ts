@@ -1,7 +1,7 @@
 import type { World } from '../../gen/types'
 import { simplifyLine } from '../../gen/util'
 import { categoryBorders } from './svg/contour'
-import type { Theme } from './styles'
+import type { LineLook, Theme } from './styles'
 
 /** 政区图：按国家或按文化着色，伯爵领界、文化界与国界 */
 export type PoliticalMode = 'realms' | 'cultures'
@@ -60,21 +60,21 @@ export function politicalBorders(world: World) {
 }
 
 /**
- * 政区界线（生成的世界）：伯爵领界细实线，文化界（只在文化图上）虚线，国界粗点划线加一道浅色晕带。
- * 颜色取风格的墨色，线宽、虚线以 S=2 时的像素计
+ * 政区界线（生成的世界）：伯爵领界、文化界（只在文化图上）与国界（下面可以垫一道晕带），画法随风格（Theme.political）
  */
 export function drawPolitical(ctx: CanvasRenderingContext2D, world: World, S: number, theme: Theme, mode: PoliticalMode) {
   if (!world.political) return
   const b = politicalBorders(world)
+  const look = theme.political
   const k = S / 2
   ctx.save()
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
-  const stroke = (lines: number[][], width: number, dash: number[], alpha: number, color = theme.ink) => {
-    ctx.strokeStyle = color
-    ctx.globalAlpha = alpha
-    ctx.lineWidth = width * k
-    ctx.setLineDash(dash.map((d) => d * k))
+  const stroke = (lines: number[][], l: LineLook) => {
+    ctx.strokeStyle = l.color
+    ctx.globalAlpha = l.alpha
+    ctx.lineWidth = l.width * k
+    ctx.setLineDash((l.dash ?? []).map((d) => d * k))
     for (const pts of lines) {
       ctx.beginPath()
       ctx.moveTo((pts[0] + 0.5) * S, (pts[1] + 0.5) * S)
@@ -82,9 +82,9 @@ export function drawPolitical(ctx: CanvasRenderingContext2D, world: World, S: nu
       ctx.stroke()
     }
   }
-  stroke(b.county, 0.45, [], 0.3)
-  if (mode === 'cultures') stroke(b.culture, 1.4, [5, 2.5], 0.75)
-  stroke(b.realm, 6, [], 0.16, 'rgb(150,40,50)')
-  stroke(b.realm, 1.8, [10, 3, 2.4, 3], 0.9)
+  stroke(b.county, look.county)
+  if (mode === 'cultures') stroke(b.culture, look.culture)
+  if (look.halo) stroke(b.realm, look.halo)
+  stroke(b.realm, look.realm)
   ctx.restore()
 }

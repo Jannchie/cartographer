@@ -47,6 +47,8 @@ pnpm dev        # 打开 http://localhost:5190
 | **提瓦特** | **水墨** | **等高线** |
 | <img src="docs/images/zh/world-teyvat.webp" width="260"> | <img src="docs/images/zh/world-ink.webp" width="260"> | <img src="docs/images/zh/world-topo.webp" width="260"> |
 
+另有两种专为政区图设计的风格：**政区地图集**（柔和的国家色块、白色伯爵领界、国界内侧加深的色带）与**战略图**（纹章色压在晕渲地形上，粗国界）。任何风格下都可打开政区开关，按国家或文化着色，界线与配色随风格变化：羊皮纸上是圆点国界，水墨中是朱笔，等高线图上是品红点划线。
+
 ### 基于观测数据的模板
 
 除程序生成的世界外，另有两个基于观测数据的模板：

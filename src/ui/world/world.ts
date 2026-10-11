@@ -10,6 +10,7 @@ import { BIOME_NAMES, DEFAULT_PARAMS, isSettlement, normalizeParams, type Label,
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
 import { earthAreas } from '../../gen/earth/realWorld'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
+import { themeById } from '../../render/atlas/styles'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
 import type { PoliticalMode } from '../../render/atlas/political'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
@@ -649,7 +650,8 @@ function showStats(w: World, cached = statsCached) {
 // —— 纸图 ——
 /** 纸图要画的政区图（世界没有政区层时不画） */
 function politicalOpt(w: World) {
-  return w.political && ws.political !== 'off' ? ws.political : undefined
+  if (!w.political) return undefined
+  return ws.political !== 'off' ? ws.political : themeById(ws.atlasStyle).politicalDefault
 }
 let atlasJob = 0
 /** 地点或名字改了但纸图缓存还没清：推迟到下次要用纸图时（改名逐键触发，编辑视图里又看不到纸图） */
@@ -1170,6 +1172,10 @@ defineStrings([
   ['省级', 'Province', '省級'],
   ['地级', 'Prefecture', '地級'],
   ['伯爵领', 'County', '伯領'],
+  ['政区地图集', 'Political atlas', '政区地図帳'],
+  ['国家着色 · 伯爵领 · 国界色带', 'Realm colors · counties · border bands', '国の塗り分け · 伯領 · 国境の帯'],
+  ['战略图', 'Strategy', '戦略図'],
+  ['纹章色 · 晕渲地形 · 粗国界', 'Heraldic colors · shaded relief · bold borders', '紋章色 · 陰影起伏 · 太い国境'],
   ['国家', 'Realm', '国'],
   ['文化', 'Culture', '文化'],
   ['政区', 'Political', '政区'],

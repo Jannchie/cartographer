@@ -3,7 +3,7 @@ import { areaMember, cellAt, rangeCells, type Area } from '../../gen/areas'
 import { bboxOf, chaikin } from '../../settlement/geom'
 import { cjkFont, lang, placeName } from '../../i18n'
 import { GLYPH_R, HALO_RATIO, LABEL_PAD, labelPx, logT } from './labelSize'
-import { REALM_COLORS, type Theme } from './styles'
+import type { Theme } from './styles'
 import { polyCrossings, polylineOf, rasterArea, rasterPoly, type AreaMask } from './svg/displayList'
 import { labelCtx } from './svg/recorder'
 import { politicalRegions, type PoliticalMode } from './political'
@@ -559,8 +559,9 @@ export class LabelLayer {
       if (it.kind === 'realm') {
         const r = regions.list[it.realm!]
         const st = this.style('realm', r.area)
-        const c = REALM_COLORS[r.color]
-        const col = this.theme.labels.uniform?.color ?? `rgb(${c.map((v) => Math.round(v * 0.42)).join(',')})`
+        const look = this.theme.political
+        const c = look.palette[r.color]
+        const col = this.theme.labels.uniform?.color ?? look.label?.(c) ?? `rgb(${c.map((v) => Math.round(v * 0.42)).join(',')})`
         const name = placeName(r)
         for (const [ox, oy] of [[0, 0], [0, -30 * k], [0, 30 * k], [-50 * k, 0], [50 * k, 0]]) {
           if (regions.raster[Math.round(r.y + oy / S) * world.W + Math.round(r.x + ox / S)] !== it.realm) continue

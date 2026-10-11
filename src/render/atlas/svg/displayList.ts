@@ -363,7 +363,8 @@ function expand(b: BBox, r: number): BBox {
 
 export class DisplayList {
   segments: Segment[] = []
-  clips = new Map<string, { d: string; m?: Matrix; rule: CanvasFillRule; p2d?: Path2D }>()
+  /** 裁切路径；within 给了就再被那一个裁切（两者的交集） */
+  clips = new Map<string, { d: string; m?: Matrix; rule: CanvasFillRule; p2d?: Path2D; within?: string }>()
   patterns = new Map<string, PatternDef>()
   gradients = new Map<string, GradientDef>()
   filters = new Map<string, string>()
@@ -416,7 +417,7 @@ export class DisplayList {
     const out: string[] = []
     const defs: string[] = []
     for (const [id, c] of this.clips)
-      defs.push(`<clipPath id="${id}"><path d="${c.d}" clip-rule="${c.rule}"${c.m ? ` transform="matrix(${c.m.map(num).join(' ')})"` : ''}/></clipPath>`)
+      defs.push(`<clipPath id="${id}"${c.within ? ` clip-path="url(#${c.within})"` : ''}><path d="${c.d}" clip-rule="${c.rule}"${c.m ? ` transform="matrix(${c.m.map(num).join(' ')})"` : ''}/></clipPath>`)
     for (const [id, p] of this.patterns) defs.push(`<pattern id="${id}" width="${num(p.w)}" height="${num(p.h)}" patternUnits="userSpaceOnUse">${p.svg}</pattern>`)
     for (const g of this.gradients.values()) defs.push(g.svg)
     for (const f of this.filters.values()) defs.push(f)
@@ -734,17 +735,17 @@ export class DisplayList {
   private drawPath(ctx: CanvasRenderingContext2D, it: PathItem) {
     if (!it.p2d) it.p2d = new Path2D(it.d)
     ctx.save()
-    if (it.clip) {
-      const c = this.clips.get(it.clip)
-      if (c) {
-        if (!c.p2d) c.p2d = new Path2D(c.d)
-        if (c.m) ctx.transform(...c.m)
-        ctx.clip(c.p2d, c.rule)
-        if (c.m) {
-          const inv = new DOMMatrix(c.m).inverse()
-          ctx.transform(inv.a, inv.b, inv.c, inv.d, inv.e, inv.f)
-        }
+    for (let id = it.clip, n = 0; id && n < 4; n++) {
+      const c = this.clips.get(id)
+      if (!c) break
+      if (!c.p2d) c.p2d = new Path2D(c.d)
+      if (c.m) ctx.transform(...c.m)
+      ctx.clip(c.p2d, c.rule)
+      if (c.m) {
+        const inv = new DOMMatrix(c.m).inverse()
+        ctx.transform(inv.a, inv.b, inv.c, inv.d, inv.e, inv.f)
       }
+      id = c.within
     }
     if (it.m) ctx.transform(...it.m)
     const f = it.fill

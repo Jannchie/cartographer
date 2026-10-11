@@ -1,8 +1,8 @@
 import { isGlobe, type World } from '../../gen/types'
 import { regionProjection } from '../../gen/earth/region'
-import { cjkFont, lang, t, worldTitle } from '../../i18n'
+import { cjkFont, lang, placeName, t, worldTitle } from '../../i18n'
 import { hash, type Fields } from './fields'
-import { HYPSO_STOPS, REALM_COLORS, type Theme } from './styles'
+import { HYPSO_STOPS, type Theme } from './styles'
 import { labelCtx } from './svg/recorder'
 
 const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
@@ -488,6 +488,10 @@ export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: T
   let box = null
   if (theme.legend === 'realms') {
     const rs = [...world.realms].sort((a, b) => b.area - a.area).slice(0, 10)
+    if (!rs.length) {
+      ctx.restore()
+      return null
+    }
     const row = 17 * k
     const w = 230 * k
     const h = 34 * k + rs.length * row
@@ -500,15 +504,15 @@ export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: T
     ctx.fillStyle = theme.ink
     ctx.font = `600 ${13 * k}px ${theme.labels.display}`
     ctx.textBaseline = 'middle'
-    ctx.fillText('REALMS', x + 12 * k, y + 16 * k)
+    ctx.fillText(lang === 'zh' || lang === 'ja' ? t('国家') : 'REALMS', x + 12 * k, y + 16 * k)
     ctx.font = `500 ${12.5 * k}px ${theme.labels.text}`
     rs.forEach((r, i) => {
       const yy = y + 34 * k + i * row
-      ctx.fillStyle = rgb(REALM_COLORS[r.color])
+      ctx.fillStyle = rgb(theme.political.palette[r.color])
       ctx.fillRect(x + 12 * k, yy - 5 * k, 16 * k, 10 * k)
       ctx.strokeRect(x + 12 * k, yy - 5 * k, 16 * k, 10 * k)
       ctx.fillStyle = theme.ink
-      ctx.fillText(r.name, x + 36 * k, yy)
+      ctx.fillText(placeName(r), x + 36 * k, yy)
     })
     box = { x0: 0, y0: y - 10 * k, x1: x + w + 10 * k, y1: MH }
   } else {

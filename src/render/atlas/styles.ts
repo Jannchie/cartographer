@@ -5,7 +5,7 @@ import { blur, edt } from '../../gen/util'
 import { ATLAS, atlasSea, ramp, type RGB } from '../palette'
 import { Fields, fnoise, hash, line, mix, mixc, paperGrain, set, sm, vnoise, type Px } from './fields'
 
-export type StyleId = 'physical' | 'fantasy' | 'nautical' | 'teyvat' | 'ink' | 'topo'
+export type StyleId = 'physical' | 'fantasy' | 'nautical' | 'teyvat' | 'ink' | 'topo' | 'political' | 'strategy'
 
 export interface LabelTheme {
   /** 大字（大陆、海洋、国名）字体 */
@@ -52,6 +52,33 @@ export interface AtlasOpts {
   political?: PoliticalMode
 }
 
+/** 一种界线的画法：线宽、虚线以 S=2 时的像素计 */
+export interface LineLook {
+  color: string
+  width: number
+  alpha: number
+  dash?: number[]
+}
+
+/**
+ * 政区图在这种风格下的样子：八色调色板（相邻的国家或文化颜色不同）、着色浓淡、
+ * 国界内侧的色带（同色加深，像地图集里沿国界描的一道边），以及伯爵领界、文化界、国界的画法
+ */
+export interface PoliticalLook {
+  palette: RGB[]
+  /** 着色的不透明度 */
+  fill: number
+  /** 国界内侧色带：宽度、不透明度与颜色倍率（<1 加深，>1 提亮）；不给就不画 */
+  band?: { width: number; alpha: number; tone: number }
+  county: LineLook
+  culture: LineLook
+  realm: LineLook
+  /** 国界下面的一道宽晕带 */
+  halo?: LineLook
+  /** 国名颜色（不给就取色块颜色加深） */
+  label?: (c: RGB) => string
+}
+
 export interface Theme {
   id: StyleId
   name: string
@@ -72,6 +99,10 @@ export interface Theme {
   soundings?: boolean
   realms?: boolean
   legend?: 'realms' | 'hypsometric'
+  /** 政区图的画法 */
+  political: PoliticalLook
+  /** 政区专题风格：政区开关为"无"时也按这个模式着色 */
+  politicalDefault?: PoliticalMode
   /** 纸纹（水渍、颗粒），默认有；游戏地图这类非纸质风格关掉 */
   paperTexture?: boolean
   labels: LabelTheme
@@ -87,6 +118,91 @@ const BRUSH = '"Ma Shan Zheng", "Noto Serif SC", "STKaiti", "KaiTi", serif'
 const SONG = '"Noto Serif SC", "Songti SC", "SimSun", serif'
 
 export const REALM_COLORS: RGB[] = ['#e8c7a3', '#c7d8ab', '#d6c0da', '#eedd9c', '#b6d2d4', '#e4b5ad', '#cdc4a3', '#b8c5df'].map(hex)
+
+/** 取色块颜色乘 k 作为国名颜色 */
+const shadeOf = (k: number) => (c: RGB) => `rgb(${c.map((v) => Math.round(Math.min(255, v * k))).join(',')})`
+
+// —— 各风格的政区画法 ——
+const POL_PHYSICAL: PoliticalLook = {
+  palette: REALM_COLORS,
+  fill: 0.45,
+  band: { width: 6, alpha: 0.4, tone: 0.82 },
+  county: { color: '#3a4246', width: 0.45, alpha: 0.28 },
+  culture: { color: '#3a4246', width: 1.3, alpha: 0.7, dash: [5, 2.5] },
+  realm: { color: '#3a4246', width: 1.7, alpha: 0.9, dash: [10, 3, 2.4, 3] },
+  halo: { color: 'rgb(150,40,50)', width: 6, alpha: 0.14 },
+}
+/** 羊皮纸上的水彩：淡、暖，国界沿内侧晕开一圈更浓的颜色；国界是一串圆点 */
+const POL_FANTASY: PoliticalLook = {
+  palette: ['#c98f6b', '#9caf74', '#a98fb0', '#d1b45e', '#7fa6a6', '#c27b6e', '#b09a6a', '#8a9cc0'].map(hex),
+  fill: 0.36,
+  band: { width: 11, alpha: 0.55, tone: 0.74 },
+  county: { color: '#4a3624', width: 0.5, alpha: 0.3, dash: [1.2, 2.6] },
+  culture: { color: '#4a3624', width: 1.2, alpha: 0.65, dash: [6, 3] },
+  realm: { color: '#3a2818', width: 3, alpha: 0.95, dash: [0.01, 4.6] },
+  halo: { color: 'rgb(140,50,30)', width: 8, alpha: 0.16 },
+  label: shadeOf(0.38),
+}
+const POL_NAUTICAL: PoliticalLook = {
+  palette: ['#e6cfb4', '#cfdcbd', '#ddd0df', '#ece0b4', '#c8dcdc', '#e6c8c2', '#d8d2bd', '#cbd4e6'].map(hex),
+  fill: 0.4,
+  band: { width: 4, alpha: 0.35, tone: 0.8 },
+  county: { color: '#1f2a33', width: 0.4, alpha: 0.2 },
+  culture: { color: '#1f2a33', width: 1, alpha: 0.6, dash: [4, 2.5] },
+  realm: { color: '#1f2a33', width: 1.3, alpha: 0.85, dash: [6, 2, 1.5, 2] },
+}
+/** 游戏地图：白色国界加深色衬边，色块很淡，不压住平涂的地形 */
+const POL_TEYVAT: PoliticalLook = {
+  palette: ['#e2b46c', '#9fcf8a', '#c6a4dc', '#f0dc84', '#86cfd0', '#e79a8a', '#cfc095', '#9fb3e8'].map(hex),
+  fill: 0.24,
+  band: { width: 5, alpha: 0.45, tone: 1.15 },
+  county: { color: '#ffffff', width: 0.5, alpha: 0.22 },
+  culture: { color: '#ffffff', width: 1.1, alpha: 0.6, dash: [5, 3] },
+  realm: { color: '#fbf6e2', width: 1.6, alpha: 0.95 },
+  halo: { color: 'rgb(20,30,28)', width: 4.2, alpha: 0.5 },
+}
+/** 水墨：极淡的设色，国界用朱笔 */
+const POL_INK: PoliticalLook = {
+  palette: ['#c9a27e', '#9fb29a', '#b9a3a0', '#cdbb8a', '#9fb3b8', '#c49488', '#b5ad92', '#a6a9bf'].map(hex),
+  fill: 0.22,
+  band: { width: 7, alpha: 0.32, tone: 0.8 },
+  county: { color: '#2b2a27', width: 0.4, alpha: 0.2, dash: [1, 2] },
+  culture: { color: '#2b2a27', width: 1.1, alpha: 0.55, dash: [4, 3] },
+  realm: { color: '#a8342a', width: 1.6, alpha: 0.85, dash: [8, 3] },
+  halo: { color: '#b23a2a', width: 6, alpha: 0.1 },
+  label: () => '#7d2a22',
+}
+/** 地形图：不着色块，国界用品红点划线，沿内侧一道淡紫色带 */
+const POL_TOPO: PoliticalLook = {
+  palette: ['#e7d6e9', '#e7d6e9', '#e7d6e9', '#e7d6e9', '#e7d6e9', '#e7d6e9', '#e7d6e9', '#e7d6e9'].map(hex),
+  fill: 0,
+  band: { width: 6, alpha: 0.55, tone: 0.92 },
+  county: { color: '#6b5a7a', width: 0.5, alpha: 0.35, dash: [2, 2] },
+  culture: { color: '#6b5a7a', width: 1, alpha: 0.6, dash: [5, 2.5] },
+  realm: { color: '#8a2f8f', width: 1.5, alpha: 0.9, dash: [9, 2.5, 1.8, 2.5] },
+  label: () => '#6a2470',
+}
+/** 政区地图集：满铺的柔和色块，伯爵领白线，国界内侧加深的色带 */
+const POL_ATLAS: PoliticalLook = {
+  palette: ['#f2c49b', '#c8dea0', '#d9bde3', '#f5e08f', '#a9d6d8', '#f0aea3', '#d8cfa4', '#b4c6ea'].map(hex),
+  fill: 0.9,
+  band: { width: 7, alpha: 0.75, tone: 0.8 },
+  county: { color: '#ffffff', width: 0.6, alpha: 0.55 },
+  culture: { color: '#4a4048', width: 1.2, alpha: 0.7, dash: [5, 2.5] },
+  realm: { color: '#4a4048', width: 1.4, alpha: 0.95, dash: [7, 2.5, 1.5, 2.5] },
+  label: shadeOf(0.4),
+}
+/** 战略图：饱和的纹章色压在晕渲地形上，伯爵领细黑线，国界粗黑线 */
+const POL_STRATEGY: PoliticalLook = {
+  palette: ['#c0473c', '#3f74b8', '#d9aa3b', '#4f9450', '#8c52a3', '#d6803a', '#3a9e9a', '#a35470'].map(hex),
+  fill: 0.6,
+  band: { width: 5, alpha: 0.6, tone: 1.35 },
+  county: { color: '#141414', width: 0.5, alpha: 0.32 },
+  culture: { color: '#141414', width: 1.2, alpha: 0.6, dash: [5, 2.5] },
+  realm: { color: '#101010', width: 2, alpha: 0.95 },
+  halo: { color: '#000000', width: 5, alpha: 0.18 },
+  label: () => '#fff8e8',
+}
 
 const FOREST = new Set<number>([Biome.Taiga, Biome.TemperateForest, Biome.TemperateRainforest, Biome.TropicalRainforest, Biome.TropicalSeasonalForest])
 
@@ -479,9 +595,66 @@ function topoPixel(p: Px, o: Float32Array, f: Fields) {
   coastInk(p, o, [50, 110, 160], 0.7, 0.95)
 }
 
+// ————————————————————————————————— 政区地图集 · 战略图 —————————————————————————————————
+/** 位图版本的政区着色（矢量版见 svg/vector.ts）：取最近格所属国家的颜色 */
+function realmTint(p: Px, f: Fields, look: PoliticalLook): RGB | null {
+  const r = f.world.realm[p.i]
+  return r >= 0 && f.world.realms[r] ? look.palette[f.world.realms[r].color] : null
+}
+
+export const POLITICAL_SEA = hex('#d3e3ea')
+export const POLITICAL_LAND = hex('#eee8d6')
+function politicalPixel(p: Px, o: Float32Array, f: Fields) {
+  const S = f.S
+  if (p.h <= 0) {
+    set(o, POLITICAL_SEA)
+    mix(o, 176, 204, 216, sm(0.3, 3, -p.h) * 0.6)
+    seaIce(p, o, [240, 244, 245])
+    const dpx = -p.coast
+    const rip = [2.5, 5.5, 9.5]
+    const ra = [0.3, 0.18, 0.09]
+    for (let k = 0; k < 3; k++) mix(o, 80, 120, 140, (1 - sm(0.35, 1.05, Math.abs(dpx - rip[k] * (S / 2)))) * ra[k])
+  } else {
+    set(o, POLITICAL_LAND)
+    const c = realmTint(p, f, POL_ATLAS)
+    if (c) mixc(o, c, POL_ATLAS.fill)
+    const sh = 1 + (p.shade - 1) * 0.35
+    o[0] *= sh
+    o[1] *= sh
+    o[2] *= sh
+    lakeFill(p, o, POLITICAL_SEA, [70, 100, 120])
+  }
+  coastInk(p, o, [60, 80, 95], 0.65)
+  paperGrain(o, p.px, p.py)
+}
+
+export const STRATEGY_SEA = hex('#1f3d50')
+export const STRATEGY_SHALLOW = hex('#2f6178')
+function strategyPixel(p: Px, o: Float32Array, f: Fields) {
+  if (p.h <= 0) {
+    set(o, STRATEGY_SEA)
+    mixc(o, STRATEGY_SHALLOW, 1 - sm(0, 30 * f.S, -p.coast))
+    seaIce(p, o, [214, 226, 232])
+  } else {
+    const [cr, cg, cb] = f.biomeColors('atlas', ATLAS)
+    o[0] = f.sample(cr, p.gx, p.gy)
+    o[1] = f.sample(cg, p.gx, p.gy)
+    o[2] = f.sample(cb, p.gx, p.gy)
+    const c = realmTint(p, f, POL_STRATEGY)
+    if (c) mixc(o, c, POL_STRATEGY.fill)
+    const sh = 1 + (p.shade - 1) * 1.1
+    o[0] *= sh
+    o[1] *= sh
+    o[2] *= sh
+    lakeFill(p, o, STRATEGY_SHALLOW, [20, 30, 36])
+  }
+  coastInk(p, o, [16, 24, 30], 0.75)
+}
+
 export const THEMES: Theme[] = [
   {
     id: 'physical',
+    political: POL_PHYSICAL,
     name: '自然地理',
     desc: '分层设色 · 晕渲',
     paper: hex('#f1ead8'),
@@ -509,6 +682,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: 'fantasy',
+    political: POL_FANTASY,
     name: '奇幻羊皮',
     desc: '手绘山形 · 树林符号',
     paper: hex('#dcc596'),
@@ -537,6 +711,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: 'nautical',
+    political: POL_NAUTICAL,
     name: '航海图',
     desc: '测深 · 恒向线',
     paper: hex('#efe9da'),
@@ -566,6 +741,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: 'teyvat',
+    political: POL_TEYVAT,
     name: '提瓦特',
     desc: '原神风 · 平涂台地 · 星空边界',
     paper: TEYVAT.void,
@@ -597,6 +773,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: 'ink',
+    political: POL_INK,
     name: '水墨',
     desc: '青绿山水 · 中文注记',
     paper: hex('#e6ddc6'),
@@ -624,6 +801,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: 'topo',
+    political: POL_TOPO,
     name: '等高线',
     desc: '现代地形图',
     paper: hex('#fbfaf6'),
@@ -648,6 +826,68 @@ export const THEMES: Theme[] = [
       vertical: [],
       caps: true,
       city_marker: 'dot',
+    },
+  },
+  {
+    id: 'political',
+    political: POL_ATLAS,
+    politicalDefault: 'realms',
+    name: '政区地图集',
+    desc: '国家着色 · 伯爵领 · 国界色带',
+    paper: hex('#f4efe2'),
+    ink: '#3d3640',
+    pixel: politicalPixel,
+    river: { color: 'rgba(70, 120, 150, 0.85)', width: 0.8, minFlow: 3 },
+    roads: { color: 'rgba(120, 60, 50, 0.55)', width: 0.9, sea: 'rgba(70, 110, 135, 0.45)', seaDash: [4, 4] },
+    frame: 'atlas',
+    compass: 'star',
+    cartouche: 'box',
+    graticule: 'rgba(70, 100, 120, 0.22)',
+    legend: 'realms',
+    labels: {
+      display: CORMORANT,
+      text: CORMORANT,
+      water: '#3f6a80',
+      land: 'rgba(70, 60, 60, 0.8)',
+      range: '#6a5a50',
+      region: '#6a5a50',
+      city: '#2a2428',
+      halo: 'rgba(250, 246, 236, 0.75)',
+      vertical: [],
+      caps: true,
+      city_marker: 'square',
+      noHalo: ['ocean', 'sea', 'continent', 'realm'],
+    },
+  },
+  {
+    id: 'strategy',
+    political: POL_STRATEGY,
+    politicalDefault: 'realms',
+    name: '战略图',
+    desc: '纹章色 · 晕渲地形 · 粗国界',
+    paper: hex('#13222c'),
+    ink: '#e9e1cc',
+    pixel: strategyPixel,
+    river: { color: 'rgba(70, 130, 160, 0.95)', width: 1, minFlow: 2.2 },
+    roads: { color: 'rgba(60, 40, 25, 0.6)', width: 1, dash: [3, 2.5], sea: 'rgba(200, 220, 230, 0.35)', seaDash: [4, 5] },
+    frame: 'none',
+    compass: 'none',
+    cartouche: 'game',
+    graticule: null,
+    paperTexture: false,
+    labels: {
+      display: FELL_SC,
+      text: CORMORANT,
+      water: '#b9d3df',
+      land: '#f6efdc',
+      range: '#efe6cf',
+      region: '#efe6cf',
+      city: '#fff8e8',
+      halo: 'rgba(16, 14, 12, 0.75)',
+      vertical: [],
+      caps: true,
+      city_marker: 'castle',
+      noHalo: [],
     },
   },
 ]
