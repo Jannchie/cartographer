@@ -25,6 +25,7 @@ Terrain is generated in the following stages:
 - **Erosion**: a stream-power model iterates tectonic uplift against fluvial incision on a coarse grid to form dendritic valleys; droplet erosion and thermal weathering are then applied at full resolution.
 - **Climate and hydrology**: temperature is derived from latitude, elevation and continentality. Moisture advected by the wind belts produces wet windward slopes and rain shadows. Flow directions are computed with Priority-Flood, and a water balance determines exorheic lakes, endorheic lakes and salt flats.
 - **Biomes and naming**: biomes are classified on a Whittaker temperature–precipitation diagram. Each world has its own generated language for naming continents, seas, ranges, lakes and cities, with corresponding Chinese, English and Japanese forms.
+- **Counties, cultures and realms**: once towns are placed, the land is divided into counties of roughly 3,000 km² (in the spirit of Crusader Kings), grown from their seats with a terrain cost so that boundaries follow ridges and rivers. Cultures spread across the county graph and are kept apart by mountains and seas; each has its own naming style and town plan. Realms are assembled from whole counties, and expanding across a cultural boundary costs more. The paper map can tint the land by realm or by culture and draws county and realm borders.
 
 The 3D diorama supports real-time shadows, volumetric clouds, water reflections, a day–night cycle, an automated flyover and film-style colour grading. Edit mode provides brushes for raising and lowering terrain and adjusting temperature and precipitation, as well as adding or removing towns and defining continents; climate and hydrology are recomputed after each edit.
 
@@ -45,6 +46,8 @@ Six paper-map styles are available, each with label placement, scale bar and fra
 | <img src="docs/images/en/world-physical.webp" width="260"> | <img src="docs/images/en/world-fantasy.webp" width="260"> | <img src="docs/images/en/world-nautical.webp" width="260"> |
 | **Teyvat** | **Ink wash** | **Topographic** |
 | <img src="docs/images/en/world-teyvat.webp" width="260"> | <img src="docs/images/en/world-ink.webp" width="260"> | <img src="docs/images/en/world-topo.webp" width="260"> |
+
+Two further styles are made for political maps: **Political atlas** (flat pastel realm colours, white county lines and a darker band inside each border) and **Strategy** (heraldic colours over shaded relief with bold borders). In every style, the political switch colours the land by realm or by culture, using borders and colours that match the style: dotted borders on parchment, vermilion brush lines in ink wash, magenta dash-dot lines on the topographic map.
 
 ### Observed data
 

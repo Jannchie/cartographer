@@ -1,11 +1,12 @@
 import type { Label, World } from '../../gen/types'
 import { areaMember, cellAt, rangeCells, type Area } from '../../gen/areas'
 import { bboxOf, chaikin } from '../../settlement/geom'
-import { cjkFont, lang, placeName } from '../../i18n'
+import { lang, placeName } from '../../i18n'
 import { GLYPH_R, HALO_RATIO, LABEL_PAD, labelPx, logT } from './labelSize'
-import { REALM_COLORS, type Theme } from './styles'
+import { themeCjk, type Theme } from './styles'
 import { polyCrossings, polylineOf, rasterArea, rasterPoly, type AreaMask } from './svg/displayList'
 import { labelCtx } from './svg/recorder'
+import { politicalRegions, type PoliticalMode } from './political'
 
 interface Box {
   x0: number
@@ -42,6 +43,8 @@ export class LabelLayer {
     private theme: Theme,
     /** 有名字的区域：给了就按区域排大陆、海、湾、湖这些地名 */
     private areaList?: Area[],
+    /** 政区图：标国名，文化图上标文化名 */
+    private political?: PoliticalMode,
   ) {}
 
   reserve(b: Box) {
@@ -74,7 +77,7 @@ export class LabelLayer {
     const caps = L.caps && !zh
     const f = (style: string, tier: number, fam: string) => {
       const size = labelPx(tier, zh, labelK)
-      return { font: `${style} ${size}px ${fam}, ${cjkFont(lang)}`, size }
+      return { font: `${style} ${size}px ${fam}, ${themeCjk(this.theme)}`, size }
     }
     const halo = !(L.noHalo ?? NO_HALO).includes(kind)
     const base = (o: ReturnType<typeof f>, color: string, spacing: number, upper: boolean): TextStyle => ({
@@ -87,7 +90,7 @@ export class LabelLayer {
     })
     if (L.uniform) {
       const size = labelPx(L.uniform.tier, zh, labelK)
-      return { font: `${L.uniform.weight} ${size}px ${L.text}, ${cjkFont(lang, true)}`, size, color: L.uniform.color, spacing: zh ? 0.08 : 0.02, upper: false, vertical: false, halo: true }
+      return { font: `${L.uniform.weight} ${size}px ${L.text}, ${themeCjk(this.theme, true)}`, size, color: L.uniform.color, spacing: zh ? 0.08 : 0.02, upper: false, vertical: false, halo: true }
     }
     const it = zh ? '' : 'italic'
     // 占全图的面积比
@@ -493,7 +496,8 @@ export class LabelLayer {
     const cell = 4 * S
     const cache = new Map<object, AreaMask>()
     return (it: { kind: Kind; realm?: number; area?: Area }): AreaMask | undefined => {
-      const key = it.area ?? (it.kind === 'realm' ? world.realms[it.realm!] : null)
+      const regions = politicalRegions(world, this.political ?? 'realms')
+      const key = it.area ?? (it.kind === 'realm' ? regions.list[it.realm!] : null)
       if (!key) return undefined
       const hit = cache.get(key)
       if (hit) return hit
@@ -510,7 +514,7 @@ export class LabelLayer {
           (v) => v / S - 0.5,
           (gx, gy) => member(cellAt(world, gx, gy)),
         )
-      } else m = rasterArea([0, 0, W * S, H * S], cell, (x, y) => world.realm[Math.min(H - 1, Math.floor(y / S)) * W + Math.min(W - 1, Math.floor(x / S))] === it.realm)
+      } else m = rasterArea([0, 0, W * S, H * S], cell, (x, y) => regions.raster[Math.min(H - 1, Math.floor(y / S)) * W + Math.min(W - 1, Math.floor(x / S))] === it.realm)
       cache.set(key, m)
       return m
     }
@@ -521,8 +525,9 @@ export class LabelLayer {
     const { world, S, theme } = this
     const k = S / 2
     const order: Kind[] = ['ocean', 'realm', 'continent', 'capital', 'range', 'sea', 'city', 'river', 'island', 'bay', 'lake', 'desert', 'basin', 'forest']
-    // 政区图与带真实行政区划的区域图标注政区名（省会按首府的样式画）
-    const realms = !!(theme.realms || world.admin)
+    // 政区图与带真实行政区划的区域图标注政区名（省会按首府的样式画）；文化图上标文化名
+    const realms = !!(theme.realms || world.admin || this.political)
+    const regions = politicalRegions(world, this.political ?? 'realms')
     const capitals = new Set(realms ? world.realms.map((r) => r.capital) : [])
     type Item = { kind: Kind; weight: number; label?: Label; realm?: number; area?: Area }
     // 由区域推出来的地名按区域画（名字、位置可能改过）；其余照原注记
@@ -544,7 +549,7 @@ export class LabelLayer {
       }
       items.push({ kind: a.kind, weight: label.weight, label, area: a })
     }
-    if (realms) world.realms.forEach((r, i) => !r.noLabel && items.push({ kind: 'realm', weight: r.area, realm: i }))
+    if (realms) regions.list.forEach((r, i) => !('noLabel' in r && r.noLabel) && items.push({ kind: 'realm', weight: r.area, realm: i }))
     // 政区图上大陆名让位给国名
     const list = items
       .filter((it) => !(realms && it.kind === 'continent'))
@@ -552,13 +557,14 @@ export class LabelLayer {
     const areaOf = labelCtx(this.ctx).beginLabel ? this.areas() : () => undefined
     for (const it of list) {
       if (it.kind === 'realm') {
-        const r = world.realms[it.realm!]
+        const r = regions.list[it.realm!]
         const st = this.style('realm', r.area)
-        const c = REALM_COLORS[r.color]
-        const col = this.theme.labels.uniform?.color ?? `rgb(${c.map((v) => Math.round(v * 0.42)).join(',')})`
+        const look = this.theme.political
+        const c = look.palette[r.color]
+        const col = this.theme.labels.uniform?.color ?? look.label?.(c) ?? `rgb(${c.map((v) => Math.round(v * 0.42)).join(',')})`
         const name = placeName(r)
         for (const [ox, oy] of [[0, 0], [0, -30 * k], [0, 30 * k], [-50 * k, 0], [50 * k, 0]]) {
-          if (world.realm[Math.round(r.y + oy / S) * world.W + Math.round(r.x + ox / S)] !== it.realm) continue
+          if (regions.raster[Math.round(r.y + oy / S) * world.W + Math.round(r.x + ox / S)] !== it.realm) continue
           if (this.text(name, r.x * S + ox, r.y * S + oy, 0, st, true, col, false, undefined, areaOf(it))) break
         }
         continue

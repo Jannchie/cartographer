@@ -5,7 +5,8 @@ import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
 import { drawMapLabels, drawMapOverlays, fieldsFor, marginOf, type Reserved } from '../index'
 import { atlasLabelK } from '../labels'
-import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type StyleId } from '../styles'
+import { politicalRegions, type PoliticalMode } from '../political'
+import { currentFontPreset, FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, POLITICAL_LAND, POLITICAL_SEA, STRATEGY_SEA, STRATEGY_SHALLOW, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type PoliticalLook, type StyleId } from '../styles'
 import { contourGrid, contours, pathData, type ContourGrid } from './contour'
 import { DisplayList, type Fill, type Segment, type Stroke } from './displayList'
 import { Recorder } from './recorder'
@@ -164,6 +165,57 @@ function hillshade(L: Layers, F: Fields, ink: string, darkOp: number, lightOp: n
 function ripples(L: Layers, world: World, dists: number[], color: string, opacities: number[], width: number) {
   const cd = world.coastDist
   dists.forEach((d, k) => L.line(cd, -d, color, width, opacities[k]))
+}
+
+/**
+ * 政区着色：按国家或文化的配色给陆地上色。同色的区域互不相邻，一种颜色追踪一次；
+ * 色块先向海里外扩几格，再用海岸线裁切，岸线与底图的海岸一样平滑。
+ * 色带：沿色块轮廓描一道粗线，只留色块以内、陆地以内的半边，于是只出现在国界内侧
+ */
+function politicalFill(L: Layers, world: World, F: Fields, mode: PoliticalMode, look: PoliticalLook) {
+  const { W, H } = world
+  const N = W * H
+  const k = L.S / 2
+  const { list, raster } = politicalRegions(world, mode)
+  const col = new Int8Array(N).fill(-1)
+  let front: number[] = []
+  for (let i = 0; i < N; i++) {
+    const r = raster[i]
+    if (r < 0) continue
+    col[i] = list[r].color
+    front.push(i)
+  }
+  for (let step = 0; step < 3 && front.length; step++) {
+    const next: number[] = []
+    for (const c of front) {
+      const x = c % W
+      for (const j of [x > 0 ? c - 1 : -1, x < W - 1 ? c + 1 : -1, c - W, c + W]) {
+        if (j < 0 || j >= N || col[j] >= 0) continue
+        col[j] = col[c]
+        next.push(j)
+      }
+    }
+    front = next
+  }
+  L.list.clips.set('landClip', { d: pathData(contours(F.land, W, H, 0, true), L.S, { closed: true, tol: 0.35, minArea: 1.5 }), rule: 'evenodd' })
+  const field = new Float32Array(N)
+  for (let c = 0; c < look.palette.length; c++) {
+    let any = false
+    for (let i = 0; i < N; i++) {
+      field[i] = col[i] === c ? 1 : 0
+      any ||= col[i] === c
+    }
+    if (!any) continue
+    const d = pathData(contours(field, W, H, 0.5, true), L.S, { closed: true, tol: 0.35, minArea: 1.5 })
+    const color = look.palette[c]
+    if (look.fill > 0) L.list.path('map', d, { fill: { color: rgb(color), alpha: look.fill, rule: 'evenodd' }, clip: 'landClip' })
+    if (look.band) {
+      const id = `pol${c}`
+      L.list.clips.set(id, { d, rule: 'evenodd', within: 'landClip' })
+      const tone = look.band.tone
+      L.list.path('map', d, { stroke: { color: rgb([color[0] * tone, color[1] * tone, color[2] * tone]), alpha: look.band.alpha, width: look.band.width * 2 * k, join: 'round' }, clip: id })
+    }
+  }
 }
 
 // —————————————————————————— 各风格的矢量底图 ——————————————————————————
@@ -345,6 +397,36 @@ function topo(L: Layers, world: World, F: Fields) {
   L.line(F.land, 0, 'rgb(50,110,160)', 1.4, 0.95)
 }
 
+/** 政区地图集：浅蓝海、近白陆地，色块之上再叠淡晕渲、湖泊与海岸线 */
+function politicalAtlas(L: Layers, world: World, F: Fields) {
+  L.rect(rgb(POLITICAL_SEA))
+  L.fill(F.depth, 2.5, 'rgb(186,210,221)', 0.35, { tol: 0.6, minArea: 6 })
+  L.fill(F.ice, 0, 'rgb(240,244,245)')
+  ripples(L, world, [1.25, 2.75, 4.75], 'rgb(80,120,140)', [0.3, 0.18, 0.09], 0.7)
+  L.fill(F.land, 0, rgb(POLITICAL_LAND))
+  return () => {
+    hillshade(L, F, 'rgb(40,32,36)', 0.075, 0.12)
+    L.fill(F.lake, 0.5, rgb(POLITICAL_SEA), 1, { stroke: { color: 'rgb(70,100,120)', width: 0.8, alpha: 0.8 } })
+    L.line(F.land, 0, 'rgb(60,80,95)', 1.3, 0.85)
+  }
+}
+
+/** 战略图：深青色的海、近岸渐浅；陆地是群系底色加浓重晕渲，纹章色压在中间 */
+function strategy(L: Layers, world: World, F: Fields) {
+  L.rect(rgb(STRATEGY_SEA))
+  for (const [d, a] of [[40, 0.18], [22, 0.22], [12, 0.28], [5, 0.34]] as const) L.fill(world.coastDist, -d, rgb(STRATEGY_SHALLOW), a)
+  L.fill(F.ice, 0, 'rgb(214,226,232)')
+  ripples(L, world, [1.5, 3.5], 'rgb(190,215,225)', [0.22, 0.1], 0.7)
+  L.fill(F.land, 0, rgb(ATLAS[Biome.Grassland]))
+  biomeLayers(L, world, ATLAS, 1)
+  return () => {
+    hillshade(L, F, 'rgb(18,12,8)', 0.2, 0.16)
+    for (const [lv, op] of [[2.5, 0.25], [3.5, 0.35]] as const) L.fill(F.land, lv, 'rgb(236,232,222)', op)
+    L.fill(F.lake, 0.5, rgb(STRATEGY_SHALLOW), 1, { stroke: { color: 'rgb(16,24,30)', width: 1, alpha: 0.9 } })
+    L.line(F.land, 0, 'rgb(12,20,26)', 1.7, 0.95)
+  }
+}
+
 /** 可平铺的噪声小图（周期性值噪声），返回 data URL */
 function noiseTile(size: number, cell: number, rgb: number[], alpha: number, seed: number): HTMLCanvasElement {
   const c = document.createElement('canvas')
@@ -414,12 +496,16 @@ export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId,
   const M = marginOf(theme, S)
   const list = new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH)
   list.labelK = atlasLabelK(S)
-  list.head = `<title>${world.worldName}</title><style>@import url('${FONT_CSS.replace(/&/g, '&amp;')}');</style>`
+  const extraCss = currentFontPreset().css
+  const imports = [FONT_CSS, ...(extraCss ? [`https://fonts.googleapis.com/css2?${extraCss}&display=swap`] : [])]
+  list.head = `<title>${world.worldName}</title><style>${imports.map((u) => `@import url('${u.replace(/&/g, '&amp;')}');`).join('')}</style>`
   // 纸底
   list.path('page', `M0 0L${list.width} 0L${list.width} ${list.height}L0 ${list.height}Z`, { fill: { color: rgb(theme.paper), alpha: 1 } })
 
   const F = fieldsOf(world)
   const L = new Layers(list, W, H, S)
+  // 政区专题风格的晕渲、湖泊与海岸线要压在政区色块之上：底图先画到色块为止，其余在着色之后
+  let after: (() => void) | undefined
   switch (theme.id) {
     case 'physical':
       physical(L, world, F, opts)
@@ -439,7 +525,16 @@ export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId,
     case 'topo':
       topo(L, world, F)
       break
+    case 'political':
+      after = politicalAtlas(L, world, F)
+      break
+    case 'strategy':
+      after = strategy(L, world, F)
+      break
   }
+
+  if (opts.political && world.political) politicalFill(L, world, F, opts.political, theme.political)
+  after?.()
 
   // 纸纹：两张可平铺的小噪声图做图案
   const brown = theme.id === 'fantasy'
@@ -514,7 +609,7 @@ export function withLabels(base: AtlasBase, areas: AtlasOpts['areas']): DisplayL
   const rec = new Recorder(list, base.measurer)
   rec.space = 'map'
   const theme = themeById(base.theme)
-  drawMapLabels(rec as unknown as CanvasRenderingContext2D, fieldsFor(base.world, base.S), theme, areas, base.reserved)
+  drawMapLabels(rec as unknown as CanvasRenderingContext2D, fieldsFor(base.world, base.S), theme, areas, base.reserved, base.opts.political)
   list.segments.push(...src.segments.slice(cut))
   return list
 }

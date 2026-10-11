@@ -1,8 +1,8 @@
 import { isGlobe, type World } from '../../gen/types'
 import { regionProjection } from '../../gen/earth/region'
-import { cjkFont, lang, t, worldTitle } from '../../i18n'
+import { lang, placeName, t, worldTitle } from '../../i18n'
 import { hash, type Fields } from './fields'
-import { HYPSO_STOPS, REALM_COLORS, type Theme } from './styles'
+import { HYPSO_STOPS, themeCjk, type Theme } from './styles'
 import { labelCtx } from './svg/recorder'
 
 const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
@@ -307,9 +307,9 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
         ctx.stroke()
       }
       ctx.fillStyle = theme.ink
-      ctx.font = `400 ${32 * k}px ${theme.labels.display}, ${cjkFont(lang)}`
+      ctx.font = `400 ${32 * k}px ${theme.labels.display}, ${themeCjk(theme)}`
       spaced(ctx, title, w / 2, 44 * k, 7 * k)
-      ctx.font = `italic 400 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      ctx.font = `italic 400 ${13 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
       ctx.textAlign = 'center'
       ctx.fillText(t('此乃{name}之地', { name: worldTitle(world) }), w / 2, 62 * k)
       box = { x0: 0, y0: 0, x1: x + w + 20 * k, y1: y + h + 10 * k }
@@ -328,11 +328,11 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.strokeRect(0, 0, w, h)
       ctx.fillStyle = theme.ink
       ctx.textAlign = 'center'
-      ctx.font = `500 ${12 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      ctx.font = `500 ${12 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
       spaced(ctx, t('海图'), w / 2, 22 * k, 2.5 * k)
-      ctx.font = `600 ${30 * k}px ${theme.labels.display}, ${cjkFont(lang)}`
+      ctx.font = `600 ${30 * k}px ${theme.labels.display}, ${themeCjk(theme)}`
       spaced(ctx, title, w / 2, 56 * k, 6 * k)
-      ctx.font = `italic 500 ${12 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      ctx.font = `italic 500 ${12 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
       ctx.textAlign = 'center'
       ctx.fillText(t('测深以米计 · 以平均海面为基准'), w / 2, 78 * k)
       ctx.fillText(t('种子「{seed}」测绘', { seed: world.params.seed }), w / 2, 94 * k)
@@ -348,7 +348,7 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.fillStyle = theme.ink
       ctx.strokeStyle = theme.labels.halo
       ctx.lineJoin = 'round'
-      ctx.font = `600 ${34 * k}px ${theme.labels.display}, ${cjkFont(lang)}`
+      ctx.font = `600 ${34 * k}px ${theme.labels.display}, ${themeCjk(theme)}`
       ctx.lineWidth = 4 * k
       spaced(ctx, title, w / 2, 38 * k, 8 * k, true)
       ctx.lineWidth = 1 * k
@@ -368,7 +368,7 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.closePath()
       ctx.fill()
       ctx.globalAlpha = 1
-      ctx.font = `600 ${12 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      ctx.font = `600 ${12 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
       ctx.strokeStyle = theme.labels.halo
       ctx.lineWidth = 3 * k
       const sub = t('种子 · {seed}', { seed: lang === 'en' ? world.params.seed.toUpperCase() : world.params.seed })
@@ -383,7 +383,7 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       const x = MW - 44 * k
       const y = 34 * k
       ctx.fillStyle = theme.ink
-      ctx.font = `400 ${size}px ${theme.labels.display}, ${cjkFont(lang)}`
+      ctx.font = `400 ${size}px ${theme.labels.display}, ${themeCjk(theme)}`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
       if (lang === 'en') {
@@ -392,10 +392,10 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
         ctx.rotate(Math.PI / 2)
         ctx.textAlign = 'left'
         ctx.textBaseline = 'middle'
-        ctx.font = `400 ${size * 0.8}px ${theme.labels.display}, ${cjkFont(lang)}`
+        ctx.font = `400 ${size * 0.8}px ${theme.labels.display}, ${themeCjk(theme)}`
         ctx.fillText(zhTitle, 0, 0)
         const len = ctx.measureText(zhTitle).width
-        ctx.font = `400 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+        ctx.font = `400 ${13 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
         ctx.fillText(t('种子 {seed}', { seed: world.params.seed }), 0, size * 0.9)
         ctx.restore()
         box = { x0: x - size * 1.7, y0: 0, x1: MW, y1: y + len + 20 * k }
@@ -405,7 +405,7 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       chars.forEach((c, i) => ctx.fillText(c, x, y + i * size * 1.12))
       const bottom = y + chars.length * size * 1.12
       // 落款小字
-      ctx.font = `400 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      ctx.font = `400 ${13 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
       const sign = [...t('种子 {seed}', { seed: world.params.seed })]
       sign.forEach((c, i) => ctx.fillText(c, x - size * 1.1, y + size * 0.6 + i * 14 * k))
       seal(ctx, x - size * 0.5, bottom + 10 * k, 58 * k, worldTitle(world), k)
@@ -428,9 +428,9 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.strokeRect(4 * k, 4 * k, w - 8 * k, h - 8 * k)
       ctx.fillStyle = theme.ink
       const sans = theme.id === 'topo'
-      ctx.font = `${sans ? 700 : 600} ${(sans ? 26 : 32) * k}px ${theme.labels.display}, ${cjkFont(lang)}`
+      ctx.font = `${sans ? 700 : 600} ${(sans ? 26 : 32) * k}px ${theme.labels.display}, ${themeCjk(theme)}`
       spaced(ctx, title, w / 2, 44 * k, (sans ? 5 : 9.6) * k)
-      ctx.font = `${sans ? '' : 'italic'} 500 ${13 * k}px ${theme.labels.text}, ${cjkFont(lang)}`
+      ctx.font = `${sans ? '' : 'italic'} 500 ${13 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
       ctx.textAlign = 'center'
       const sub =
         theme.id === 'topo'
@@ -488,6 +488,10 @@ export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: T
   let box = null
   if (theme.legend === 'realms') {
     const rs = [...world.realms].sort((a, b) => b.area - a.area).slice(0, 10)
+    if (!rs.length) {
+      ctx.restore()
+      return null
+    }
     const row = 17 * k
     const w = 230 * k
     const h = 34 * k + rs.length * row
@@ -500,15 +504,15 @@ export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: T
     ctx.fillStyle = theme.ink
     ctx.font = `600 ${13 * k}px ${theme.labels.display}`
     ctx.textBaseline = 'middle'
-    ctx.fillText('REALMS', x + 12 * k, y + 16 * k)
+    ctx.fillText(lang === 'zh' || lang === 'ja' ? t('国家') : 'REALMS', x + 12 * k, y + 16 * k)
     ctx.font = `500 ${12.5 * k}px ${theme.labels.text}`
     rs.forEach((r, i) => {
       const yy = y + 34 * k + i * row
-      ctx.fillStyle = rgb(REALM_COLORS[r.color])
+      ctx.fillStyle = rgb(theme.political.palette[r.color])
       ctx.fillRect(x + 12 * k, yy - 5 * k, 16 * k, 10 * k)
       ctx.strokeRect(x + 12 * k, yy - 5 * k, 16 * k, 10 * k)
       ctx.fillStyle = theme.ink
-      ctx.fillText(r.name, x + 36 * k, yy)
+      ctx.fillText(placeName(r), x + 36 * k, yy)
     })
     box = { x0: 0, y0: y - 10 * k, x1: x + w + 10 * k, y1: MH }
   } else {

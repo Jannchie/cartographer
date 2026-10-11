@@ -24,10 +24,14 @@ export function fromWorld(w: World, l: Label): Partial<SettlementParams> {
     climate: { temp: w.temperature[i], rain: w.precipitation[i], biome: w.biome[i] },
     capital: l.kind === 'capital',
   }
-  // 文明跟着世界的命名世界观：汉字地名的世界是东方，日本地名的是和风，其余是西方
-  const naming = resolveNaming(w.params)
-  if (naming === 'eastern' || naming === 'wa') out.culture = naming
-  else out.culture = 'western'
+  // 文明：有政区层时跟着城所在伯爵领的文化；否则跟着世界的命名世界观（汉字地名的世界是东方，日本地名的是和风，其余是西方）
+  const pl = w.political
+  const county = pl ? pl.county[i] : -1
+  if (pl && county >= 0) out.culture = pl.cultures[pl.counties[county].culture].town
+  else {
+    const naming = resolveNaming(w.params)
+    out.culture = naming === 'eastern' || naming === 'wa' ? naming : 'western'
+  }
   // 海：到海岸距离小；海在距离下降的方向
   const cd = w.coastDist
   out.coast = cd[i] < 3
