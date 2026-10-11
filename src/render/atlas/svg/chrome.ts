@@ -1,8 +1,7 @@
 import type { World } from '../../../gen/types'
-import { cjkFont, lang } from '../../../i18n'
 import { drawCartouche, drawCompass, drawFrameAt, drawLegend, drawScaleBarAt, lonScale, SCALE_NICE_KM } from '../furniture'
 import { compassSpot, marginOf } from '../index'
-import { themeById, type StyleId, type Theme } from '../styles'
+import { themeById, themeCjk, type StyleId, type Theme } from '../styles'
 import { DisplayList } from './displayList'
 import { Recorder } from './recorder'
 import type { Box, Inset } from './viewer'
@@ -106,7 +105,7 @@ export function buildAtlasChrome(
 
 /** 悬停读数画成图廓里的一张小卡片，与标题框同一套纸色与框线；x0 给出时左对齐 x0，否则右对齐 x1 */
 function probeCard(list: DisplayList, theme: Theme, measurer: CanvasRenderingContext2D, p: AtlasProbe, x0: number | null, x1: number, y: number) {
-  const cjk = cjkFont(lang)
+  const cjk = themeCjk(theme)
   const titleFont = `600 15px ${theme.labels.display}, ${cjk}`
   const rowFont = `500 12.5px ${theme.labels.text}, ${cjk}`
   measurer.font = titleFont

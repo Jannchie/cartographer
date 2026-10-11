@@ -6,7 +6,7 @@ import { drawFrame } from '../furniture'
 import { drawMapLabels, drawMapOverlays, fieldsFor, marginOf, type Reserved } from '../index'
 import { atlasLabelK } from '../labels'
 import { politicalRegions, type PoliticalMode } from '../political'
-import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, POLITICAL_LAND, POLITICAL_SEA, STRATEGY_SEA, STRATEGY_SHALLOW, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type PoliticalLook, type StyleId } from '../styles'
+import { currentFontPreset, FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, POLITICAL_LAND, POLITICAL_SEA, STRATEGY_SEA, STRATEGY_SHALLOW, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type PoliticalLook, type StyleId } from '../styles'
 import { contourGrid, contours, pathData, type ContourGrid } from './contour'
 import { DisplayList, type Fill, type Segment, type Stroke } from './displayList'
 import { Recorder } from './recorder'
@@ -496,7 +496,9 @@ export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId,
   const M = marginOf(theme, S)
   const list = new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH)
   list.labelK = atlasLabelK(S)
-  list.head = `<title>${world.worldName}</title><style>@import url('${FONT_CSS.replace(/&/g, '&amp;')}');</style>`
+  const extraCss = currentFontPreset().css
+  const imports = [FONT_CSS, ...(extraCss ? [`https://fonts.googleapis.com/css2?${extraCss}&display=swap`] : [])]
+  list.head = `<title>${world.worldName}</title><style>${imports.map((u) => `@import url('${u.replace(/&/g, '&amp;')}');`).join('')}</style>`
   // 纸底
   list.path('page', `M0 0L${list.width} 0L${list.width} ${list.height}L0 ${list.height}Z`, { fill: { color: rgb(theme.paper), alpha: 1 } })
 

@@ -31,7 +31,7 @@ import type { EarthRes } from '../../gen/earth/real'
 import { DEFAULT_PARAMS, isGlobe, SHAPE_PARAMS } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
-import { themeById } from '../../render/atlas/styles'
+import { FONT_PRESETS, themeById } from '../../render/atlas/styles'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
 import { HOLO_PALETTES } from '../../render/holo/palettes'
 import { DEFAULT_TIME, fmtTime } from '../../render/aerial/daylight'
@@ -129,6 +129,7 @@ const POLITICAL_OPTS = [
 // 政区专题风格总要着色：不给"无"，选着"无"时显示它默认的模式
 const politicalDefault = computed(() => themeById(ws.atlasStyle).politicalDefault)
 const politicalOpts = computed(() => (politicalDefault.value ? POLITICAL_OPTS.slice(1) : POLITICAL_OPTS))
+const fontOpts = FONT_PRESETS.map((f) => ({ value: f.id, label: f.name, title: f.desc }))
 const politicalShown = computed(() => (ws.political === 'off' && politicalDefault.value ? politicalDefault.value : ws.political))
 
 // 编辑工具：三列的图标工具栏（选取 · 地形 · 气候 · 大洲）
@@ -327,6 +328,9 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
     <Section v-if="ws.mode === '2d'" v-show="ws.tab === 'view'">
       <Swatches :items="atlasSwatches" :model-value="ws.atlasStyle" @update:model-value="W.setAtlasStyle" />
       <Legend :items="atlasToggles" @toggle="(i) => (i < atlasKeys.length ? W.setAtlasOpt(atlasKeys[i], !ws.atlasOpts[atlasKeys[i]]) : W.setOrnaments(!ws.ornaments))" />
+      <Field label="字体" title="地图注记的字体（导出的 SVG 同样引用）">
+        <Seg :cols="3" :options="fontOpts" :model-value="ws.atlasFont" @update:model-value="W.setAtlasFont" />
+      </Field>
       <Field v-if="ws.hasPolitical" label="政区" title="按国家或文化给陆地着色，画出伯爵领界与国界">
         <Seg :options="politicalOpts" :model-value="politicalShown" @update:model-value="(v) => W.setPolitical(v as 'off' | 'realms' | 'cultures')" />
       </Field>

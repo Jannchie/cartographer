@@ -1,9 +1,9 @@
 import type { Label, World } from '../../gen/types'
 import { areaMember, cellAt, rangeCells, type Area } from '../../gen/areas'
 import { bboxOf, chaikin } from '../../settlement/geom'
-import { cjkFont, lang, placeName } from '../../i18n'
+import { lang, placeName } from '../../i18n'
 import { GLYPH_R, HALO_RATIO, LABEL_PAD, labelPx, logT } from './labelSize'
-import type { Theme } from './styles'
+import { themeCjk, type Theme } from './styles'
 import { polyCrossings, polylineOf, rasterArea, rasterPoly, type AreaMask } from './svg/displayList'
 import { labelCtx } from './svg/recorder'
 import { politicalRegions, type PoliticalMode } from './political'
@@ -77,7 +77,7 @@ export class LabelLayer {
     const caps = L.caps && !zh
     const f = (style: string, tier: number, fam: string) => {
       const size = labelPx(tier, zh, labelK)
-      return { font: `${style} ${size}px ${fam}, ${cjkFont(lang)}`, size }
+      return { font: `${style} ${size}px ${fam}, ${themeCjk(this.theme)}`, size }
     }
     const halo = !(L.noHalo ?? NO_HALO).includes(kind)
     const base = (o: ReturnType<typeof f>, color: string, spacing: number, upper: boolean): TextStyle => ({
@@ -90,7 +90,7 @@ export class LabelLayer {
     })
     if (L.uniform) {
       const size = labelPx(L.uniform.tier, zh, labelK)
-      return { font: `${L.uniform.weight} ${size}px ${L.text}, ${cjkFont(lang, true)}`, size, color: L.uniform.color, spacing: zh ? 0.08 : 0.02, upper: false, vertical: false, halo: true }
+      return { font: `${L.uniform.weight} ${size}px ${L.text}, ${themeCjk(this.theme, true)}`, size, color: L.uniform.color, spacing: zh ? 0.08 : 0.02, upper: false, vertical: false, halo: true }
     }
     const it = zh ? '' : 'italic'
     // 占全图的面积比

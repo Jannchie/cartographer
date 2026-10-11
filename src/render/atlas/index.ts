@@ -1,5 +1,5 @@
 import type { World } from '../../gen/types'
-import { cjkFont, lang, placeName, t as tr, worldTitle } from '../../i18n'
+import { lang, placeName, t as tr, worldTitle } from '../../i18n'
 import type { SmoothRiver } from '../rivers'
 import { drawRivers } from '../rivers'
 import { Fields } from './fields'
@@ -19,21 +19,40 @@ import { drawAdmin } from './admin'
 import { drawPolitical } from './political'
 import { drawGlyphs } from './glyphs'
 import { LabelLayer } from './labels'
-import { FANTASY_GLYPHS, THEMES, themeById, type AtlasOpts, type StyleId, type Theme } from './styles'
+import { currentFontPreset, FANTASY_GLYPHS, THEMES, themeById, themeCjk, type AtlasOpts, type StyleId, type Theme } from './styles'
 
 export { THEMES, type StyleId }
 export { Fields }
 
 const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
 
+const extraCss = new Map<string, Promise<void>>()
+/** 字体方案额外要的 Google Fonts 族：选中时才插入样式表，等它加载完（失败也放行，按回退字体排版） */
+function loadFontCss(families: string): Promise<void> {
+  let p = extraCss.get(families)
+  if (!p) {
+    p = new Promise<void>((resolve) => {
+      const link = document.createElement('link')
+      link.rel = 'stylesheet'
+      link.href = `https://fonts.googleapis.com/css2?${families}&display=swap`
+      link.onload = link.onerror = () => resolve()
+      document.head.appendChild(link)
+    })
+    extraCss.set(families, p)
+  }
+  return p
+}
+
 /** 按风格加载所需字体；中文、日文字体按实际用到的字取子集 */
 export async function ensureFonts(world: World, id: StyleId) {
   const t = themeById(id)
+  const css = currentFontPreset().css
+  if (css) await loadFontCss(css)
   const fams = new Set<string>()
   for (const f of [t.labels.display, t.labels.text]) fams.add(f.split(',')[0].trim())
   let text: string | undefined
   if (lang !== 'en') {
-    for (const f of [cjkFont(lang), cjkFont(lang, true)]) fams.add(f.split(',')[0].trim())
+    for (const f of [themeCjk(t), themeCjk(t, true)]) fams.add(f.split(',')[0].trim())
     text = [...world.labels.map((l) => placeName(l)), ...world.realms.map((r) => placeName(r)), worldTitle(world), tr('{name}舆地全图', { name: '' }), tr('种子 {seed}', { seed: '' }), tr('公里'), tr('海拔（米）')].join('') + world.params.seed
   }
   const loads: Promise<unknown>[] = []

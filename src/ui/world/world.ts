@@ -10,7 +10,7 @@ import { BIOME_NAMES, DEFAULT_PARAMS, isSettlement, normalizeParams, type Label,
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
 import { earthAreas } from '../../gen/earth/realWorld'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
-import { themeById } from '../../render/atlas/styles'
+import { FONT_PRESETS, setFontPreset, themeById } from '../../render/atlas/styles'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
 import type { PoliticalMode } from '../../render/atlas/political'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
@@ -112,6 +112,8 @@ export const ws = reactive({
   political: (['realms', 'cultures'].includes(storeGet('atlasPolitical') ?? '') ? storeGet('atlasPolitical') : 'off') as 'off' | PoliticalMode,
   /** 当前世界有没有政区层（伯爵领与文化） */
   hasPolitical: false,
+  /** 纸图注记的字体方案（见 FONT_PRESETS） */
+  atlasFont: FONT_PRESETS.some((f) => f.id === storeGet('atlasFont')) ? storeGet('atlasFont')! : 'theme',
   /** 纸图的图饰：标题框、指北针、图例（默认不画，只影响浏览器里的图廓层；导出总是画） */
   ornaments: storeGet('atlasOrnaments') === '1',
   mode: '3d' as Mode,
@@ -161,6 +163,7 @@ export const ws = reactive({
   /** 自动运镜中 */
   touring: false,
 })
+setFontPreset(ws.atlasFont)
 
 // —— 引擎（非响应式） ——
 let scene: Scene3D | null = null
@@ -415,6 +418,13 @@ export function setOrnaments(v: boolean) {
   ws.ornaments = v
   storeSet('atlasOrnaments', v ? '1' : '0')
   viewer?.refreshChrome()
+}
+export function setAtlasFont(id: string) {
+  ws.atlasFont = id
+  storeSet('atlasFont', id)
+  setFontPreset(id)
+  atlasCache.clear()
+  refreshAtlas()
 }
 export function setPolitical(v: 'off' | PoliticalMode) {
   ws.political = v
@@ -1172,6 +1182,15 @@ defineStrings([
   ['省级', 'Province', '省級'],
   ['地级', 'Prefecture', '地級'],
   ['伯爵领', 'County', '伯領'],
+  ['字体', 'Font', 'フォント'],
+  ['地图注记的字体（导出的 SVG 同样引用）', 'Typeface for map labels (also referenced by exported SVG)', '地図注記の書体（書き出した SVG も同じ書体を参照）'],
+  ['跟随风格', 'Style default', 'スタイル既定'],
+  ['每种风格自带的字体', 'Each style uses its own typefaces', 'スタイルごとの書体'],
+  ['衬线', 'Serif', '明朝'],
+  ['无衬线', 'Sans', 'ゴシック'],
+  ['刻本', 'Woodblock', '版本'],
+  ['书法', 'Calligraphy', '書道'],
+  ['圆体', 'Rounded', '丸ゴシック'],
   ['政区地图集', 'Political atlas', '政区地図帳'],
   ['国家着色 · 伯爵领 · 国界色带', 'Realm colors · counties · border bands', '国の塗り分け · 伯領 · 国境の帯'],
   ['战略图', 'Strategy', '戦略図'],

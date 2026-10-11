@@ -1,4 +1,5 @@
 import type { Area } from '../../gen/areas'
+import { cjkFont, lang } from '../../i18n'
 import type { PoliticalMode } from './political'
 import { Biome, type World } from '../../gen/types'
 import { blur, edt } from '../../gen/util'
@@ -25,6 +26,8 @@ export interface LabelTheme {
   city_marker: 'dot' | 'castle' | 'square' | 'star'
   /** 不描边的注记类型（默认海洋、海、大陆：大字直接压在浅色底图上）；彩色底图上的白字要全部描边 */
   noHalo?: string[]
+  /** 中文、日文字体（衬线、无衬线）；不给就用 cjkFont 的思源宋体 / 黑体。字体方案（FontPreset）会填它 */
+  cjk?: { zh: [serif: string, sans: string]; ja: [serif: string, sans: string] }
   /**
    * 所有注记同一个样式（游戏地图式：不分级别，同一字体、字号与颜色，一律描边）：
    * weight 字重，tier 字号级别（见 labelSize），字体取 text 并接无衬线的中日文字体
@@ -893,6 +896,94 @@ export const THEMES: Theme[] = [
 
 export const HYPSO_STOPS = HYPSO
 
+// ———————————————————————— 字体方案 ————————————————————————
+
+/**
+ * 注记字体方案：替换风格自带的西文大字（display）、正文（text）与中日文字体。
+ * css 是额外要加载的 Google Fonts 族（family= 参数），选中时才加载
+ */
+export interface FontPreset {
+  id: string
+  name: string
+  desc: string
+  display?: string
+  text?: string
+  cjk?: NonNullable<LabelTheme['cjk']>
+  css?: string
+}
+
+export const FONT_PRESETS: FontPreset[] = [
+  { id: 'theme', name: '跟随风格', desc: '每种风格自带的字体' },
+  {
+    id: 'classic',
+    name: '衬线',
+    desc: 'Cormorant · 思源宋体',
+    display: CORMORANT,
+    text: CORMORANT,
+    cjk: { zh: [SONG, '"Noto Sans SC", sans-serif'], ja: ['"Noto Serif JP", serif', '"Noto Sans JP", sans-serif'] },
+  },
+  {
+    id: 'modern',
+    name: '无衬线',
+    desc: 'Source Sans · 思源黑体',
+    display: SANS,
+    text: SANS,
+    cjk: { zh: ['"Noto Sans SC", sans-serif', '"Noto Sans SC", sans-serif'], ja: ['"Noto Sans JP", sans-serif', '"Noto Sans JP", sans-serif'] },
+  },
+  {
+    id: 'woodblock',
+    name: '刻本',
+    desc: 'IM Fell · 站酷小薇 · しっぽり明朝',
+    display: FELL_SC,
+    text: FELL,
+    cjk: { zh: ['"ZCOOL XiaoWei", "Noto Serif SC", serif', '"ZCOOL XiaoWei", "Noto Serif SC", serif'], ja: ['"Shippori Mincho", "Noto Serif JP", serif', '"Shippori Mincho", "Noto Serif JP", serif'] },
+    css: 'family=ZCOOL+XiaoWei&family=Shippori+Mincho:wght@400;600',
+  },
+  {
+    id: 'brush',
+    name: '书法',
+    desc: 'Cinzel · 马善政楷书 · 佑字肃',
+    display: '"Cinzel", "Cormorant Garamond", serif',
+    text: CORMORANT,
+    cjk: { zh: [BRUSH, BRUSH], ja: ['"Yuji Syuku", "Noto Serif JP", serif', '"Yuji Syuku", "Noto Serif JP", serif'] },
+    css: 'family=Cinzel:wght@400;600;700&family=Yuji+Syuku',
+  },
+  {
+    id: 'rounded',
+    name: '圆体',
+    desc: 'Nunito · 站酷快乐体 · M PLUS 圆体',
+    display: '"Nunito", "Source Sans 3", sans-serif',
+    text: '"Nunito", "Source Sans 3", sans-serif',
+    cjk: { zh: ['"ZCOOL KuaiLe", "Noto Sans SC", sans-serif', '"ZCOOL KuaiLe", "Noto Sans SC", sans-serif'], ja: ['"M PLUS Rounded 1c", "Noto Sans JP", sans-serif', '"M PLUS Rounded 1c", "Noto Sans JP", sans-serif'] },
+    css: 'family=Nunito:ital,wght@0,400;0,600;0,700;1,400&family=ZCOOL+KuaiLe&family=M+PLUS+Rounded+1c:wght@400;700',
+  },
+]
+
+/** 当前的字体方案（界面上选的，全部纸图共用；themeById 取风格时套上） */
+let fontPreset: FontPreset = FONT_PRESETS[0]
+export function setFontPreset(id: string) {
+  fontPreset = FONT_PRESETS.find((f) => f.id === id) ?? FONT_PRESETS[0]
+}
+export const currentFontPreset = () => fontPreset
+
+const themed = new Map<string, Theme>()
+/** 风格（套上当前的字体方案） */
 export function themeById(id: string): Theme {
-  return THEMES.find((t) => t.id === id) ?? THEMES[0]
+  const t = THEMES.find((t) => t.id === id) ?? THEMES[0]
+  const f = fontPreset
+  if (f.id === 'theme') return t
+  const key = `${t.id}|${f.id}`
+  let out = themed.get(key)
+  if (!out) {
+    out = { ...t, labels: { ...t.labels, display: f.display ?? t.labels.display, text: f.text ?? t.labels.text, cjk: f.cjk } }
+    themed.set(key, out)
+  }
+  return out
+}
+
+/** 这种风格的中文、日文字体（英文界面不用，回退到通用族） */
+export function themeCjk(theme: Theme, sans = false): string {
+  const c = theme.labels.cjk
+  if (c && (lang === 'zh' || lang === 'ja')) return c[lang][sans ? 1 : 0]
+  return cjkFont(lang, sans)
 }
