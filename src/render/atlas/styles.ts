@@ -161,16 +161,15 @@ const POL_TEYVAT: PoliticalLook = {
   realm: { color: '#fbf6e2', width: 1.6, alpha: 0.95 },
   halo: { color: 'rgb(20,30,28)', width: 4.2, alpha: 0.5 },
 }
-/** 水墨：极淡的设色，国界用朱笔 */
+/** 水墨：淡墨设色，国界用浅赭的细笔，国名与其余注记同为墨色 */
 const POL_INK: PoliticalLook = {
-  palette: ['#c9a27e', '#9fb29a', '#b9a3a0', '#cdbb8a', '#9fb3b8', '#c49488', '#b5ad92', '#a6a9bf'].map(hex),
-  fill: 0.22,
-  band: { width: 7, alpha: 0.32, tone: 0.8 },
-  county: { color: '#2b2a27', width: 0.4, alpha: 0.2, dash: [1, 2] },
-  culture: { color: '#2b2a27', width: 1.1, alpha: 0.55, dash: [4, 3] },
-  realm: { color: '#a8342a', width: 1.6, alpha: 0.85, dash: [8, 3] },
-  halo: { color: '#b23a2a', width: 6, alpha: 0.1 },
-  label: () => '#7d2a22',
+  palette: ['#bfae94', '#a9b5a2', '#b5a8a3', '#c2b897', '#a7b4b5', '#b9a39a', '#b3ad98', '#a9aab5'].map(hex),
+  fill: 0.16,
+  band: { width: 6, alpha: 0.22, tone: 0.85 },
+  county: { color: '#2b2a27', width: 0.4, alpha: 0.14, dash: [1, 2] },
+  culture: { color: '#2b2a27', width: 1, alpha: 0.45, dash: [4, 3] },
+  realm: { color: '#7a5a48', width: 1.2, alpha: 0.6, dash: [6, 3] },
+  label: () => '#3b3833',
 }
 /** 地形图：不着色块，国界用品红点划线，沿内侧一道淡紫色带 */
 const POL_TOPO: PoliticalLook = {
