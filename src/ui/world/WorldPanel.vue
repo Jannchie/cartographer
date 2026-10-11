@@ -120,6 +120,11 @@ const atlasToggles = computed(() => [
   { label: '图饰', on: ws.ornaments, title: '标题框、指北针与图例（导出的图总是带着）' },
 ])
 const atlasKeys = ['labels', 'contours', 'graticule'] as const
+const POLITICAL_OPTS = [
+  { value: 'off', label: '无' },
+  { value: 'realms', label: '国家' },
+  { value: 'cultures', label: '文化' },
+]
 
 // 编辑工具：三列的图标工具栏（选取 · 地形 · 气候 · 大洲）
 const TOOLS: { value: EditTool; label: string; title: string; icon: IconDef<string> }[] = [
@@ -317,6 +322,9 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
     <Section v-if="ws.mode === '2d'" v-show="ws.tab === 'view'">
       <Swatches :items="atlasSwatches" :model-value="ws.atlasStyle" @update:model-value="W.setAtlasStyle" />
       <Legend :items="atlasToggles" @toggle="(i) => (i < atlasKeys.length ? W.setAtlasOpt(atlasKeys[i], !ws.atlasOpts[atlasKeys[i]]) : W.setOrnaments(!ws.ornaments))" />
+      <Field v-if="ws.hasPolitical" label="政区" title="按国家或文化给陆地着色，画出伯爵领界与国界">
+        <Seg :options="POLITICAL_OPTS" :model-value="ws.political" @update:model-value="(v) => W.setPolitical(v as 'off' | 'realms' | 'cultures')" />
+      </Field>
     </Section>
 
     <Section v-if="ws.mode === 'areas'" v-show="ws.tab === 'view'">

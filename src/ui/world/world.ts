@@ -11,6 +11,7 @@ import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/are
 import { earthAreas } from '../../gen/earth/realWorld'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
+import type { PoliticalMode } from '../../render/atlas/political'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import type { AtlasBase } from '../../render/atlas/svg/vector'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
@@ -106,6 +107,10 @@ export const ws = reactive({
   holo: loadHolo(),
   atlasStyle: ((storeGet('atlasStyle') as StyleId) || 'physical') as StyleId,
   atlasOpts: { labels: true, contours: true, graticule: true },
+  /** 纸图的政区图：按国家或文化着色、画伯爵领界与国界 */
+  political: (['realms', 'cultures'].includes(storeGet('atlasPolitical') ?? '') ? storeGet('atlasPolitical') : 'off') as 'off' | PoliticalMode,
+  /** 当前世界有没有政区层（伯爵领与文化） */
+  hasPolitical: false,
   /** 纸图的图饰：标题框、指北针、图例（默认不画，只影响浏览器里的图廓层；导出总是画） */
   ornaments: storeGet('atlasOrnaments') === '1',
   mode: '3d' as Mode,
@@ -410,6 +415,12 @@ export function setOrnaments(v: boolean) {
   storeSet('atlasOrnaments', v ? '1' : '0')
   viewer?.refreshChrome()
 }
+export function setPolitical(v: 'off' | PoliticalMode) {
+  ws.political = v
+  storeSet('atlasPolitical', v)
+  atlasCache.clear()
+  refreshAtlas()
+}
 export function setAtlasOpt(k: keyof typeof ws.atlasOpts, v: boolean) {
   ws.atlasOpts[k] = v
   atlasCache.clear()
@@ -508,7 +519,7 @@ export function generate(quiet = false, opened?: World) {
     ? { id, params: { ...toRaw(p) }, edits: workerEdits(), world: opened }
     : { id, params: { ...toRaw(p) }, edits: workerEdits(), ground: lastTex ? lastGround : undefined }
   // 打开的世界不再留在主线程（世界库与文件各有一份）：场数据直接转移给 Worker，不复制
-  worker.postMessage(msg, opened ? [opened.elevation, opened.water, opened.temperature, opened.precipitation, opened.flow, opened.biome, opened.coastDist, opened.realm].map((a) => a.buffer) : [])
+  worker.postMessage(msg, opened ? [opened.elevation, opened.water, opened.temperature, opened.precipitation, opened.flow, opened.biome, opened.coastDist, opened.realm, ...(opened.political ? [opened.political.county] : [])].map((a) => a.buffer) : [])
 }
 worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   const m = ev.data
@@ -618,6 +629,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
 let statsCached = false
 function showStats(w: World, cached = statsCached) {
   statsCached = cached
+  ws.hasPolitical = !!w.political
   const s = w.stats
   const m = (km: number) => `${Math.round(km * 1000).toLocaleString()} m`
   ws.info = {
@@ -635,6 +647,10 @@ function showStats(w: World, cached = statsCached) {
 }
 
 // —— 纸图 ——
+/** 纸图要画的政区图（世界没有政区层时不画） */
+function politicalOpt(w: World) {
+  return w.political && ws.political !== 'off' ? ws.political : undefined
+}
 let atlasJob = 0
 /** 地点或名字改了但纸图缓存还没清：推迟到下次要用纸图时（改名逐键触发，编辑视图里又看不到纸图） */
 let atlasStale = false
@@ -651,7 +667,7 @@ async function buildList(w: World, style: StyleId) {
   let c = atlasCache.get(style)
   if (!c) {
     const measurer = document.createElement('canvas').getContext('2d')!
-    c = { base: buildAtlasBase(w, rivers, style, { ...toRaw(ws.atlasOpts) }, measurer, 2), list: null }
+    c = { base: buildAtlasBase(w, rivers, style, { ...toRaw(ws.atlasOpts), political: politicalOpt(w) }, measurer, 2), list: null }
     atlasCache.set(style, c)
   }
   c.list ??= withLabels(c.base, currentAreas())
@@ -767,6 +783,15 @@ function probeAt(clientX: number, clientY: number) {
     const unit = a.units[u]
     rows.push(['省级', lang === 'zh' ? a.provinceFull[unit.province] : placeName(world.realms[unit.province])])
     if (world.realms[unit.province] && unit.zh !== world.realms[unit.province].zh) rows.push(['地级', lang === 'zh' ? unit.full : placeName(unit)])
+  }
+  // 生成的世界：所属的伯爵领、国家与文化
+  const pl = world.political
+  const ci = pl ? pl.county[i] : -1
+  if (pl && ci >= 0) {
+    const c = pl.counties[ci]
+    rows.push(['伯爵领', placeName(c)])
+    if (c.realm >= 0) rows.push(['国家', placeName(world.realms[c.realm])])
+    rows.push(['文化', placeName(pl.cultures[c.culture])])
   }
   rows.push(
     [e > 0 ? '海拔' : '水深', `${Math.round(Math.abs(e) * 1000).toLocaleString()} m`],
@@ -1144,6 +1169,12 @@ defineStrings([
   ['经度', 'Longitude', '経度'],
   ['省级', 'Province', '省級'],
   ['地级', 'Prefecture', '地級'],
+  ['伯爵领', 'County', '伯領'],
+  ['国家', 'Realm', '国'],
+  ['文化', 'Culture', '文化'],
+  ['政区', 'Political', '政区'],
+  ['无', 'None', 'なし'],
+  ['按国家或文化给陆地着色，画出伯爵领界与国界', 'Color the land by realm or culture, with county and realm borders', '国または文化ごとに陸地を塗り分け、伯領界と国境を描く'],
   ['保存到世界库', 'Save to library', 'ライブラリに保存'],
   ['保存到世界库：地形定稿成数据，之后与种子无关', 'Save to the library: the terrain is finalized as data and no longer depends on the seed', 'ライブラリに保存：地形をデータとして確定し、以後シードに依存しない'],
   ['已定稿', 'Finalized', '確定済み'],

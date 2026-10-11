@@ -204,11 +204,60 @@ export interface Realm {
   y: number
   /** 都城在 labels 中的下标 */
   capital: number
+  /** 主体文化（world.political.cultures 的下标；区域图没有） */
+  culture?: number
   /** 不单独标注名称（直辖市、特别行政区：城市注记已经写了同一个名字） */
   noLabel?: boolean
   area: number
   /** 标注点到国界/海岸的距离（格），用于决定国名字号 */
   room: number
+}
+
+/** 城镇形制（与 settlement 的 Culture 相同）：文化决定它的城建成什么样 */
+export type TownCulture = 'western' | 'eastern' | 'wa' | 'islamic'
+
+/** 伯爵领：政区的最小单位，国家由整块伯爵领拼成 */
+export interface County {
+  name: string
+  zh: string
+  ja?: string
+  /** 治所格坐标 */
+  x: number
+  y: number
+  /** 治所城镇在 labels 中的下标；没有城镇时 -1 */
+  seat: number
+  /** 所属国家（realms 下标），-1 为无主之地 */
+  realm: number
+  /** 所属文化（cultures 下标） */
+  culture: number
+  /** 陆地格数 */
+  area: number
+}
+
+/** 文化：一片说同一种语言、建同一种城的地方 */
+export interface WorldCulture {
+  name: string
+  zh: string
+  ja?: string
+  /** 起名的世界观（城镇、伯爵领、国名都按它起） */
+  naming: Exclude<NamingStyle, 'auto'>
+  /** 城镇形制 */
+  town: TownCulture
+  /** 调色板序号 0~7（相邻文化不同） */
+  color: number
+  /** 标注点（格） */
+  x: number
+  y: number
+  area: number
+  room: number
+}
+
+/** 政区层（生成的世界才有）：伯爵领与文化；国家仍记在 World.realm / realms 上 */
+export interface PoliticalLayer {
+  /** 每格所属伯爵领，海洋 -1 */
+  county: Int16Array
+  counties: County[]
+  cultures: WorldCulture[]
 }
 
 /** 道路：交替存储的 x, y（格坐标，已平滑）；major 干道、minor 支线、sea 航线 */
@@ -338,6 +387,8 @@ export interface World {
   worldNameJa: string
   /** 每格代表的公里数 */
   kmPerCell: number
+  /** 伯爵领与文化（生成的世界、放了聚落时才有） */
+  political?: PoliticalLayer
   /** 真实行政区划（只有区域图有） */
   admin?: AdminLayer
   /** 实测山峰（只有区域图有） */

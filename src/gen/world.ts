@@ -1,20 +1,22 @@
 import { buildRoads } from './roads'
 import { JaNamer } from './names_ja'
 import { Namer, type Tri } from './naming'
+import { politicalMap, type PoliticalMap } from './political'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
-import { nameRealms, realmMap, type RealmMap } from './realms'
 import { Noise } from './noise'
 import { RNG, hashString } from './rng'
 import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
 import { realEarthWorld } from './earth/realWorld'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
-import { Biome, EQUATOR_KM, isGlobe, isSettlement, MAP_KM, reliefKm, type Label, type River, type World, type WorldEdits, type WorldParams } from './types'
+import { Biome, EQUATOR_KM, isGlobe, isSettlement, MAP_KM, reliefKm, type County, type Label, type PoliticalLayer, type Realm, type River, type World, type WorldCulture, type WorldEdits, type WorldParams } from './types'
 import { blur, neighbors8, signedDistance } from './util'
 import * as dmath from './dmath'
 
 export type Progress = (stage: string, frac: number) => void
+
+const tri = (n: Tri) => ({ name: n.en, zh: n.zh, ja: n.ja })
 
 /** 地图物理宽度（km） */
 
@@ -36,8 +38,8 @@ export interface WorldCache {
   stage?: TerrainStage
   /** 地名之前的地面（只改命名时沿用） */
   ground?: GroundStage
-  /** 政区划分与道路（地点位置不变时沿用） */
-  places?: { key: string; map: RealmMap; roads: World['roads'] }
+  /** 政区划分（伯爵领、文化、国家）与道路（地点位置不变时沿用） */
+  places?: { key: string; map: PoliticalMap | null; roads: World['roads'] }
 }
 
 /** 影响板块造山的参数与规划草图版本（不含地形画笔） */
@@ -114,28 +116,48 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   // 政区划分与道路只取决于地面和地点的位置、类型，与名字无关：只改命名时沿用
   const pk = gk + '|' + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
   let places = cache?.places?.key === pk ? cache.places : undefined
-  if (!settle) places = { key: pk, map: { realm: new Int16Array(N).fill(-1), realms: [], hints: [] }, roads: [] }
+  if (!settle) places = { key: pk, map: null, roads: [] }
   else if (!places) {
     // 国界、道路的坡度代价按晕渲同样的夸张比例算：全球图每格几十公里，真实坡度太缓，道路会直接翻山
     const slopeKm = reliefKm({ W, kmPerCell })
     progress('划分政区', 0.96)
-    const map = realmMap(elev, hydro.flow, labels, W, H, slopeKm, riverThreshold(W), (rSettle ?? rPlace).fork())
+    const map = politicalMap(elev, hydro.flow, biome, temperature, labels, W, H, slopeKm, kmPerCell, riverThreshold(W), namer.style, (rSettle ?? rPlace).fork())
     progress('道路与航线', 0.97)
     const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, slopeKm, riverThreshold(W))
     places = { key: pk, map, roads }
     if (cache) cache.places = places
   }
-  const realm = places.map.realm.slice()
-  const realms = settle ? nameRealms(places.map, namer) : []
+  const map = places.map
+  const realm = map ? map.realm.slice() : new Int16Array(N).fill(-1)
+  // 各文化各用一个取名器：主体文化（0 号）沿用世界的取名器，其余文化另起一种语言
+  const namers = map ? map.cultures.map((c, k) => (k === 0 ? namer : new Namer({ seed: p.seed, naming: c.naming }, new RNG(hashString(`${p.seed}|culture${k}`)), `|culture${k}`))) : []
+  const realms: Realm[] = map ? map.realms.map((r, i) => ({ ...r, ...tri(namers[r.culture].name('realm', map.hints[i])) })) : []
+  const genName = namer.name('world')
+  // 城镇按所在文化改名（地点编辑过就保留用户的名字）；主体文化的城镇名不变
+  const original = labels.map((l) => l.name)
+  if (map && !edits.labels) {
+    labels = labels.map((l) => {
+      if (!isSettlement(l)) return l
+      const c = map.county[Math.floor(l.y) * W + Math.floor(l.x)]
+      const k = c >= 0 ? map.counties[c].culture : 0
+      return k === 0 ? l : { ...l, ...tri(namers[k].name(l.kind as 'city' | 'capital')) }
+    })
+  }
   // 定稿时的国名按都城对应回去：地形改了、政区重算之后，同一座都城的国家仍叫原来的名字
   if (edits.realmNames) {
     for (const r of realms) {
-      const m = edits.realmNames[labels[r.capital]?.name]
+      const m = edits.realmNames[labels[r.capital]?.name] ?? edits.realmNames[original[r.capital]]
       if (m) Object.assign(r, { name: m.name, zh: m.zh, ja: m.ja ?? r.ja })
     }
   }
+  let political: PoliticalLayer | undefined
+  if (map) {
+    const cultures: WorldCulture[] = map.cultures.map((c, k) => ({ ...c, ...tri(namers[k].name('world')) }))
+    // 伯爵领以治所城镇命名，没有城镇的另起一个城镇名
+    const counties: County[] = map.counties.map((c) => ({ ...c, ...(c.seat >= 0 ? { name: labels[c.seat].name, zh: labels[c.seat].zh, ja: labels[c.seat].ja } : tri(namers[c.culture].name('city'))) }))
+    political = { county: map.county.slice(), counties, cultures }
+  }
   const roads = places.roads
-  const genName = namer.name('world')
   const worldName = edits.worldName ?? genName.en
 
   let land = 0
@@ -167,6 +189,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     worldNameZh: edits.worldNameZh ?? (edits.worldName ? edits.worldName : genName.zh),
     worldNameJa: edits.worldNameJa ?? (edits.worldName ? ja.name('world', edits.worldName) : genName.ja),
     kmPerCell,
+    political,
     stats: {
       land: land / N,
       peak,
@@ -646,7 +669,6 @@ function makeLabels(
   const N = W * H
   const labels: Label[] = []
   const { off, dx, dy } = neighbors8(W)
-  const tri = (n: Tri) => ({ name: n.en, zh: n.zh, ja: n.ja })
 
   // 通用连通分量：返回分量列表
   const components = (pred: (i: number) => boolean) => {

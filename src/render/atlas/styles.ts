@@ -1,4 +1,5 @@
 import type { Area } from '../../gen/areas'
+import type { PoliticalMode } from './political'
 import { Biome, type World } from '../../gen/types'
 import { blur, edt } from '../../gen/util'
 import { ATLAS, atlasSea, ramp, type RGB } from '../palette'
@@ -47,6 +48,8 @@ export interface AtlasOpts {
   graticule: boolean
   /** 有名字的区域（大陆、海、湾……）：给了就按区域排这些地名（见 gen/areas.ts） */
   areas?: Area[]
+  /** 政区图：按国家或文化着色、画伯爵领界与国界，标国名或文化名（生成的世界才有） */
+  political?: PoliticalMode
 }
 
 export interface Theme {

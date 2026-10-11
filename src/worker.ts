@@ -80,6 +80,7 @@ self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
       world.biome.buffer,
       world.coastDist.buffer,
       world.realm.buffer,
+      ...(world.political ? [world.political.county.buffer] : []),
       ...new Set(rivers.flatMap((r) => [r.xs.buffer, r.ys.buffer, r.fl.buffer])),
     ]
     if (tex) transfer.push(tex.color.buffer, tex.roughness.buffer)

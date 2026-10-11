@@ -5,7 +5,8 @@ import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
 import { drawMapLabels, drawMapOverlays, fieldsFor, marginOf, type Reserved } from '../index'
 import { atlasLabelK } from '../labels'
-import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type StyleId } from '../styles'
+import { politicalRegions, type PoliticalMode } from '../political'
+import { FANTASY_COLORS, FANTASY_TINT, HYPSO_STOPS, REALM_COLORS, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach, themeById, type AtlasOpts, type StyleId } from '../styles'
 import { contourGrid, contours, pathData, type ContourGrid } from './contour'
 import { DisplayList, type Fill, type Segment, type Stroke } from './displayList'
 import { Recorder } from './recorder'
@@ -164,6 +165,48 @@ function hillshade(L: Layers, F: Fields, ink: string, darkOp: number, lightOp: n
 function ripples(L: Layers, world: World, dists: number[], color: string, opacities: number[], width: number) {
   const cd = world.coastDist
   dists.forEach((d, k) => L.line(cd, -d, color, width, opacities[k]))
+}
+
+/**
+ * 政区着色：按国家或文化的配色给陆地罩一层淡彩。同色的区域互不相邻，一种颜色追踪一次；
+ * 色块先向海里外扩几格，再用海岸线裁切，岸线与底图的海岸一样平滑
+ */
+function politicalFill(L: Layers, world: World, F: Fields, mode: PoliticalMode) {
+  const { W, H } = world
+  const N = W * H
+  const { list, raster } = politicalRegions(world, mode)
+  const col = new Int8Array(N).fill(-1)
+  let front: number[] = []
+  for (let i = 0; i < N; i++) {
+    const r = raster[i]
+    if (r < 0) continue
+    col[i] = list[r].color
+    front.push(i)
+  }
+  for (let step = 0; step < 3 && front.length; step++) {
+    const next: number[] = []
+    for (const c of front) {
+      const x = c % W
+      for (const j of [x > 0 ? c - 1 : -1, x < W - 1 ? c + 1 : -1, c - W, c + W]) {
+        if (j < 0 || j >= N || col[j] >= 0) continue
+        col[j] = col[c]
+        next.push(j)
+      }
+    }
+    front = next
+  }
+  L.list.clips.set('landClip', { d: pathData(contours(F.land, W, H, 0, true), L.S, { closed: true, tol: 0.35, minArea: 1.5 }), rule: 'evenodd' })
+  const field = new Float32Array(N)
+  for (let c = 0; c < REALM_COLORS.length; c++) {
+    let any = false
+    for (let i = 0; i < N; i++) {
+      field[i] = col[i] === c ? 1 : 0
+      any ||= col[i] === c
+    }
+    if (!any) continue
+    const d = pathData(contours(field, W, H, 0.5, true), L.S, { closed: true, tol: 0.35, minArea: 1.5 })
+    L.list.path('map', d, { fill: { color: rgb(REALM_COLORS[c]), alpha: 0.5, rule: 'evenodd' }, clip: 'landClip' })
+  }
 }
 
 // —————————————————————————— 各风格的矢量底图 ——————————————————————————
@@ -441,6 +484,8 @@ export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId,
       break
   }
 
+  if (opts.political && world.political) politicalFill(L, world, F, opts.political)
+
   // 纸纹：两张可平铺的小噪声图做图案
   const brown = theme.id === 'fantasy'
   const blot = noiseTile(128, 16, brown ? [140, 100, 60] : [120, 110, 95], 0.55, 11)
@@ -514,7 +559,7 @@ export function withLabels(base: AtlasBase, areas: AtlasOpts['areas']): DisplayL
   const rec = new Recorder(list, base.measurer)
   rec.space = 'map'
   const theme = themeById(base.theme)
-  drawMapLabels(rec as unknown as CanvasRenderingContext2D, fieldsFor(base.world, base.S), theme, areas, base.reserved)
+  drawMapLabels(rec as unknown as CanvasRenderingContext2D, fieldsFor(base.world, base.S), theme, areas, base.reserved, base.opts.political)
   list.segments.push(...src.segments.slice(cut))
   return list
 }
