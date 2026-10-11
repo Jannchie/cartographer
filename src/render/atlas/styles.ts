@@ -794,7 +794,7 @@ export const THEMES: Theme[] = [
       region: '#5a5040',
       city: '#2b2a27',
       halo: 'rgba(237, 230, 211, 0.8)',
-      vertical: ['continent', 'ocean', 'range', 'realm'],
+      vertical: [],
       caps: false,
       city_marker: 'square',
     },
