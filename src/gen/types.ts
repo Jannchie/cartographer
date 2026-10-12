@@ -1,4 +1,5 @@
 import type { Area } from './areas'
+import type { Polity } from './political'
 import type { EarthRes } from './earth/real'
 import { regionHeight, regionProjection, type RegionId } from './earth/region'
 export interface WorldParams {
@@ -216,7 +217,7 @@ export interface Realm {
 /** 城镇形制（与 settlement 的 Culture 相同）：文化决定它的城建成什么样 */
 export type TownCulture = 'western' | 'eastern' | 'wa' | 'islamic'
 
-/** 伯爵领：政区的最小单位，国家由整块伯爵领拼成 */
+/** 伯爵领：政区的最小单位，国家由整块伯爵领拼成（按制度也叫县、郡） */
 export interface County {
   name: string
   zh: string
@@ -230,6 +231,21 @@ export interface County {
   realm: number
   /** 所属文化（cultures 下标） */
   culture: number
+  /** 所属中层政区（provinces 下标），-1 为无主之地；旧存档没有 */
+  province?: number
+  /** 陆地格数 */
+  area: number
+}
+
+/** 中层政区：分封制的公爵领、郡县制的州、令制的令制国，由同一国家里相邻的伯爵领拼成 */
+export interface Province {
+  name: string
+  zh: string
+  ja?: string
+  /** 治所所在的伯爵领（counties 下标），名字随它 */
+  county: number
+  /** 所属国家（realms 下标） */
+  realm: number
   /** 陆地格数 */
   area: number
 }
@@ -241,6 +257,8 @@ export interface WorldCulture {
   ja?: string
   /** 起名的世界观（城镇、伯爵领、国名都按它起） */
   naming: Exclude<NamingStyle, 'auto'>
+  /** 制度（分封、郡县、令制）：国家与中层政区怎样划分；旧存档没有，按 naming 推出 */
+  polity?: Polity
   /** 城镇形制 */
   town: TownCulture
   /** 调色板序号 0~7（相邻文化不同） */
@@ -257,6 +275,8 @@ export interface PoliticalLayer {
   /** 每格所属伯爵领，海洋 -1 */
   county: Int16Array
   counties: County[]
+  /** 中层政区；旧存档没有 */
+  provinces?: Province[]
   cultures: WorldCulture[]
 }
 

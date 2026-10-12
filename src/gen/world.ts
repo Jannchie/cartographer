@@ -1,7 +1,7 @@
 import { buildRoads } from './roads'
 import { JaNamer } from './names_ja'
 import { Namer, type Tri } from './naming'
-import { politicalMap, type PoliticalMap } from './political'
+import { politicalMap, provinceName, type PoliticalMap } from './political'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
@@ -10,7 +10,7 @@ import { RNG, hashString } from './rng'
 import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
 import { realEarthWorld } from './earth/realWorld'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
-import { Biome, EQUATOR_KM, isGlobe, isSettlement, MAP_KM, reliefKm, type County, type Label, type PoliticalLayer, type Realm, type River, type World, type WorldCulture, type WorldEdits, type WorldParams } from './types'
+import { Biome, EQUATOR_KM, isGlobe, isSettlement, MAP_KM, reliefKm, type County, type Label, type PoliticalLayer, type Province, type Realm, type River, type World, type WorldCulture, type WorldEdits, type WorldParams } from './types'
 import { blur, neighbors8, signedDistance } from './util'
 import * as dmath from './dmath'
 
@@ -155,7 +155,9 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     const cultures: WorldCulture[] = map.cultures.map((c, k) => ({ ...c, ...tri(namers[k].name('world')) }))
     // 伯爵领以治所城镇命名，没有城镇的另起一个城镇名
     const counties: County[] = map.counties.map((c) => ({ ...c, ...(c.seat >= 0 ? { name: labels[c.seat].name, zh: labels[c.seat].zh, ja: labels[c.seat].ja } : tri(namers[c.culture].name('city'))) }))
-    political = { county: map.county.slice(), counties, cultures }
+    // 中层政区以治所伯爵领命名，按国家主体文化的制度加上称谓：某某公爵领、某州、某国
+    const provinces: Province[] = map.provinces.map((pv) => ({ ...pv, ...provinceName(counties[pv.county], map.cultures[map.realms[pv.realm].culture].polity) }))
+    political = { county: map.county.slice(), counties, provinces, cultures }
   }
   const roads = places.roads
   const worldName = edits.worldName ?? genName.en

@@ -7,7 +7,11 @@ import Icon from '../kit/Icon.vue'
 import * as W from './world'
 import { ws } from './world'
 
-/** 世界库：保存过的世界（整个世界的数据），打开、改名、导出、删除；也从这里导入文件 */
+/**
+ * 新建与世界库：左栏按来源新建世界（随机生成、空白草图再选地形风格），
+ * 右栏是保存过的世界（整个世界的数据），打开、改名、导出、删除；也从这里导入文件
+ */
+const style = ref(0)
 const emit = defineEmits<{ import: [] }>()
 const editing = ref<string | null>(null)
 const draft = ref('')
@@ -29,11 +33,27 @@ async function finishRename(apply: boolean) {
 
 <template>
   <div v-if="ws.library.open" class="library" @pointerdown.self="W.openLibrary(false)" @keydown.esc="W.openLibrary(false)">
-    <section class="library-sheet" role="dialog" :aria-label="t('世界库')">
+    <section class="library-sheet" role="dialog" :aria-label="t('新建与世界库')">
+      <div class="library-body">
+      <aside class="new-world">
+        <h2>{{ t('新建世界') }}</h2>
+        <p class="new-world-note">{{ t('新世界只生成自然地理；城镇、政区与交通在人文页添加。') }}</p>
+        <div class="new-world-styles">
+          <span>{{ t('地形风格') }}</span>
+          <div>
+            <button v-for="(x, i) in W.PRESETS" :key="x.name" type="button" :class="{ on: style === i }" :title="t(x.desc)" @click="style = i">{{ t(x.name) }}</button>
+          </div>
+        </div>
+        <button v-for="src in W.SOURCES" :key="src.id" type="button" class="new-world-source" :disabled="ws.busy" @click="W.createWorld(src.id, style)">
+          <strong>{{ t(src.name) }}<small v-if="!src.p"> · {{ t(W.PRESETS[style].name) }}</small></strong>
+          <span>{{ t(src.desc) }}</span>
+        </button>
+      </aside>
+      <div class="library-main">
       <header class="library-head">
         <h2>{{ t('世界库') }}</h2>
         <div class="library-actions">
-          <button type="button" class="link" :disabled="ws.busy" :title="t('保存到世界库：地形定稿成数据，之后与种子无关')" @click="W.saveWorld()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
+          <button type="button" class="link" :disabled="ws.busy" :title="t('保存到世界库：存下整个世界的数据，打开时直接显示')" @click="W.saveWorld()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
           <button v-if="ws.entry" type="button" class="link" :disabled="ws.busy" @click="W.saveWorld(true)"><Icon :icon="IconSave" :size="14" />{{ t('另存为新世界') }}</button>
           <button type="button" class="link" @click="emit('import')"><Icon :icon="IconFolderOpen" :size="14" />{{ t('导入文件…') }}</button>
           <button type="button" class="library-close" :title="t('关闭')" @click="W.openLibrary(false)"><Icon :icon="IconX" :size="16" /></button>
@@ -66,6 +86,8 @@ async function finishRename(apply: boolean) {
           </div>
         </li>
       </ul>
+      </div>
+      </div>
     </section>
   </div>
 </template>

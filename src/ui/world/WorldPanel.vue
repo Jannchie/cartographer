@@ -10,8 +10,11 @@ import {
   IconMap,
   IconMapPinPlus,
   IconMountain,
+  IconLock,
   IconPen,
+  IconPlus,
   IconReset,
+  IconRegion,
   IconShapes,
   IconSnowflake,
   IconSun,
@@ -28,13 +31,14 @@ import { computed } from 'vue'
 import type { EditTool, EditView } from '../../editor/editor'
 import type { Label, WorldParams } from '../../gen/types'
 import type { EarthRes } from '../../gen/earth/real'
-import { DEFAULT_PARAMS, isGlobe, SHAPE_PARAMS } from '../../gen/types'
+import { isGlobe, SHAPE_PARAMS } from '../../gen/types'
 import { NAMING_STYLES } from '../../gen/naming'
 import { THEMES } from '../../render/atlas'
 import { FONT_PRESETS, themeById } from '../../render/atlas/styles'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
 import { HOLO_PALETTES } from '../../render/holo/palettes'
 import { DEFAULT_TIME, fmtTime } from '../../render/aerial/daylight'
+import { placeName } from '../../i18n'
 import { langRef, t } from '../i18n'
 import Dropdown from '../kit/Dropdown.vue'
 import Field from '../kit/Field.vue'
@@ -55,16 +59,19 @@ const x100 = (v: number) => v.toFixed(2)
 const signed = (d: number) => (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(d)}`
 
 type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming' | 'width' | 'height' | 'globe' | 'earth' | 'earthReal' | 'earthRes'>
-const worldScales: { key: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; inputScale?: number }[] = [
+type ScaleDef = { key: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; inputScale?: number }
+const terrainScales: ScaleDef[] = [
   { key: 'landRatio', label: '陆地比例', min: 0.12, max: 0.65, step: 0.01, fmt: pct, inputScale: 100 },
   { key: 'plates', label: '板块数量', min: 4, max: 30, step: 1, fmt: (v) => String(v) },
   { key: 'mountains', label: '造山强度', min: 0, max: 2, step: 0.05, fmt: x100 },
   { key: 'coastRoughness', label: '海岸破碎', min: 0, max: 1, step: 0.05, fmt: x100 },
   { key: 'erosion', label: '侵蚀风化', min: 0, max: 2, step: 0.05, fmt: x100 },
-  { key: 'rainfall', label: '降水倍率', min: 0.3, max: 2, step: 0.05, fmt: x100 },
-  { key: 'temperature', label: '气温偏移', min: -15, max: 12, step: 0.5, fmt: (v) => `${v > 0 ? '+' : ''}${v}°` },
   { key: 'latNorth', label: '北缘纬度', min: -60, max: 88, step: 1, fmt: latFmt },
   { key: 'latSouth', label: '南缘纬度', min: -88, max: 60, step: 1, fmt: latFmt },
+]
+const climateScales: ScaleDef[] = [
+  { key: 'rainfall', label: '降水倍率', min: 0.3, max: 2, step: 0.05, fmt: x100 },
+  { key: 'temperature', label: '气温偏移', min: -15, max: 12, step: 0.5, fmt: (v) => `${v > 0 ? '+' : ''}${v}°` },
 ]
 const RES = [
   { value: '768', label: '快', title: '768 × 480' },
@@ -86,7 +93,7 @@ const v = ws.view3d
 const toggles3d = computed(() => [
   { label: '云层', on: v.clouds },
   { label: '空气感', on: v.haze },
-  { label: '道路', on: v.roads },
+  { label: '交通', on: v.roads, title: '道路与航线' },
   { label: '展台', on: v.stage },
   { label: '地名', on: v.labels },
 ])
@@ -132,8 +139,9 @@ const politicalOpts = computed(() => (politicalDefault.value ? POLITICAL_OPTS.sl
 const fontOpts = FONT_PRESETS.map((f) => ({ value: f.id, label: f.name, title: f.desc }))
 const politicalShown = computed(() => (ws.political === 'off' && politicalDefault.value ? politicalDefault.value : ws.political))
 
-// 编辑工具：三列的图标工具栏（选取 · 地形 · 气候 · 大洲）
-const TOOLS: { value: EditTool; label: string; title: string; icon: IconDef<string> }[] = [
+type ToolDef = { value: EditTool; label: string; title: string; icon: IconDef<string> }
+// 编辑工具：按对象分组（通用 · 地形 · 气候 · 大洲），每组一行图标工具栏
+const TOOLS: ToolDef[] = [
   { value: 'select', label: '选取', title: '选取、拖动地点；空白处拖动平移', icon: IconCursor },
   { value: 'place', label: '新增地点', title: '点击地图添加城镇', icon: IconMapPinPlus },
   { value: 'raise', label: '抬升', title: '抬高地形：海里画出陆地、平原上堆出山', icon: IconTerrainRaise },
@@ -180,8 +188,14 @@ const PLAN_TOOLS: { value: EditTool; label: string; title: string; icon: IconDef
   { value: 'sea', label: '海洋', title: '画笔涂成海洋：挖出海湾、海峡', icon: IconWaves },
   { value: 'ridge', label: '山脉', title: '拖动画出山脉的走向；点选已有山脉可拖动、调高度与宽度', icon: IconMountain },
 ]
-// 只有地形的阶段没有城镇可放
-const tools = computed(() => (p.settlements === false ? TOOLS.filter((x) => x.value !== 'place') : TOOLS))
+// 各阶段页里的工具：地形笔刷、气候笔刷、大洲划分（含选取自然地物名）、城镇
+const toolsOf = (vs: EditTool[]) => vs.map((v) => TOOLS.find((x) => x.value === v)!)
+const TERRAIN_TOOLS = toolsOf(['raise', 'lower', 'smooth'])
+const CLIMATE_TOOLS = toolsOf(['warm', 'cool', 'wet', 'dry'])
+const REGION_TOOLS = toolsOf(['select', 'region', 'regionAdd', 'regionErase'])
+const TOWN_TOOLS = toolsOf(['select', 'place'])
+const sourceName = computed(() => W.SOURCES.find((x) => x.id === W.currentSource())!.name)
+const hasHuman = computed(() => !p.earthReal && p.settlements !== false)
 const brushTool = computed(() => !['select', 'place', 'region', 'lasso', 'ridge'].includes(ws.tool))
 const regionTool = computed(() => ws.tool.startsWith('region'))
 const val = (e: Event) => (e.target as HTMLInputElement).value
@@ -189,11 +203,11 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
 
 <template>
   <div class="panel-body">
-    <Section v-show="ws.tab === 'gen'">
+    <div v-if="ws.tab !== 'stats'" class="world-head">
       <div v-if="ws.frozen" class="frozen-note">
         <h3>{{ t('已定稿') }}<template v-if="ws.entry"> · {{ ws.entry.name }}</template></h3>
-        <p>{{ t('地形已是数据，与种子无关：种子与地形参数不再起作用，地形画笔直接修改这份地形；气候、水系、聚落仍可调整与重算。') }}</p>
-        <button type="button" class="link" :title="t('去掉定稿地形，重新由种子、参数与草图生成')" @click="W.unfreeze()">{{ t('回到规划') }}</button>
+        <p>{{ t('地形已是数据，与种子无关：种子与地形参数不再起作用，地形画笔直接修改这份地形；气候、水系与人文层仍可调整与重算。') }}</p>
+        <button type="button" class="link" :title="t('去掉定稿地形，重新由种子、参数与草图生成')" @click="W.unfreeze()">{{ t('解除定稿') }}</button>
       </div>
       <div class="seed" :class="{ locked: ws.frozen }">
         <input
@@ -207,48 +221,175 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         />
         <button type="button" class="dice" :title="t('随机种子并生成（R）')" @click="W.randomSeed()"><Icon :icon="IconDices" :size="14" />{{ t('随机') }}</button>
       </div>
-      <Field label="地形预设" title="一键换一类世界的参数，点「生成」后生效" :class="{ locked: ws.frozen }">
-        <Dropdown :options="W.PRESETS.map((x, i) => ({ value: i, label: x.name, desc: x.desc }))" :model-value="ws.preset" placeholder="自定义" @update:model-value="W.applyPreset" />
-      </Field>
+      <div class="source">
+        <span>{{ t('来源') }} · <b>{{ t(sourceName) }}</b></span>
+        <button type="button" class="link" :title="t('换一种来源，或打开世界库里保存的世界')" @click="W.openLibrary()"><Icon :icon="IconPlus" :size="13" />{{ t('新建…') }}</button>
+      </div>
       <Field label="命名" title="地名的世界观：同一个地名在中英日三种语言里意思一致">
         <Dropdown :options="NAMING_STYLES.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => W.setParam('naming', n)" />
       </Field>
+    </div>
+
+    <!-- 地形：预设、草图、地形方案、图幅、地形参数与地形笔刷 -->
+    <Section v-show="ws.tab === 'terrain'">
+      <Field v-if="!p.earth" label="地形风格" title="一键换一类世界的地形与气候参数，点「生成」后生效" :class="{ locked: ws.frozen }">
+        <Dropdown :options="W.PRESETS.map((x, i) => ({ value: i, label: x.name, desc: x.desc }))" :model-value="ws.preset" placeholder="自定义" @update:model-value="W.applyPreset" />
+      </Field>
+      <div v-if="!p.earth && !ws.frozen" class="plan">
+        <h3>{{ t('草图规划') }}</h3>
+        <template v-if="!ws.sketch">
+          <p class="plan-note">{{ t('画出大陆轮廓与山脉走向，其余细节按种子随机生成；之后随时改草图重算。') }}</p>
+          <div class="pair">
+            <button type="button" :title="t('从一片汪洋开始，圈出大陆')" @click="W.startSketch('blank')"><Icon :icon="IconShapes" :size="14" />{{ t('空白画布') }}</button>
+            <button type="button" :title="t('以当前世界的海陆与主要山脉为底稿，在上面修改')" @click="W.startSketch('world')"><Icon :icon="IconMap" :size="14" />{{ t('当前世界') }}</button>
+          </div>
+        </template>
+        <template v-else>
+          <p class="plan-note">{{ t('草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。') }}</p>
+          <Seg :cols="4" :options="PLAN_TOOLS" :model-value="ws.tool" @update:model-value="W.pickTool" />
+          <div v-if="ws.range && ws.tool === 'ridge'" class="sub">
+            <Scale label="山脉高度" :min="0.2" :max="2" :step="0.05" :reset="1" :fmt="x100" :model-value="ws.range.height" @update:model-value="(x) => W.setRange({ height: x })" />
+            <Scale label="山体宽度" :min="20" :max="500" :step="10" :reset="140" :fmt="(x) => `${Math.round(x)} km`" :model-value="ws.range.width" @update:model-value="(x) => W.setRange({ width: x })" />
+            <button type="button" class="danger" :title="t('删除（Delete）')" @click="W.deleteRange()"><Icon :icon="IconTrash" :size="14" />{{ t('删除这条山脉') }}</button>
+          </div>
+          <div class="pair">
+            <button type="button" :title="t('地点编辑过后会固定不动；按当前的海陆重新生成全部城镇与地名')" @click="W.regenPlaces()"><Icon :icon="IconDices" :size="14" />{{ t('重排地点') }}</button>
+            <button type="button" :title="t('移除草图，大陆回到按陆地比例随机生成')" @click="W.endSketch()"><Icon :icon="IconReset" :size="14" />{{ t('移除草图') }}</button>
+          </div>
+        </template>
+      </div>
+      <Variant v-if="!p.earthReal" :class="{ locked: ws.frozen }" label="地形方案" title="同一种子下换一套地形与气候细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成" :model-value="p.terrainVariant ?? 0" @update:model-value="W.setTerrainVariant" />
+      <Field label="分辨率" :class="{ locked: ws.frozen }"><Seg v-model="res" :options="p.region ? RES_REGION : RES" /></Field>
       <Legend
-        v-if="!p.earthReal"
-        :items="[{ label: '聚落与道路', on: p.settlements !== false, title: '城镇、国家、道路与航线；关掉时只生成地形、气候、水系与自然地物，先定地形再放聚落' }]"
-        @toggle="W.setSettlements(p.settlements === false)"
+        v-if="!p.earth"
+        :class="{ locked: ws.frozen }"
+        :items="[{ label: '全球图', on: isGlobe(p), title: '横跨 360° 经度的世界全图：比例尺按赤道，高度随纬度范围' }]"
+        @toggle="W.setParam('globe', !isGlobe(p))"
       />
-      <template v-if="!p.earthReal">
-        <Variant :class="{ locked: ws.frozen }" label="地形方案" title="同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成" :model-value="p.terrainVariant ?? 0" @update:model-value="W.setTerrainVariant" />
-        <Variant label="聚落方案" title="地形不变，换一套城镇选址、国界与道路" :disabled="p.settlements === false" :model-value="p.placeVariant ?? 0" @update:model-value="W.setPlaceVariant" />
-      </template>
-      <p v-if="ws.sketch && !p.earth" class="plan-note">{{ t('规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。') }}</p>
-      <Fold label="高级参数" id="advanced">
-        <Field label="分辨率" :class="{ locked: ws.frozen }"><Seg v-model="res" :options="p.region ? RES_REGION : RES" /></Field>
-        <Legend
-          :class="{ locked: ws.frozen }"
-          :items="[
-            { label: '全球图', on: isGlobe(p), title: '横跨 360° 经度的世界全图：比例尺按赤道，高度随纬度范围' },
-            { label: '地球底图', on: !!p.earth, title: '大陆、山脉与海深取自真实地球（ETOPO1）；陆地比例、板块数不再起作用' },
-            { label: '真实地球', on: !!p.earthReal, title: '高程、气候、群系、河湖与自然地物名称都取自真实数据，不再模拟；没有城市、国家与道路' },
-          ]"
-          @toggle="(i) => (i === 2 ? W.setParam('earthReal', !p.earthReal) : i ? W.setParam('earth', !p.earth) : W.setParam('globe', !isGlobe(p)))"
-        />
-        <Field v-if="p.earthReal && !p.region" label="数据精度" title="真实地球数据的网格：0.25° 约 1 MB，5′ 约 9 MB（精细分辨率下更清楚）">
-          <Seg :model-value="p.earthRes ?? '15m'" :options="EARTH_RES_OPTS" @update:model-value="(v) => W.setParam('earthRes', v as EarthRes)" />
-        </Field>
+      <Field v-if="p.earthReal && !p.region" label="数据精度" title="真实地球数据的网格：0.25° 约 1 MB，5′ 约 9 MB（精细分辨率下更清楚）">
+        <Seg :model-value="p.earthRes ?? '15m'" :options="EARTH_RES_OPTS" @update:model-value="(v) => W.setParam('earthRes', v as EarthRes)" />
+      </Field>
+      <Fold label="地形参数" id="advanced">
         <Scale
-          v-for="s in worldScales"
+          v-for="s in terrainScales"
           :key="s.key"
           v-bind="s"
           :class="{ locked: ws.frozen && (SHAPE_PARAMS as readonly string[]).includes(s.key) }"
           :model-value="p[s.key]"
-          :reset="(ws.applied ?? DEFAULT_PARAMS)[s.key]"
+          :reset="(ws.applied ?? W.UI_DEFAULTS)[s.key]"
           reset-tip="双击回到当前生成的值"
           @update:model-value="(x) => W.setParam(s.key, x)"
         />
         <button type="button" class="link" @click="W.resetParams()">{{ t('恢复默认参数') }}</button>
       </Fold>
+      <button v-if="!ws.frozen && !p.earthReal" type="button" class="wide" :disabled="ws.busy" :title="t('把当前地形存成数据：之后与种子和地形参数无关，地形画笔直接修改这份地形。可撤销，也可解除定稿')" @click="W.freezeTerrain()"><Icon :icon="IconLock" :size="14" />{{ t('定稿地形') }}</button>
+      <div class="tool-group">
+        <h3>{{ t('地形笔刷') }}</h3>
+        <Seg :cols="4" :options="TERRAIN_TOOLS" :model-value="ws.tool" @update:model-value="W.pickTool" />
+      </div>
+    </Section>
+
+    <!-- 自然：气候参数与笔刷、大洲与地理区域 -->
+    <Section v-show="ws.tab === 'nature'">
+      <Scale
+        v-for="s in climateScales"
+        :key="s.key"
+        v-bind="s"
+        :model-value="p[s.key]"
+        :reset="(ws.applied ?? W.UI_DEFAULTS)[s.key]"
+        reset-tip="双击回到当前生成的值"
+        @update:model-value="(x) => W.setParam(s.key, x)"
+      />
+      <div class="tool-group">
+        <h3>{{ t('气候笔刷') }}</h3>
+        <Seg :cols="4" :options="CLIMATE_TOOLS" :model-value="ws.tool" @update:model-value="W.pickTool" />
+      </div>
+      <div class="tool-group">
+        <h3>{{ t('大洲') }}</h3>
+        <Seg :cols="4" :options="REGION_TOOLS" :model-value="ws.tool" @update:model-value="W.pickTool" />
+      </div>
+      <div v-if="ws.mode === 'edit' && regionTool" class="sub">
+        <Scale label="地峡宽度" :min="2" :max="40" :step="1" :fmt="(x) => t('{n} 格', { n: Math.round(x) })" v-model="ws.neck" />
+        <button type="button" class="wide" :title="t('在窄于「地峡宽度」的地方把陆地切开，每块大陆核心各成一洲')" @click="W.autoRegions()"><Icon :icon="IconWand" :size="14" />{{ t('自动划分大洲') }}</button>
+        <div v-if="ws.region" class="inspector">
+          <Field label="原名"><input :value="ws.region.name" spellcheck="false" @input="W.editRegionName('name', val($event))" /></Field>
+          <Field label="中文名"><input :value="ws.region.zh" spellcheck="false" @input="W.editRegionName('zh', val($event))" /></Field>
+          <Field label="日文名"><input :value="ws.region.ja" spellcheck="false" @input="W.editRegionName('ja', val($event))" /></Field>
+          <button type="button" class="danger" @click="W.deleteRegion()"><Icon :icon="IconTrash" :size="14" />{{ t('删除这个大洲') }}</button>
+        </div>
+      </div>
+      <div class="tool-group">
+        <h3>{{ t('地理区域') }}</h3>
+        <template v-if="ws.mode === 'areas'">
+          <AreaPanel />
+          <button type="button" class="wide" @click="W.setMode('2d')">{{ t('完成区域编辑') }}</button>
+        </template>
+        <template v-else>
+          <p class="plan-note">{{ t('大陆、海、湖、山脉、盆地、沙漠与森林的范围和名称：自动推断，可在纸图上改边界与名字。') }}</p>
+          <button type="button" class="wide" @click="W.setMode('areas')"><Icon :icon="IconRegion" :size="14" />{{ t('编辑地理区域') }}</button>
+        </template>
+      </div>
+    </Section>
+
+    <!-- 人文：城镇、政区与交通，地理定下后再添加 -->
+    <Section v-show="ws.tab === 'human'">
+      <p v-if="p.earthReal" class="plan-note">{{ t('真实地球的地形与气候取自观测数据，不生成人文层。') }}</p>
+      <template v-else-if="!hasHuman">
+        <p class="plan-note">{{ t('人文层包括城镇、政区与交通。地形与自然地理定下后再添加，之后改动地形时随之重算。') }}</p>
+        <button type="button" class="wide" :title="t('地理定下后，放置城镇、划分政区、修建道路与航线')" @click="W.setSettlements(true)"><Icon :icon="IconMapPinPlus" :size="14" />{{ t('添加人文层') }}</button>
+      </template>
+      <template v-else>
+        <dl v-if="ws.human" class="human-stats">
+          <div><dt>{{ t('城镇') }}</dt><dd>{{ ws.human.towns }}</dd></div>
+          <div><dt>{{ t(ws.terms.county) }}</dt><dd>{{ ws.human.counties }}</dd></div>
+          <div v-if="ws.human.provinces"><dt>{{ t(ws.terms.province) }}</dt><dd>{{ ws.human.provinces }}</dd></div>
+          <div><dt>{{ t('文化') }}</dt><dd>{{ ws.human.cultures }}</dd></div>
+          <div><dt>{{ t('国家') }}</dt><dd>{{ ws.human.realms.length }}</dd></div>
+        </dl>
+        <Variant label="人文方案" title="地形不变，换一套城镇选址、政区划分与道路" :model-value="p.placeVariant ?? 0" @update:model-value="W.setPlaceVariant" />
+        <button v-if="ws.human" type="button" class="wide" :title="t('切到纸图，按国家着色并画出政区界线')" @click="W.viewPolitical()"><Icon :icon="IconMap" :size="14" />{{ t('在纸图中查看政区') }}</button>
+        <div v-if="ws.human?.realms.length" class="tool-group">
+          <h3>{{ t('国家') }}</h3>
+          <ul class="realm-list">
+            <li v-for="r in ws.human.realms" :key="r.i">
+              <button type="button" :title="t('在纸图上定位')" @click="W.focusRealm(r.i)">
+                <span>{{ placeName(r) }}</span><small>{{ t(r.terms.name) }} · {{ r.provinces }} {{ t(r.terms.province) }} · {{ r.counties }} {{ t(r.terms.county) }}</small>
+              </button>
+            </li>
+          </ul>
+        </div>
+        <div class="tool-group">
+          <h3>{{ t('城镇') }}</h3>
+          <Seg :cols="4" :options="TOWN_TOOLS" :model-value="ws.tool" @update:model-value="W.pickTool" />
+        </div>
+        <button type="button" class="link" :title="t('去掉城镇、政区与交通，继续修改自然地理')" @click="W.setSettlements(false)">{{ t('移除人文层') }}</button>
+      </template>
+    </Section>
+
+    <!-- 编辑视图共用：底图、画笔、撤销与地点检查器（在地形、自然、人文三页下方） -->
+    <Section v-if="ws.mode === 'edit'" v-show="ws.tab === 'terrain' || ws.tab === 'nature' || ws.tab === 'human'">
+      <Field label="底图">
+        <Dropdown :options="EDIT_VIEWS" :model-value="ws.editView" @update:model-value="W.setEditView" />
+      </Field>
+      <div class="brush" :class="{ dim: !brushTool }">
+        <Scale label="画笔大小" :min="3" :max="100" :step="1" :fmt="(x) => `${Math.round(x)}`" :model-value="ws.brush.radius" @update:model-value="(x) => W.setBrush({ radius: x })" />
+        <Scale label="画笔强度" :min="0.05" :max="1" :step="0.05" :fmt="x100" :model-value="ws.brush.strength" @update:model-value="(x) => W.setBrush({ strength: x })" />
+      </div>
+      <Legend :items="[{ label: '显示地名', on: ws.showNames }]" @toggle="W.setShowNames(!ws.showNames)" />
+      <div class="pair">
+        <button type="button" :title="t('撤销（Ctrl+Z）')" @click="W.undo()"><Icon :icon="IconUndo" :size="14" />{{ t('撤销') }}</button>
+        <button type="button" :title="t('清除全部编辑')" @click="W.clearEdits()"><Icon :icon="IconReset" :size="14" />{{ t('清除编辑') }}</button>
+      </div>
+      <div v-if="ws.insp" class="inspector">
+        <h3>{{ t('地点') }}</h3>
+        <Field label="原名"><input :value="ws.insp.name" spellcheck="false" @input="W.editLabelName('name', val($event))" @change="W.endLabelEdit()" /></Field>
+        <Field label="中文名"><input :value="ws.insp.zh" spellcheck="false" @input="W.editLabelName('zh', val($event))" @change="W.endLabelEdit()" /></Field>
+        <Field label="日文名"><input :value="ws.insp.ja" spellcheck="false" @input="W.editLabelName('ja', val($event))" @change="W.endLabelEdit()" /></Field>
+        <Field label="类型">
+          <Dropdown :options="KINDS.map(([k, n]) => ({ value: k, label: n }))" :model-value="ws.insp.kind" @update:model-value="W.setLabelKind" />
+        </Field>
+        <button type="button" class="danger" :title="t('删除（Delete）')" @click="W.deleteSelected()"><Icon :icon="IconTrash" :size="14" />{{ t('删除地点') }}</button>
+      </div>
     </Section>
 
     <div v-if="ws.info" v-show="ws.tab === 'stats'" class="cartouche">
@@ -260,7 +401,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </dl>
     </div>
 
-    <Section v-if="ws.mode === '3d'" v-show="ws.tab === 'view'">
+    <Section v-if="ws.mode === '3d'" v-show="ws.tab === 'look'">
       <Legend :items="toggles3d" @toggle="(i) => W.set3d({ [toggleKeys[i]]: !v[toggleKeys[i]] })" />
       <Scale label="垂直夸张" :min="4" :max="60" :step="1" :reset="28" :fmt="(x) => `×${x}`" :model-value="v.exaggeration" @update:model-value="(x) => W.set3d({ exaggeration: x })" />
       <Scale
@@ -305,7 +446,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </Fold>
     </Section>
 
-    <Section v-if="ws.mode === 'holo'" v-show="ws.tab === 'view'">
+    <Section v-if="ws.mode === 'holo'" v-show="ws.tab === 'look'">
       <Field label="配色">
         <Seg :cols="holoSwatches.length" :options="holoSwatches" :model-value="h.palette" @update:model-value="(id) => W.setHolo({ palette: id })" />
       </Field>
@@ -325,82 +466,19 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       <button type="button" class="link" @click="W.resetHoloView()">{{ t('复位视角') }}</button>
     </Section>
 
-    <Section v-if="ws.mode === '2d'" v-show="ws.tab === 'view'">
+    <Section v-if="ws.mode === '2d'" v-show="ws.tab === 'look'">
       <Swatches :items="atlasSwatches" :model-value="ws.atlasStyle" @update:model-value="W.setAtlasStyle" />
       <Legend :items="atlasToggles" @toggle="(i) => (i < atlasKeys.length ? W.setAtlasOpt(atlasKeys[i], !ws.atlasOpts[atlasKeys[i]]) : W.setOrnaments(!ws.ornaments))" />
       <Field label="字体" title="地图注记的字体（导出的 SVG 同样引用）">
         <Seg :cols="3" :options="fontOpts" :model-value="ws.atlasFont" @update:model-value="W.setAtlasFont" />
       </Field>
-      <Field v-if="ws.hasPolitical" label="政区" title="按国家或文化给陆地着色，画出伯爵领界与国界">
+      <Field v-if="ws.human" label="政区" :title="t('按国家或文化给陆地着色，画出{county}界、{province}界与国界', { county: t(ws.terms.county), province: t(ws.terms.province) })">
         <Seg :options="politicalOpts" :model-value="politicalShown" @update:model-value="(v) => W.setPolitical(v as 'off' | 'realms' | 'cultures')" />
       </Field>
     </Section>
 
-    <Section v-if="ws.mode === 'areas'" v-show="ws.tab === 'view'">
-      <AreaPanel />
-    </Section>
-
-    <Section v-if="ws.mode === 'edit'" v-show="ws.tab === 'view'">
-      <div v-if="!p.earth && !ws.frozen" class="plan">
-        <template v-if="!ws.sketch">
-          <h3>{{ t('从零规划') }}</h3>
-          <p class="plan-note">{{ t('画出大陆轮廓与山脉走向，其余细节按种子随机生成；之后随时改草图重算。') }}</p>
-          <div class="pair">
-            <button type="button" :title="t('从一片汪洋开始，圈出大陆')" @click="W.startSketch('blank')"><Icon :icon="IconShapes" :size="14" />{{ t('空白画布') }}</button>
-            <button type="button" :title="t('以当前世界的海陆与主要山脉为底稿，在上面修改')" @click="W.startSketch('world')"><Icon :icon="IconMap" :size="14" />{{ t('当前世界') }}</button>
-          </div>
-        </template>
-        <template v-else>
-          <h3>{{ t('规划草图') }} · {{ t(p.settlements === false ? '第一阶段：只有地形' : '第二阶段：聚落与道路') }}</h3>
-          <Seg :cols="4" :options="PLAN_TOOLS" :model-value="ws.tool" @update:model-value="W.setTool" />
-          <div v-if="ws.range && ws.tool === 'ridge'" class="sub">
-            <Scale label="山脉高度" :min="0.2" :max="2" :step="0.05" :reset="1" :fmt="x100" :model-value="ws.range.height" @update:model-value="(x) => W.setRange({ height: x })" />
-            <Scale label="山体宽度" :min="20" :max="500" :step="10" :reset="140" :fmt="(x) => `${Math.round(x)} km`" :model-value="ws.range.width" @update:model-value="(x) => W.setRange({ width: x })" />
-            <button type="button" class="danger" :title="t('删除（Delete）')" @click="W.deleteRange()"><Icon :icon="IconTrash" :size="14" />{{ t('删除这条山脉') }}</button>
-          </div>
-          <div class="pair">
-            <button type="button" :title="t('地点编辑过后会固定不动；按当前的海陆重新生成全部城镇与地名')" @click="W.regenPlaces()"><Icon :icon="IconDices" :size="14" />{{ t('重排地点') }}</button>
-            <button type="button" :title="t('移除草图，大陆回到按陆地比例随机生成')" @click="W.endSketch()"><Icon :icon="IconReset" :size="14" />{{ t('退出规划') }}</button>
-          </div>
-          <Variant label="地形方案" title="同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成" :model-value="p.terrainVariant ?? 0" @update:model-value="W.setTerrainVariant" />
-          <Variant label="聚落方案" title="地形不变，换一套城镇选址、国界与道路" :disabled="p.settlements === false" :model-value="p.placeVariant ?? 0" @update:model-value="W.setPlaceVariant" />
-          <button v-if="p.settlements === false" type="button" class="wide" :title="t('地形满意后，在这片地面上放置城镇、划分国家、修建道路')" @click="W.setSettlements(true)"><Icon :icon="IconMapPinPlus" :size="14" />{{ t('生成聚落与道路') }}</button>
-          <button v-else type="button" class="wide" :title="t('去掉城镇、国家与道路，继续修改地形')" @click="W.setSettlements(false)"><Icon :icon="IconMountain" :size="14" />{{ t('回到只有地形') }}</button>
-        </template>
-      </div>
-      <Seg :cols="3" :options="tools" :model-value="ws.tool" @update:model-value="W.setTool" />
-      <Field label="底图">
-        <Dropdown :options="EDIT_VIEWS" :model-value="ws.editView" @update:model-value="W.setEditView" />
-      </Field>
-      <div class="brush" :class="{ dim: !brushTool }">
-        <Scale label="画笔大小" :min="3" :max="100" :step="1" :fmt="(x) => `${Math.round(x)}`" :model-value="ws.brush.radius" @update:model-value="(x) => W.setBrush({ radius: x })" />
-        <Scale label="画笔强度" :min="0.05" :max="1" :step="0.05" :fmt="x100" :model-value="ws.brush.strength" @update:model-value="(x) => W.setBrush({ strength: x })" />
-      </div>
-      <div v-if="regionTool" class="sub">
-        <Scale label="地峡宽度" :min="2" :max="40" :step="1" :fmt="(x) => t('{n} 格', { n: Math.round(x) })" v-model="ws.neck" />
-        <button type="button" class="wide" :title="t('在窄于「地峡宽度」的地方把陆地切开，每块大陆核心各成一洲')" @click="W.autoRegions()"><Icon :icon="IconWand" :size="14" />{{ t('自动划分大洲') }}</button>
-        <div v-if="ws.region" class="inspector">
-          <Field label="原名"><input :value="ws.region.name" spellcheck="false" @input="W.editRegionName('name', val($event))" /></Field>
-          <Field label="中文名"><input :value="ws.region.zh" spellcheck="false" @input="W.editRegionName('zh', val($event))" /></Field>
-          <Field label="日文名"><input :value="ws.region.ja" spellcheck="false" @input="W.editRegionName('ja', val($event))" /></Field>
-          <button type="button" class="danger" @click="W.deleteRegion()"><Icon :icon="IconTrash" :size="14" />{{ t('删除这个大洲') }}</button>
-        </div>
-      </div>
-      <Legend :items="[{ label: '显示地名', on: ws.showNames }]" @toggle="W.setShowNames(!ws.showNames)" />
-      <div class="pair">
-        <button type="button" :title="t('撤销（Ctrl+Z）')" @click="W.undo()"><Icon :icon="IconUndo" :size="14" />{{ t('撤销') }}</button>
-        <button type="button" :title="t('清除全部编辑')" @click="W.clearEdits()"><Icon :icon="IconReset" :size="14" />{{ t('清除编辑') }}</button>
-      </div>
-      <div v-if="ws.insp" class="inspector">
-        <h3>{{ t('地点') }}</h3>
-        <Field label="原名"><input :value="ws.insp.name" spellcheck="false" @input="W.editLabelName('name', val($event))" @change="W.endLabelEdit()" /></Field>
-        <Field label="中文名"><input :value="ws.insp.zh" spellcheck="false" @input="W.editLabelName('zh', val($event))" @change="W.endLabelEdit()" /></Field>
-        <Field label="日文名"><input :value="ws.insp.ja" spellcheck="false" @input="W.editLabelName('ja', val($event))" @change="W.endLabelEdit()" /></Field>
-        <Field label="类型">
-          <Dropdown :options="KINDS.map(([k, n]) => ({ value: k, label: n }))" :model-value="ws.insp.kind" @update:model-value="W.setLabelKind" />
-        </Field>
-        <button type="button" class="danger" :title="t('删除（Delete）')" @click="W.deleteSelected()"><Icon :icon="IconTrash" :size="14" />{{ t('删除地点') }}</button>
-      </div>
+    <Section v-if="ws.mode === 'edit' || ws.mode === 'areas'" v-show="ws.tab === 'look'">
+      <p class="plan-note">{{ t('编辑视图只显示工作底图，没有外观选项。') }}</p>
     </Section>
   </div>
 </template>

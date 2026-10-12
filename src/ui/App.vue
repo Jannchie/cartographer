@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconCastle, IconChartBar, IconDatabase, IconDiorama, IconEdit, IconHologram, IconImage, IconLibrary, IconPalette, IconRegion, IconSave, IconShapes, IconSliders } from '@jannchie/icons'
+import { IconCastle, IconChartBar, IconDatabase, IconDiorama, IconFlag, IconImage, IconLeaf, IconLibrary, IconMountain, IconPalette, IconRegion, IconSave, IconShapes, IconSliders } from '@jannchie/icons'
 import { computed, ref, watchEffect } from 'vue'
 import { app, storeGet, storeSet } from './app'
 import { langRef, t } from './i18n'
@@ -32,19 +32,14 @@ const settleExports = computed(() =>
       ],
 )
 
-// 侧边栏分页：世界的第二页随模式是沙盘、全息、纸图风格、区域或编辑，图标与舞台上的视图切换一致
-const VIEW_TAB = {
-  '3d': { label: '沙盘', icon: IconDiorama },
-  holo: { label: '全息', icon: IconHologram },
-  '2d': { label: '纸图风格', icon: IconPalette },
-  areas: { label: '区域', icon: IconRegion },
-  edit: { label: '编辑', icon: IconEdit },
-} as const
-const worldTabs = computed(() => [
-  { id: 'gen' as const, label: '生成', icon: IconSliders },
-  { id: 'view' as const, ...VIEW_TAB[ws.mode] },
+// 侧边栏分页：按生成阶段（地形 → 自然 → 人文），外观页的内容随舞台模式
+const worldTabs = [
+  { id: 'terrain' as const, label: '地形', icon: IconMountain },
+  { id: 'nature' as const, label: '自然', icon: IconLeaf, title: '气候、大洲与地理区域' },
+  { id: 'human' as const, label: '人文', icon: IconFlag, title: '城镇、政区与交通' },
+  { id: 'look' as const, label: '外观', icon: IconPalette, title: '当前视图的显示选项' },
   { id: 'stats' as const, label: '统计', icon: IconChartBar },
-])
+]
 // 区域视图里多出一页"区域"；沙盘模式下绘图风格页换成沙盘选项
 const settleTabs = computed(() => [
   { id: 'gen' as const, label: '生成', icon: IconSliders },
@@ -114,7 +109,7 @@ watchEffect(() => {
           <button type="button" class="wordmark" :title="t('回到首页')" @click="app.module = 'home'">Cartographer</button>
           <div class="file">
             <button v-show="app.module === 'world'" type="button" class="link" :title="t('保存的世界、导入与导出')" @click="W.openLibrary()"><Icon :icon="IconLibrary" :size="14" />{{ t('世界库') }}</button>
-            <button v-show="app.module === 'world'" type="button" class="link" :disabled="ws.busy" :title="t('保存到世界库：地形定稿成数据，之后与种子无关')" @click="W.saveWorld()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
+            <button v-show="app.module === 'world'" type="button" class="link" :disabled="ws.busy" :title="t('保存到世界库：存下整个世界的数据，打开时直接显示')" @click="W.saveWorld()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
             <LangSelect />
           </div>
         </div>

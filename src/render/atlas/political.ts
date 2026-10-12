@@ -1,20 +1,23 @@
-import type { World } from '../../gen/types'
+import type { County, World } from '../../gen/types'
 import { simplifyLine } from '../../gen/util'
 import { categoryBorders } from './svg/contour'
 import type { LineLook, Theme } from './styles'
 
-/** 政区图：按国家或按文化着色，伯爵领界、文化界与国界 */
+/** 政区图：按国家或按文化着色，伯爵领界、中层政区界、文化界与国界 */
 export type PoliticalMode = 'realms' | 'cultures'
 
-/** 每格所属文化（由伯爵领推出），海洋 -1；按世界缓存 */
-const cultureCache = new WeakMap<World, Int16Array>()
-export function cultureRaster(world: World): Int16Array {
-  let r = cultureCache.get(world)
-  if (r) return r
+/** 每格由所属伯爵领推出的值（文化、中层政区），海洋与没有归属的 -1 */
+function countyRaster(world: World, of: (c: County) => number | undefined): Int16Array {
   const p = world.political!
-  r = new Int16Array(p.county.length).fill(-1)
-  for (let i = 0; i < r.length; i++) if (p.county[i] >= 0) r[i] = p.counties[p.county[i]].culture
-  cultureCache.set(world, r)
+  const r = new Int16Array(p.county.length).fill(-1)
+  for (let i = 0; i < r.length; i++) if (p.county[i] >= 0) r[i] = of(p.counties[p.county[i]]) ?? -1
+  return r
+}
+/** 每格所属文化；按世界缓存 */
+const cultureCache = new WeakMap<World, Int16Array>()
+function cultureRaster(world: World): Int16Array {
+  let r = cultureCache.get(world)
+  if (!r) cultureCache.set(world, (r = countyRaster(world, (c) => c.culture)))
   return r
 }
 
@@ -49,18 +52,24 @@ function smoothBorders(cat: ArrayLike<number>, W: number, H: number): number[][]
   return out
 }
 
-const borderCache = new WeakMap<World, { county: number[][]; culture: number[][]; realm: number[][] }>()
+const borderCache = new WeakMap<World, { county: number[][]; province: number[][]; culture: number[][]; realm: number[][] }>()
 export function politicalBorders(world: World) {
   let b = borderCache.get(world)
   if (b) return b
   const { W, H } = world
-  b = { county: smoothBorders(world.political!.county, W, H), culture: smoothBorders(cultureRaster(world), W, H), realm: smoothBorders(world.realm, W, H) }
+  b = {
+    county: smoothBorders(world.political!.county, W, H),
+    // 旧存档没有中层政区
+    province: world.political!.provinces ? smoothBorders(countyRaster(world, (c) => c.province), W, H) : [],
+    culture: smoothBorders(cultureRaster(world), W, H),
+    realm: smoothBorders(world.realm, W, H),
+  }
   borderCache.set(world, b)
   return b
 }
 
 /**
- * 政区界线（生成的世界）：伯爵领界、文化界（只在文化图上）与国界（下面可以垫一道晕带），画法随风格（Theme.political）
+ * 政区界线（生成的世界）：伯爵领界、中层政区界、文化界（只在文化图上）与国界（下面可以垫一道晕带），画法随风格（Theme.political）
  */
 export function drawPolitical(ctx: CanvasRenderingContext2D, world: World, S: number, theme: Theme, mode: PoliticalMode) {
   if (!world.political) return
@@ -83,6 +92,8 @@ export function drawPolitical(ctx: CanvasRenderingContext2D, world: World, S: nu
     }
   }
   stroke(b.county, look.county)
+  // 中层政区界：伯爵领界的颜色，三倍粗、加深、实线
+  stroke(b.province, { color: look.county.color, width: look.county.width * 3, alpha: Math.min(0.9, look.county.alpha * 2.6) })
   if (mode === 'cultures') stroke(b.culture, look.culture)
   if (look.halo) stroke(b.realm, look.halo)
   stroke(b.realm, look.realm)
