@@ -52,7 +52,7 @@ const BASE: Look = {
 }
 
 export const LOOKS: { id: string; name: string; look: Look }[] = [
-  { id: 'natural', name: '自然', look: BASE },
+  { id: 'natural', name: '自然色', look: BASE },
   {
     id: 'neutral',
     name: '中性',

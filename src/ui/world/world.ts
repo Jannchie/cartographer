@@ -6,10 +6,11 @@ import { deleteWorld, getMeta, getWorld as getEntry, listWorlds, newWorldId, put
 import { EditorView, isSketchTool, type EditTool, type EditView } from '../../editor/editor'
 import { bumpSketch, sketchFromWorld } from '../../gen/sketch'
 import { autoContinents, floodLand, regionAnchor } from '../../editor/layers'
-import { BIOME_NAMES, DEFAULT_PARAMS, isSettlement, normalizeParams, type Label, type World, type WorldEdits, type WorldParams } from '../../gen/types'
+import { BIOME_NAMES, DEFAULT_PARAMS as GEN_DEFAULTS, isSettlement, normalizeParams, type County, type Label, type PoliticalLayer, type World, type WorldEdits, type WorldParams } from '../../gen/types'
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
 import { earthAreas } from '../../gen/earth/realWorld'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
+import { POLITY_TERMS, realmPolity, type Polity } from '../../gen/political'
 import { FONT_PRESETS, setFontPreset, themeById } from '../../render/atlas/styles'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
 import type { PoliticalMode } from '../../render/atlas/political'
@@ -47,14 +48,33 @@ export const PRESETS: { name: string; desc: string; p: Partial<WorldParams> }[] 
   { name: '冰原', desc: '高纬寒冷，冰盖、苔原与峡湾', p: { globe: false, earth: false, earthReal: false, landRatio: 0.4, plates: 12, mountains: 1.1, coastRoughness: 0.9, rainfall: 0.9, temperature: -9, latNorth: 82, latSouth: 42 } },
   { name: '沙海', desc: '炎热少雨，沙漠与盐湖广布', p: { globe: false, earth: false, earthReal: false, landRatio: 0.48, plates: 11, mountains: 0.8, coastRoughness: 0.5, rainfall: 0.4, temperature: 5, latNorth: 40, latSouth: 5 } },
   { name: '类地球', desc: '全球全图：几块大陆隔着大洋，从赤道雨林到两极冰原', p: { globe: true, earth: false, earthReal: false, landRatio: 0.29, plates: 16, mountains: 1.1, coastRoughness: 0.6, rainfall: 1, temperature: 0, latNorth: 80, latSouth: -62 } },
-  { name: '地球', desc: '真实地球的大陆、山脉与海深（ETOPO1），地名仍是虚构的', p: { globe: true, earth: true, earthReal: false, mountains: 1, coastRoughness: 0.5, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
-  { name: '真实地球', desc: '高程、气候、群系、河湖与自然地物名称都取自真实数据；没有城市与国家', p: { globe: true, earth: true, earthReal: true, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
+]
+
+/**
+ * 世界来源：新建世界时选定，决定哪些阶段由模拟生成、哪些取自真实数据。
+ * 随机生成与空白草图再配一个地形风格（PRESETS）；其余来源的参数固定
+ */
+export type SourceId = 'random' | 'sketch' | 'earth' | 'earthReal' | 'china'
+export const SOURCES: { id: SourceId; name: string; desc: string; p?: Partial<WorldParams> }[] = [
+  { id: 'random', name: '随机生成', desc: '按种子模拟板块、造山、侵蚀与气候；选一种地形风格' },
+  { id: 'sketch', name: '空白草图', desc: '从一片汪洋开始，自己圈出大陆、画出山脉，细节按种子生成' },
+  { id: 'earth', name: '地球海陆', desc: '真实地球的大陆、山脉与海深（ETOPO1），气候与地名照常模拟', p: { globe: true, earth: true, earthReal: false, mountains: 1, coastRoughness: 0.5, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
+  { id: 'earthReal', name: '真实地球', desc: '高程、气候、群系、河湖与自然地物名称都取自真实数据；没有人文层', p: { globe: true, earth: true, earthReal: true, rainfall: 1, temperature: 0, latNorth: 84, latSouth: -58 } },
   {
+    id: 'china',
     name: '中国',
     desc: '中国区域图：真实地形（ETOPO 2022）、气候与河湖，省级与地级行政区划、国界与南海断续线；周边只显示地形',
     p: { region: 'china', globe: false, earth: true, earthReal: true, width: 1450, rainfall: 1, temperature: 0 },
   },
 ]
+/** 当前世界的来源（草图看编辑里有没有草图） */
+export function currentSource(): SourceId {
+  const p = ws.params
+  if (p.region) return 'china'
+  if (p.earthReal) return 'earthReal'
+  if (p.earth) return 'earth'
+  return ws.sketch ? 'sketch' : 'random'
+}
 
 /** 观感：上次选的预设 + 在其上的微调（旧版本存的字段缺了就用预设补上） */
 function loadLook(): Look {
@@ -84,9 +104,19 @@ function loadHolo(): HoloOptions {
 }
 
 // —— 界面状态（响应式） ——
-export type WorldTab = 'gen' | 'view' | 'stats'
+/** 界面里的默认参数：人文层默认不生成，地理定下后再添加（生成器本身的默认见 DEFAULT_PARAMS，脚本与视频沿用） */
+export const UI_DEFAULTS: WorldParams = { ...GEN_DEFAULTS, settlements: false }
+
+/** 侧栏分页：按生成阶段（地形 → 自然 → 人文），外观随舞台模式 */
+export type WorldTab = 'terrain' | 'nature' | 'human' | 'look' | 'stats'
+const WORLD_TABS: readonly WorldTab[] = ['terrain', 'nature', 'human', 'look', 'stats']
+/** 读存下的选项：旧版的值按 renamed 换成新值，不认识的（已被删改）回到 fallback */
+function storedEnum<T extends string>(key: string, allowed: readonly string[], fallback: T, renamed: Record<string, T> = {}): T {
+  const v = storeGet(key) ?? ''
+  return renamed[v] ?? (allowed.includes(v) ? (v as T) : fallback)
+}
 export const ws = reactive({
-  params: { ...DEFAULT_PARAMS, ...readQuery(initialQuery('world') ?? new URLSearchParams(storeGet('worldQuery') ?? '')) } as WorldParams,
+  params: { ...UI_DEFAULTS, ...readQuery(initialQuery('world') ?? new URLSearchParams(storeGet('worldQuery') ?? '')) } as WorldParams,
   view3d: {
     exaggeration: 28,
     labels: true,
@@ -106,21 +136,29 @@ export const ws = reactive({
   lookId: storeGet('lookId') ?? LOOKS[0].id,
   /** 全息沙盘的选项 */
   holo: loadHolo(),
-  atlasStyle: ((storeGet('atlasStyle') as StyleId) || 'physical') as StyleId,
+  atlasStyle: storedEnum<StyleId>('atlasStyle', THEMES.map((th) => th.id), 'physical'),
   atlasOpts: { labels: true, contours: true, graticule: true },
   /** 纸图的政区图：按国家或文化着色、画伯爵领界与国界 */
-  political: (['realms', 'cultures'].includes(storeGet('atlasPolitical') ?? '') ? storeGet('atlasPolitical') : 'off') as 'off' | PoliticalMode,
-  /** 当前世界有没有政区层（伯爵领与文化） */
-  hasPolitical: false,
+  political: storedEnum<'off' | PoliticalMode>('atlasPolitical', ['realms', 'cultures'], 'off'),
+  /** 人文层概览（没有人文层时为空） */
+  human: null as {
+    towns: number
+    counties: number
+    provinces: number
+    cultures: number
+    realms: { i: number; name: string; zh: string; ja?: string; counties: number; provinces: number; terms: (typeof POLITY_TERMS)[Polity] }[]
+  } | null,
+  /** 各级政区的称呼：按多数伯爵领所在国家的制度（分封：伯爵领、公爵领；郡县：县、州；令制：郡、令制国） */
+  terms: POLITY_TERMS.feudal,
   /** 纸图注记的字体方案（见 FONT_PRESETS） */
-  atlasFont: FONT_PRESETS.some((f) => f.id === storeGet('atlasFont')) ? storeGet('atlasFont')! : 'theme',
+  atlasFont: storedEnum<string>('atlasFont', FONT_PRESETS.map((f) => f.id), 'theme'),
   /** 纸图的图饰：标题框、指北针、图例（默认不画，只影响浏览器里的图廓层；导出总是画） */
   ornaments: storeGet('atlasOrnaments') === '1',
-  mode: '3d' as Mode,
+  mode: '2d' as Mode,
   /** 浏览器创建不了 WebGL（显卡加速被停用等）：3D 沙盘里只显示说明，纸图与编辑照常 */
   no3d: false,
   /** 侧边栏当前的分页：生成、视图（随模式是沙盘、纸图风格或编辑）、统计 */
-  tab: (['gen', 'view', 'stats'].includes(storeGet('worldTab') ?? '') ? storeGet('worldTab') : 'gen') as WorldTab,
+  tab: storedEnum<WorldTab>('worldTab', WORLD_TABS, 'terrain', { gen: 'terrain', view: 'look' }),
   /** 参数改了但还没重新生成 */
   dirty: false,
   /** 区域视图：编辑中的区域（改了就写进 edits.areas）与选中的那个 */
@@ -217,7 +255,7 @@ const flushWaiters = () => {
 /** 需要世界时调用：还没生成就开始生成，生成完（或失败，得 null）后兑现 */
 export function ensureWorld(): Promise<World | null> {
   if (world) return Promise.resolve(world)
-  const p = new Promise<World | null>((r) => waiters.push(r))
+  const p = nextWorld()
   // 舞台还没挂载时由 mountWorld 接着生成
   if (jobId === 0 && els) generate()
   return p
@@ -350,19 +388,46 @@ export function setParam<K extends keyof WorldParams>(k: K, v: WorldParams[K]) {
   markDirty()
 }
 export function resetParams() {
-  Object.assign(ws.params, { ...DEFAULT_PARAMS, seed: ws.params.seed })
+  Object.assign(ws.params, { ...UI_DEFAULTS, seed: ws.params.seed })
   normalizeParams(ws.params)
   markDirty()
 }
-/** 预设只填入参数，点「生成」才生效 */
+/** 地形风格只填入参数，点「生成」才生效（随机生成与草图的世界才有） */
 export function applyPreset(i: number) {
-  // 预设没写区域的就不是区域图；离开区域图时宽度回到默认（区域图的宽度另成一套）
-  const leaving = ws.params.region && !PRESETS[i].p.region
-  Object.assign(ws.params, { region: undefined }, PRESETS[i].p)
-  if (leaving) ws.params.width = DEFAULT_PARAMS.width
+  Object.assign(ws.params, PRESETS[i].p)
   normalizeParams(ws.params)
   markDirty()
   ws.preset = i
+}
+
+/** 下一次生成完成时兑现（失败得 null） */
+function nextWorld(): Promise<World | null> {
+  return new Promise((r) => waiters.push(r))
+}
+/**
+ * 新建世界：新种子、来源的参数、只有自然地理（人文层之后再添加）。
+ * 当前的编辑与定稿一并丢掉；没存进世界库的编辑先确认
+ */
+export async function createWorld(src: SourceId, style = 0) {
+  if (ws.busy) return
+  if (!ws.entry && hasEdits(edits) && !window.confirm(t('新建世界会丢掉当前世界的编辑（没有保存到世界库）。继续吗？'))) return
+  ws.library.open = false
+  edits = {}
+  undoStack.length = 0
+  editor?.select(null)
+  editor?.refreshEdits(edits)
+  syncSketch()
+  ws.entry = null
+  const def = SOURCES.find((x) => x.id === src)!
+  // 分辨率沿用当前的；区域图的宽度另成一套，进出区域图时换掉
+  const width = def.p?.width ?? (ws.params.region ? UI_DEFAULTS.width : ws.params.width)
+  Object.assign(ws.params, { ...UI_DEFAULTS, width, ...(def.p ?? PRESETS[style].p), seed: syllableSeed(SYL), naming: ws.params.naming })
+  normalizeParams(ws.params)
+  ws.preset = def.p ? -1 : style
+  setTab('terrain')
+  const done = nextWorld()
+  generate()
+  if (src === 'sketch' && (await done)) startSketch('blank')
 }
 
 const SYL = ['ar', 'en', 'is', 'or', 'ul', 'va', 'mi', 'ko', 'ra', 'the', 'lo', 'san', 'dra', 'nor', 'eth', 'wyn', 'ka', 'mel']
@@ -370,6 +435,8 @@ export function randomSeed() {
   // 定稿的世界与种子无关：换种子要先回到规划
   if (ws.frozen) return
   ws.params.seed = syllableSeed(SYL)
+  // 新种子即新世界：先只生成自然地理
+  ws.params.settlements = false
   generate()
 }
 
@@ -427,10 +494,16 @@ export function setAtlasFont(id: string) {
   refreshAtlas()
 }
 export function setPolitical(v: 'off' | PoliticalMode) {
+  autoPolitical = false
   ws.political = v
   storeSet('atlasPolitical', v)
-  atlasCache.clear()
   refreshAtlas()
+}
+/** 自动打开按国家着色（政区着色关着时）；离开人文页时撤掉 */
+function autoRealms() {
+  if (ws.political !== 'off') return
+  setPolitical('realms')
+  autoPolitical = true
 }
 export function setAtlasOpt(k: keyof typeof ws.atlasOpts, v: boolean) {
   ws.atlasOpts[k] = v
@@ -444,13 +517,30 @@ export function toggleTour() {
 }
 
 export function setTab(tab: WorldTab) {
+  const back = ws.tab === 'human' && (tab === 'terrain' || tab === 'nature')
   ws.tab = tab
   storeSet('worldTab', tab)
+  if (tab === 'human') showHumanMap()
+  // 回到地理阶段：人文页自动打开的政区着色关掉（去外观页调整时保留）
+  else if (back && autoPolitical) setPolitical('off')
+}
+/** 人文页自动打开的政区着色；用户自己切换政区着色后不再算自动 */
+let autoPolitical = false
+/** 人文层生成好之后要显示政区图（添加人文层、在人文页打开页面时） */
+let pendingHumanMap = ws.tab === 'human'
+/** 人文页显示人文地图：纸图按国家着色（编辑与区域视图里不打断手上的工作） */
+function showHumanMap() {
+  if (!world?.political) {
+    pendingHumanMap = true
+    return
+  }
+  pendingHumanMap = false
+  if (ws.mode === 'edit' || ws.mode === 'areas') return
+  autoRealms()
+  if (ws.mode !== '2d') setMode('2d')
 }
 
 export function setMode(m: Mode) {
-  // 编辑要用侧边栏里的工具：进编辑时翻到视图页
-  if (m === 'edit') setTab('view')
   if (m !== '3d') scene?.stopTour()
   ws.mode = m
   syncActive()
@@ -460,10 +550,7 @@ export function setMode(m: Mode) {
     scene?.setWorld(world, lastTex.color, lastTex.roughness, rivers)
     sceneStale = false
   }
-  if (m === 'areas') {
-    setTab('view')
-    loadAreas()
-  }
+  if (m === 'areas') loadAreas()
   if ((m === '2d' || m === 'areas') && world) refreshAtlas()
   if (m === 'edit') {
     ensureEditor()
@@ -607,7 +694,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
     const tex = m.tex ? textureCanvases(world, rivers, m.tex, 2) : m.ground === lastGround && lastTex ? lastTex : buildPhysicalTexture(world, rivers, 2)
     lastTex = tex
     // 编辑视图里不重建 3D（较慢），切回 3D 时再建
-    if (ws.mode === '3d' || !editor) {
+    if (ws.mode === '3d') {
       scene?.setWorld(world, tex.color, tex.roughness, rivers)
       sceneStale = false
     } else sceneStale = true
@@ -637,10 +724,33 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   void fillPendingThumb()
 }
 
+/** 伯爵领实行的制度：随所在国家（无主之地随自己的文化） */
+const polityAt = (w: World, pl: PoliticalLayer, c: County): Polity => realmPolity(pl.cultures, w.realms[c.realm], c.culture)
+/** 世界里多数伯爵领实行的制度：概览、图例的称呼按它 */
+function mainPolity(w: World, pl: PoliticalLayer): Polity {
+  const n: Record<Polity, number> = { feudal: 0, commandery: 0, ritsuryo: 0 }
+  for (const c of pl.counties) n[polityAt(w, pl, c)]++
+  return (Object.keys(n) as Polity[]).reduce((a, b) => (n[b] > n[a] ? b : a))
+}
+
+/** 人文页的概览：各项数目；国家按伯爵领数从大到小，称呼按各国自己的制度 */
+function humanSummary(w: World, pl: PoliticalLayer) {
+  const counties = new Array<number>(w.realms.length).fill(0)
+  const provinces = new Array<number>(w.realms.length).fill(0)
+  for (const c of pl.counties) if (c.realm >= 0) counties[c.realm]++
+  for (const pv of pl.provinces ?? []) if (pv.realm >= 0) provinces[pv.realm]++
+  const realms = w.realms
+    .map((r, i) => ({ i, name: r.name, zh: r.zh, ja: r.ja, counties: counties[i], provinces: provinces[i], terms: POLITY_TERMS[realmPolity(pl.cultures, r)] }))
+    .sort((a, b) => b.counties - a.counties)
+  return { towns: w.labels.filter(isSettlement).length, counties: pl.counties.length, provinces: pl.provinces?.length ?? 0, cultures: pl.cultures.length, realms }
+}
+
 let statsCached = false
 function showStats(w: World, cached = statsCached) {
   statsCached = cached
-  ws.hasPolitical = !!w.political
+  ws.terms = POLITY_TERMS[w.political ? mainPolity(w, w.political) : 'feudal']
+  if (pendingHumanMap && w.political && ws.tab === 'human') queueMicrotask(showHumanMap)
+  ws.human = w.political ? humanSummary(w, w.political) : null
   const s = w.stats
   const m = (km: number) => `${Math.round(km * 1000).toLocaleString()} m`
   ws.info = {
@@ -671,23 +781,26 @@ function takeStale() {
   atlasCache.clear()
   atlasStale = false
 }
+/** 纸图缓存的键：风格加政区着色（切换着色时各留一份，来回切不重画） */
+const atlasKey = (w: World, style: StyleId) => `${style}|${politicalOpt(w) ?? 'off'}`
 async function buildList(w: World, style: StyleId) {
   takeStale()
-  const hit = atlasCache.get(style)
+  const key = atlasKey(w, style)
+  const hit = atlasCache.get(key)
   if (hit?.list) return hit.list
   const { buildAtlasBase, withLabels } = await import('../../render/atlas/svg/vector')
-  let c = atlasCache.get(style)
+  let c = atlasCache.get(key)
   if (!c) {
     const measurer = document.createElement('canvas').getContext('2d')!
     c = { base: buildAtlasBase(w, rivers, style, { ...toRaw(ws.atlasOpts), political: politicalOpt(w) }, measurer, 2), list: null }
-    atlasCache.set(style, c)
+    atlasCache.set(key, c)
   }
   c.list ??= withLabels(c.base, currentAreas())
   return c.list
 }
 /** 把列表交给查看器：与当前列表同一个底（只有注记不同）时不重画底图 */
-function showList(list: DisplayList, style: StyleId) {
-  const base = atlasCache.get(style)?.base ?? null
+function showList(w: World, list: DisplayList, style: StyleId) {
+  const base = atlasCache.get(atlasKey(w, style))?.base ?? null
   if (base && base === shownBase) viewer!.setLabels(list)
   else viewer!.setList(list)
   shownBase = base
@@ -699,7 +812,7 @@ async function refreshAtlas(quiet = false) {
   const style = ws.atlasStyle
   const job = ++atlasJob
   takeStale()
-  if (!atlasCache.has(style) && !quiet) {
+  if (!atlasCache.has(atlasKey(w, style)) && !quiet) {
     Object.assign(ws.loading, { show: true, frac: 1, stage: t('矢量绘制{style}', { style: t(THEMES.find((th) => th.id === style)!.name) }) })
     await mapFontsReady()
     await ensureFonts(w, style)
@@ -716,7 +829,7 @@ async function refreshAtlas(quiet = false) {
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__viewer = viewer
   // 图框模式：图廓固定在舞台上、贴着地图收拢或铺满可用区，缩放只动图框里的地图（导出仍是整页排版）
   viewer.setChrome((cw, ch, box) => buildAtlasChrome(w, style, list, map, chromeMeasurer, cw, ch, box, probeCard(), ws.ornaments), atlasBackdrop(style), atlasFrameInset(style))
-  showList(list, style)
+  showList(w, list, style)
   ws.paper.M = list.M
   if (ws.mode === 'areas' && areasWorld !== w) loadAreas()
   if (!keepView) fitMap()
@@ -796,12 +909,15 @@ function probeAt(clientX: number, clientY: number) {
     rows.push(['省级', lang === 'zh' ? a.provinceFull[unit.province] : placeName(world.realms[unit.province])])
     if (world.realms[unit.province] && unit.zh !== world.realms[unit.province].zh) rows.push(['地级', lang === 'zh' ? unit.full : placeName(unit)])
   }
-  // 生成的世界：所属的伯爵领、国家与文化
+  // 生成的世界：所属的伯爵领、中层政区、国家与文化（称呼随所在国家的制度）
   const pl = world.political
   const ci = pl ? pl.county[i] : -1
   if (pl && ci >= 0) {
     const c = pl.counties[ci]
-    rows.push(['伯爵领', placeName(c)])
+    const terms = POLITY_TERMS[polityAt(world, pl, c)]
+    rows.push([terms.county, placeName(c)])
+    const pv = c.province !== undefined && c.province >= 0 ? pl.provinces?.[c.province] : undefined
+    if (pv) rows.push([terms.province, placeName(pv)])
     if (c.realm >= 0) rows.push(['国家', placeName(world.realms[c.realm])])
     rows.push(['文化', placeName(pl.cultures[c.culture])])
   }
@@ -836,7 +952,7 @@ export async function exportPng() {
     await ensureFonts(world, ws.atlasStyle)
     const list = await buildList(world, ws.atlasStyle)
     if (!viewer) viewer = markRaw(new AtlasViewer(els.v2))
-    showList(list, ws.atlasStyle)
+    showList(world, list, ws.atlasStyle)
     url = viewer.rasterize(2).toDataURL('image/png')
   }
   download(url, `${world.worldName.toLowerCase()}-${ws.params.seed}-${ws.mode === '3d' ? '3d' : ws.mode === 'holo' ? `holo-${ws.holo.palette}` : ws.atlasStyle}.png`)
@@ -860,14 +976,14 @@ export async function exportSvg() {
 // —— URL 同步：分享链接即可复现同一世界（#/world?seed=...，只写与默认值不同的参数，种子总是写上） ——
 function worldQuery() {
   const q = new URLSearchParams()
-  for (const [k, v] of Object.entries(ws.params)) if (k === 'seed' || (DEFAULT_PARAMS as unknown as Record<string, unknown>)[k] !== v) q.set(k, String(v))
+  for (const [k, v] of Object.entries(ws.params)) if (k === 'seed' || (UI_DEFAULTS as unknown as Record<string, unknown>)[k] !== v) q.set(k, String(v))
   return q
 }
 function readQuery(q: URLSearchParams): Partial<WorldParams> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of q) {
-    if (!(k in DEFAULT_PARAMS)) continue
-    const d = (DEFAULT_PARAMS as unknown as Record<string, unknown>)[k]
+    if (!(k in UI_DEFAULTS)) continue
+    const d = (UI_DEFAULTS as unknown as Record<string, unknown>)[k]
     if (typeof d === 'number') {
       if (Number.isFinite(Number(v))) out[k] = Number(v)
     } else if (typeof d === 'boolean') out[k] = v === 'true' || v === '1'
@@ -879,7 +995,7 @@ function readQuery(q: URLSearchParams): Partial<WorldParams> {
 registerRoute('world', {
   query: worldQuery,
   apply(q) {
-    Object.assign(ws.params, { ...DEFAULT_PARAMS, ...readQuery(q) })
+    Object.assign(ws.params, { ...UI_DEFAULTS, ...readQuery(q) })
     ws.preset = -1
     generate()
   },
@@ -929,9 +1045,25 @@ async function freeze() {
   ws.editStatus = null
 }
 
+/**
+ * 定稿地形：把当前地形存成数据，之后与种子、地形参数无关，地形画笔直接改这份地形（可撤销，也可解除定稿）。
+ * 保存到世界库不需要定稿：没定稿的世界照样存下整份数据，打开时直接显示，之后的编辑按种子重算
+ */
+export async function freezeTerrain() {
+  if (!world || ws.busy || edits.frozen || world.params.earthReal) return
+  pushUndo(false)
+  try {
+    await freeze()
+    flash('地形已定稿')
+  } catch (err) {
+    ws.editStatus = null
+    window.alert(t('定稿失败：') + (err instanceof Error ? err.message : String(err)))
+  }
+}
+
 /** 回到规划：去掉定稿地形，地形重新由种子、参数与草图生成；定稿后的地形画笔会丢失（可撤销） */
 export function unfreeze() {
-  if (!edits.frozen || !window.confirm(t('回到规划？地形重新由种子、参数与草图生成，定稿后在地形上的修改会丢失（可撤销）。'))) return
+  if (!edits.frozen || !window.confirm(t('解除定稿？地形重新由种子、参数与草图生成，定稿后在地形上的修改会丢失（可撤销）。'))) return
   pushUndo(false)
   edits.terrain = edits.planTerrain
   edits.planTerrain = undefined
@@ -968,12 +1100,11 @@ function flash(msg: string) {
   }, 1800)
 }
 
-/** 保存到世界库（即定稿）：已对应某个条目就覆盖它，asNew 时另存一条 */
+/** 保存到世界库（整份数据，不定稿）：已对应某个条目就覆盖它，asNew 时另存一条 */
 export async function saveWorld(asNew = false) {
   if (!world || ws.busy) return
   try {
-    await freeze()
-    const w = world!
+    const w = world
     const id = !asNew && ws.entry ? ws.entry.id : newWorldId()
     const name = !asNew && ws.entry ? ws.entry.name : worldTitle(w)
     await putWorld({ id, name, savedAt: Date.now(), thumb: thumbnail(), seed: ws.params.seed, W: w.W, H: w.H }, storable())
@@ -995,7 +1126,7 @@ export async function openEntry(id: string) {
 }
 
 function loadWorldData(params: WorldParams, ed: WorldEdits, w?: World) {
-  Object.assign(ws.params, { ...DEFAULT_PARAMS, ...params })
+  Object.assign(ws.params, { ...UI_DEFAULTS, ...params })
   edits = ed
   if (edits.frozen) edits.frozenRev = Date.now()
   editsSize = { W: ws.params.width, H: ws.params.height, seed: ws.params.seed }
@@ -1040,12 +1171,11 @@ export async function exportEntry(id: string) {
   download(new Blob([text], { type: 'application/json' }), fileName(m.name))
 }
 
-/** 导出当前世界（先定稿） */
+/** 导出当前世界（整份数据，不定稿） */
 export async function exportWorldFile() {
   if (!world || ws.busy) return
-  await freeze()
-  const name = ws.entry?.name ?? worldTitle(world!)
-  const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world!), name)
+  const name = ws.entry?.name ?? worldTitle(world)
+  const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world), name)
   download(new Blob([text], { type: 'application/json' }), fileName(name))
 }
 
@@ -1141,13 +1271,12 @@ export function clearEdits() {
 
 // —— 规划草图 ——
 defineStrings([
-  ['从零规划', 'Plan from scratch', 'ゼロから計画'],
+  ['草图规划', 'Sketch plan', 'スケッチ計画'],
   ['画出大陆轮廓与山脉走向，其余细节按种子随机生成；之后随时改草图重算。', 'Draw the continents and the run of the mountains; everything else is generated from the seed. Change the sketch at any time to regenerate.', '大陸の輪郭と山脈の走向を描くと、残りはシードから生成されます。スケッチはいつでも修正して再計算できます。'],
   ['从一片汪洋开始，圈出大陆', 'Start from open ocean and outline the continents', '一面の海から始めて大陸を囲む'],
   ['空白画布', 'Blank canvas', '白紙から'],
   ['以当前世界的海陆与主要山脉为底稿，在上面修改', 'Start from the land, sea and main ranges of the current world', '現在の世界の海陸と主な山脈を下絵にする'],
   ['当前世界', 'Current world', '現在の世界'],
-  ['规划草图', 'Sketch', '計画スケッチ'],
   ['圈地', 'Lasso', '囲む'],
   ['陆地', 'Land', '陸地'],
   ['海洋', 'Ocean', '海洋'],
@@ -1162,10 +1291,9 @@ defineStrings([
   ['地点编辑过后会固定不动；按当前的海陆重新生成全部城镇与地名', 'Places stay fixed once edited; regenerate all towns and names for the current land', '地点は編集後に固定されます。現在の海陸に合わせて町と地名をすべて作り直す'],
   ['重排地点', 'Re-place towns', '地点を再配置'],
   ['移除草图，大陆回到按陆地比例随机生成', 'Remove the sketch and go back to random continents', 'スケッチを外し、大陸をランダム生成に戻す'],
-  ['退出规划', 'Leave plan', '計画を終了'],
-  ['聚落与道路', 'Settlements & roads', '集落と道路'],
+  ['移除草图', 'Remove sketch', 'スケッチを外す'],
   ['定稿 · {stage}', 'Finalizing · {stage}', '確定中 · {stage}'],
-  ['回到规划？地形重新由种子、参数与草图生成，定稿后在地形上的修改会丢失（可撤销）。', 'Back to planning? Terrain is generated again from the seed, parameters and sketch; terrain changes made after finalizing are lost (undoable).', '計画に戻りますか？地形はシード・パラメーター・スケッチから再び生成され、確定後の地形の修正は失われます（元に戻せます）。'],
+  ['解除定稿？地形重新由种子、参数与草图生成，定稿后在地形上的修改会丢失（可撤销）。', 'Unfinalize? Terrain is generated again from the seed, parameters and sketch; terrain changes made after finalizing are lost (undoable).', '確定を解除しますか？地形はシード・パラメーター・スケッチから再び生成され、確定後の地形の修正は失われます（元に戻せます）。'],
   ['已保存到世界库', 'Saved to library', 'ライブラリに保存しました'],
   ['保存失败：', 'Save failed: ', '保存に失敗：'],
   ['从世界库删除「{name}」？此操作无法撤销。', 'Delete “{name}” from the library? This cannot be undone.', '「{name}」をライブラリから削除しますか？元に戻せません。'],
@@ -1182,6 +1310,14 @@ defineStrings([
   ['省级', 'Province', '省級'],
   ['地级', 'Prefecture', '地級'],
   ['伯爵领', 'County', '伯領'],
+  ['县', 'County', '県'],
+  ['郡', 'District', '郡'],
+  ['公爵领', 'Duchy', '公爵領'],
+  ['州', 'Prefecture', '州'],
+  ['令制国', 'Province', '令制国'],
+  ['分封', 'Feudal', '封建'],
+  ['郡县', 'Centralized', '郡県'],
+  ['令制', 'Ritsuryō', '律令'],
   ['字体', 'Font', 'フォント'],
   ['地图注记的字体（导出的 SVG 同样引用）', 'Typeface for map labels (also referenced by exported SVG)', '地図注記の書体（書き出した SVG も同じ書体を参照）'],
   ['跟随风格', 'Style default', 'スタイル既定'],
@@ -1192,19 +1328,23 @@ defineStrings([
   ['书法', 'Calligraphy', '書道'],
   ['圆体', 'Rounded', '丸ゴシック'],
   ['政区地图集', 'Political atlas', '政区地図帳'],
-  ['国家着色 · 伯爵领 · 国界色带', 'Realm colors · counties · border bands', '国の塗り分け · 伯領 · 国境の帯'],
+  ['国家着色 · 白色政区线 · 国界色带', 'Realm colors · white county lines · border bands', '国の塗り分け · 白い区画線 · 国境の帯'],
   ['战略图', 'Strategy', '戦略図'],
   ['纹章色 · 晕渲地形 · 粗国界', 'Heraldic colors · shaded relief · bold borders', '紋章色 · 陰影起伏 · 太い国境'],
   ['国家', 'Realm', '国'],
   ['文化', 'Culture', '文化'],
   ['政区', 'Political', '政区'],
   ['无', 'None', 'なし'],
-  ['按国家或文化给陆地着色，画出伯爵领界与国界', 'Color the land by realm or culture, with county and realm borders', '国または文化ごとに陸地を塗り分け、伯領界と国境を描く'],
+  ['按国家或文化给陆地着色，画出{county}界、{province}界与国界', 'Color the land by realm or culture, with {county}, {province} and realm borders', '国または文化ごとに陸地を塗り分け、{county}界・{province}界と国境を描く'],
   ['保存到世界库', 'Save to library', 'ライブラリに保存'],
-  ['保存到世界库：地形定稿成数据，之后与种子无关', 'Save to the library: the terrain is finalized as data and no longer depends on the seed', 'ライブラリに保存：地形をデータとして確定し、以後シードに依存しない'],
+  ['保存到世界库：存下整个世界的数据，打开时直接显示', 'Save to the library: all data of the world is stored and shown as is when opened', 'ライブラリに保存：世界の全データを保存し、開くとそのまま表示する'],
+  ['定稿地形', 'Finalize terrain', '地形を確定'],
+  ['把当前地形存成数据：之后与种子和地形参数无关，地形画笔直接修改这份地形。可撤销，也可解除定稿', 'Store the current terrain as data: it no longer depends on the seed or terrain parameters, and terrain brushes edit it directly. Undoable, and can be unfinalized', '現在の地形をデータとして保存：以後シードと地形パラメーターに依存せず、地形ブラシはこの地形を直接修正します。元に戻せ、確定の解除もできます'],
+  ['地形已定稿', 'Terrain finalized', '地形を確定しました'],
+  ['定稿失败：', 'Finalizing failed: ', '確定に失敗：'],
   ['已定稿', 'Finalized', '確定済み'],
-  ['地形已是数据，与种子无关：种子与地形参数不再起作用，地形画笔直接修改这份地形；气候、水系、聚落仍可调整与重算。', 'The terrain is data and no longer depends on the seed: seed and terrain parameters have no effect, and terrain brushes edit it directly. Climate, water and settlements can still be adjusted.', '地形はデータになり、シードに依存しません。シードと地形パラメーターは効かず、地形ブラシはこの地形を直接修正します。気候・水系・集落は引き続き調整できます。'],
-  ['回到规划', 'Back to planning', '計画に戻る'],
+  ['地形已是数据，与种子无关：种子与地形参数不再起作用，地形画笔直接修改这份地形；气候、水系与人文层仍可调整与重算。', 'The terrain is data and no longer depends on the seed: seed and terrain parameters have no effect, and terrain brushes edit it directly. Climate, water and the human layer can still be adjusted.', '地形はデータになり、シードに依存しません。シードと地形パラメーターは効かず、地形ブラシはこの地形を直接修正します。気候・水系・人文レイヤーは引き続き調整できます。'],
+  ['解除定稿', 'Unfinalize', '確定を解除'],
   ['去掉定稿地形，重新由种子、参数与草图生成', 'Drop the finalized terrain and generate it from the seed, parameters and sketch again', '確定地形を外し、シード・パラメーター・スケッチから再び生成する'],
   ['另存为新世界', 'Save as new', '新規として保存'],
   ['导入文件…', 'Import file…', 'ファイルを読み込む…'],
@@ -1218,26 +1358,59 @@ defineStrings([
   ['整个世界的数据（.json），导入后直接显示，与种子无关', 'All data of the world (.json); opens as is, independent of the seed', '世界の全データ（.json）。読み込むとそのまま表示され、シードに依存しない'],
   ['保存的世界、导入与导出', 'Saved worlds, import and export', '保存した世界・読み込みと書き出し'],
   ['地形方案', 'Terrain variant', '地形案'],
-  ['聚落方案', 'Settlement variant', '集落案'],
-  ['同一种子下换一套地形细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成', 'Another set of terrain details for the same seed (a sketch keeps its continents and ranges); places are regenerated for the new terrain', '同じシードで地形の細部を作り直す（スケッチがあれば大陸と山脈は保たれる）。地点は新しい地形に合わせて作り直す'],
-  ['地形不变，换一套城镇选址、国界与道路', 'Same terrain, another set of town sites, borders and roads', '地形はそのままに、町の位置・国境・道路を作り直す'],
+  ['人文方案', 'Human-layer variant', '人文案'],
+  ['同一种子下换一套地形与气候细节（有草图时大陆形状与山脉走向不变）；地点随新地形重新生成', 'Another set of terrain and climate details for the same seed (a sketch keeps its continents and ranges); places are regenerated for the new terrain', '同じシードで地形と気候の細部を作り直す（スケッチがあれば大陸と山脈は保たれる）。地点は新しい地形に合わせて作り直す'],
+  ['地形不变，换一套城镇选址、政区划分与道路', 'Same terrain, another set of town sites, political divisions and roads', '地形はそのままに、町の位置・政区・道路を作り直す'],
   ['上一个方案', 'Previous variant', '前の案'],
   ['原样', 'Original', '元の案'],
   ['下一个方案', 'Next variant', '次の案'],
-  ['城镇、国家、道路与航线；关掉时只生成地形、气候、水系与自然地物，先定地形再放聚落', 'Towns, realms, roads and sea routes; turn off to generate only terrain, climate, water and natural features, and add settlements later', '町・国・道路・航路。オフにすると地形・気候・水系・自然地物だけを生成し、集落は後から置けます'],
-  ['第一阶段：只有地形', 'Stage 1: terrain only', '第1段階：地形のみ'],
-  ['第二阶段：聚落与道路', 'Stage 2: settlements & roads', '第2段階：集落と道路'],
-  ['生成聚落与道路', 'Generate settlements & roads', '集落と道路を生成'],
-  ['回到只有地形', 'Back to terrain only', '地形のみに戻る'],
-  ['地形满意后，在这片地面上放置城镇、划分国家、修建道路', 'Once the terrain is right, place towns, draw realms and build roads on it', '地形が決まったら、町を置き、国を分け、道路を敷く'],
-  ['去掉城镇、国家与道路，继续修改地形', 'Remove towns, realms and roads to keep working on the terrain', '町・国・道路を外して地形の修正を続ける'],
+  ['添加人文层', 'Add human layer', '人文レイヤーを追加'],
+  ['移除人文层', 'Remove human layer', '人文レイヤーを外す'],
+  ['地理定下后，放置城镇、划分政区、修建道路与航线', 'Once the geography is settled, place towns, divide the land and build roads and sea routes', '地理が決まったら、町を置き、政区を分け、道路と航路を敷く'],
+  ['去掉城镇、政区与交通，继续修改自然地理', 'Remove towns, divisions and transport to keep working on the physical geography', '町・政区・交通を外して自然地理の修正を続ける'],
+  ['在纸图上定位', 'Locate on the paper map', '紙の地図で位置を示す'],
+  ['来源', 'Source', 'ソース'],
+  ['新建…', 'New…', '新規…'],
+  ['换一种来源，或打开世界库里保存的世界', 'Start from another source, or open a world saved in the library', '別のソースから始めるか、ライブラリに保存した世界を開く'],
+  ['新建与世界库', 'New world and library', '新規作成とライブラリ'],
+  ['新建世界', 'New world', '新しい世界'],
+  ['新世界只生成自然地理；城镇、政区与交通在人文页添加。', 'A new world has physical geography only; add towns, divisions and transport on the Human tab.', '新しい世界は自然地理のみです。町・政区・交通は人文タブで追加します。'],
+  ['地形风格', 'Terrain style', '地形スタイル'],
+  ['一键换一类世界的地形与气候参数，点「生成」后生效', 'Load the terrain and climate settings for another kind of world; they take effect when you generate', '別の種類の世界の地形・気候の設定を読み込む（「生成」で反映）'],
+  ['随机生成', 'Generated', 'ランダム生成'],
+  ['按种子模拟板块、造山、侵蚀与气候；选一种地形风格', 'Plates, mountain building, erosion and climate simulated from the seed, in the chosen terrain style', 'シードからプレート・造山・侵食・気候を模擬。地形スタイルを選ぶ'],
+  ['空白草图', 'Blank sketch', '白紙のスケッチ'],
+  ['从一片汪洋开始，自己圈出大陆、画出山脉，细节按种子生成', 'Start from open ocean, outline the continents and draw the ranges yourself; details come from the seed', '一面の海から始め、大陸を囲み山脈を描く。細部はシードから生成'],
+  ['真实地球的大陆、山脉与海深（ETOPO1），气候与地名照常模拟', "Earth's real continents, mountains and ocean depths (ETOPO1); climate and names are simulated as usual", '実在の地球の大陸・山脈・海深（ETOPO1）。気候と地名は通常どおり模擬'],
+  ['高程、气候、群系、河湖与自然地物名称都取自真实数据；没有人文层', 'Elevation, climate, biomes, rivers, lakes and natural feature names from real data; no human layer', '標高・気候・バイオーム・河川と湖・自然地物の名称を実データから。人文レイヤーはない'],
+  ['新建世界会丢掉当前世界的编辑（没有保存到世界库）。继续吗？', 'A new world discards the edits of the current one (not saved to the library). Continue?', '新しい世界を作ると、現在の世界の編集（ライブラリ未保存）は失われます。続けますか？'],
+  ['自然', 'Nature', '自然'],
+  ['人文', 'Human', '人文'],
+  ['外观', 'Look', '表示'],
+  ['气候、大洲与地理区域', 'Climate, continents and geographic areas', '気候・大陸・地理区域'],
+  ['城镇、政区与交通', 'Towns, political divisions and transport', '町・政区・交通'],
+  ['当前视图的显示选项', 'Display options for the current view', '現在のビューの表示設定'],
+  ['地形参数', 'Terrain parameters', '地形パラメーター'],
+  ['地形笔刷', 'Terrain brushes', '地形ブラシ'],
+  ['气候笔刷', 'Climate brushes', '気候ブラシ'],
+  ['地理区域', 'Geographic areas', '地理区域'],
+  ['编辑地理区域', 'Edit geographic areas', '地理区域を編集'],
+  ['完成区域编辑', 'Done editing areas', '区域の編集を終える'],
+  ['大陆、海、湖、山脉、盆地、沙漠与森林的范围和名称：自动推断，可在纸图上改边界与名字。', 'Extents and names of continents, seas, lakes, ranges, basins, deserts and forests: inferred automatically, with borders and names editable on the paper map.', '大陸・海・湖・山脈・盆地・砂漠・森林の範囲と名前：自動で推定し、紙の地図上で境界と名前を修正できます。'],
+  ['真实地球的地形与气候取自观测数据，不生成人文层。', 'Real Earth uses observed terrain and climate and has no human layer.', '実地球は観測データの地形と気候を使い、人文レイヤーはありません。'],
+  ['人文层包括城镇、政区与交通。地形与自然地理定下后再添加，之后改动地形时随之重算。', 'The human layer holds towns, political divisions and transport. Add it once the terrain and physical geography are settled; it is recomputed when the terrain changes.', '人文レイヤーは町・政区・交通からなります。地形と自然地理が決まってから追加し、以後は地形を変えると再計算されます。'],
+  ['切到纸图，按国家着色并画出政区界线', 'Switch to the paper map, colored by realm with political borders', '紙の地図に切り替え、国ごとに塗り分けて政区の境界を描く'],
+  ['在纸图中查看政区', 'View divisions on the paper map', '紙の地図で政区を見る'],
+  ['编辑视图只显示工作底图，没有外观选项。', 'The edit view shows only the working base map and has no display options.', '編集ビューは作業用の下図だけを表示し、表示設定はありません。'],
+  ['交通', 'Transport', '交通'],
+  ['道路与航线', 'Roads and sea routes', '道路と航路'],
   ['草图', 'Sketch', 'スケッチ'],
-  ['规划草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。', 'A sketch is in use: continents and mountain ranges follow it, land ratio has no effect, and plates only add minor uplands.', '計画スケッチ使用中：大陸の形と山脈はスケッチに従い、陸地比率は効かず、プレートは副次的な山地のみ生みます。'],
+  ['草图生效中：大陆形状与山脉走向由草图决定，陆地比例不起作用，板块只产生次级山地。', 'A sketch is in use: continents and mountain ranges follow it, land ratio has no effect, and plates only add minor uplands.', 'スケッチ使用中：大陸の形と山脈はスケッチに従い、陸地比率は効かず、プレートは副次的な山地のみ生みます。'],
   ['拖动圈出陆地 · 按住 Alt 圈出海洋 · 右键或 Shift 拖动平移 · Ctrl+Z 撤销', 'Drag to outline land · Alt to outline sea · right-drag or Shift to pan · Ctrl+Z undo', 'ドラッグで陸地を囲む · Alt で海 · 右ドラッグか Shift で移動 · Ctrl+Z 元に戻す'],
   ['拖动画山脉脊线 · 点选山脉后拖动整条或拖顶点 · Delete 删除 · 右键或 Shift 拖动平移 · Ctrl+Z 撤销', 'Drag to draw a ridge · click a range, then drag it or its vertices · Delete removes · right-drag or Shift to pan · Ctrl+Z undo', 'ドラッグで稜線を描く · 山脈を選んで全体か頂点をドラッグ · Delete で削除 · 右ドラッグか Shift で移動 · Ctrl+Z 元に戻す'],
   ['换种子会按同一份草图重新生成细节，草图以外的编辑将被清除。继续吗？', 'A new seed regenerates the details from the same sketch; edits other than the sketch will be cleared. Continue?', 'シードを変えると同じスケッチで細部を作り直し、スケッチ以外の編集は消去されます。続けますか？'],
   ['清除草图以外的全部编辑？', 'Clear all edits except the sketch?', 'スケッチ以外の編集をすべて消去しますか？'],
-  ['退出规划？草图将被移除，大陆回到随机生成（可撤销）。', 'Leave the plan? The sketch is removed and continents are generated randomly again (undoable).', '計画を終了しますか？スケッチを外し、大陸はランダム生成に戻ります（元に戻せます）。'],
+  ['移除草图？草图将被移除，大陆回到随机生成（可撤销）。', 'Remove the sketch? It is removed and continents are generated randomly again (undoable).', 'スケッチを外しますか？スケッチを外し、大陸はランダム生成に戻ります（元に戻せます）。'],
 ])
 function syncSketch() {
   ws.frozen = !!edits.frozen
@@ -1258,7 +1431,7 @@ export function startSketch(from: 'world' | 'blank') {
   bumpSketch(edits)
   editor?.refreshEdits(edits)
   syncSketch()
-  setTool(from === 'world' ? 'ridge' : 'lasso')
+  pickTool(from === 'world' ? 'ridge' : 'lasso')
   // 规划先定地形：聚落与道路留到地形满意之后再生成
   if (ws.params.settlements !== false) {
     pinWorldName()
@@ -1307,12 +1480,13 @@ export function setSettlements(on: boolean) {
   if ((ws.params.settlements !== false) === on) return
   pinWorldName()
   ws.params.settlements = on
+  if (on) pendingHumanMap = true
   if (!on && ws.tool === 'place') setTool('select')
   generate(ws.mode === 'edit')
 }
 /** 退出规划：去掉草图，回到按陆地比例、板块随机生成的大陆 */
 export function endSketch() {
-  if (!edits.sketch || !window.confirm(t('退出规划？草图将被移除，大陆回到随机生成（可撤销）。'))) return
+  if (!edits.sketch || !window.confirm(t('移除草图？草图将被移除，大陆回到随机生成（可撤销）。'))) return
   pushUndo(false)
   edits = keepEdits(...WORLD_NAME_KEYS)
   editor?.refreshEdits(edits)
@@ -1381,6 +1555,17 @@ function ensureEditor() {
   Object.assign(editor.brush, toRaw(ws.brush))
   editor.showNames = ws.showNames
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__editor = editor
+}
+/** 侧栏里选工具：舞台切到编辑视图 */
+export function pickTool(id: EditTool) {
+  setTool(id)
+  if (ws.mode !== 'edit') setMode('edit')
+}
+/** 在纸图上看政区：没开政区着色时按国家着色 */
+export function viewPolitical() {
+  if (ws.political === 'off') setPolitical('realms')
+  setMode('2d')
+  setTab('look')
 }
 export function setTool(id: EditTool) {
   ensureEditor()
@@ -1640,18 +1825,40 @@ export function addArea(kind: AreaKind) {
 /** 把地图移到区域上（区域比视口大就缩小到整个放下） */
 export function focusArea(id: string) {
   const a = ws.areas.find((x) => x.id === id)
-  if (!a || !viewer) return
-  const P = ws.paper
+  if (!a) return
+  const xs = a.poly.map((p) => p[0])
+  const ys = a.poly.map((p) => p[1])
+  focusBox(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys))
+}
+/** 在纸图上定位一个国家：切到纸图（政区着色），框住国土 */
+export async function focusRealm(i: number) {
+  if (!world) return
+  const w = world
+  if (ws.mode !== '2d') {
+    autoRealms()
+    setMode('2d')
+    await refreshAtlas()
+    if (w !== world) return
+  }
   let x0 = Infinity
   let y0 = Infinity
   let x1 = -Infinity
   let y1 = -Infinity
-  for (const [x, y] of a.poly) {
-    x0 = Math.min(x0, x)
-    y0 = Math.min(y0, y)
-    x1 = Math.max(x1, x)
-    y1 = Math.max(y1, y)
+  for (let k = 0; k < w.realm.length; k++) {
+    if (w.realm[k] !== i) continue
+    const x = k % w.W
+    const y = (k / w.W) | 0
+    if (x < x0) x0 = x
+    if (x > x1) x1 = x
+    if (y < y0) y0 = y
+    if (y > y1) y1 = y
   }
+  if (x1 >= x0) focusBox(x0, y0, x1, y1)
+}
+/** 纸图框住格坐标 (x0, y0)~(x1, y1) 的范围（只缩小不放大到超过当前比例） */
+function focusBox(x0: number, y0: number, x1: number, y1: number) {
+  if (!viewer) return
+  const P = ws.paper
   const pg = (c: number) => P.M + (c + 0.5) * P.S
   const f = viewer.inner()
   const bw = (x1 - x0) * P.S

@@ -835,7 +835,7 @@ export const THEMES: Theme[] = [
     political: POL_ATLAS,
     politicalDefault: 'realms',
     name: '政区地图集',
-    desc: '国家着色 · 伯爵领 · 国界色带',
+    desc: '国家着色 · 白色政区线 · 国界色带',
     paper: hex('#f4efe2'),
     ink: '#3d3640',
     pixel: politicalPixel,

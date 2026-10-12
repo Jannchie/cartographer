@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconDiorama, IconEdit, IconHologram, IconMap, IconRegion, type Icon as IconDef } from '@jannchie/icons'
+import { IconDiorama, IconEdit, IconHologram, IconMap, type Icon as IconDef } from '@jannchie/icons'
 import { computed, onMounted, ref } from 'vue'
 import { t } from '../i18n'
 import Icon from '../kit/Icon.vue'
@@ -25,12 +25,13 @@ const areaInfo = (a: Area) => {
 }
 
 const MODES: { id: Mode; label: string; icon: IconDef<string> }[] = [
+  { id: '2d', label: '纸图', icon: IconMap },
   { id: '3d', label: '3D 沙盘', icon: IconDiorama },
   { id: 'holo', label: '全息', icon: IconHologram },
-  { id: '2d', label: '纸图', icon: IconMap },
   { id: 'edit', label: '编辑', icon: IconEdit },
-  { id: 'areas', label: '区域', icon: IconRegion },
 ]
+/** 区域编辑是纸图上的一个子状态：舞台标签里算作纸图 */
+const stageTab = computed(() => (ws.mode === 'areas' ? '2d' : ws.mode))
 const hint = computed(() =>
   ws.mode === '3d'
     ? ws.touring
@@ -74,7 +75,7 @@ const hint = computed(() =>
     <div ref="ve" class="view edit-view" :class="{ hidden: ws.mode !== 'edit' }"></div>
     <div class="neatline" aria-hidden="true"></div>
     <nav class="tabs" role="tablist">
-      <button v-for="m in MODES" :key="m.id" type="button" role="tab" :aria-selected="ws.mode === m.id" :class="{ on: ws.mode === m.id }" @click="setMode(m.id)">
+      <button v-for="m in MODES" :key="m.id" type="button" role="tab" :aria-selected="stageTab === m.id" :class="{ on: stageTab === m.id }" @click="setMode(m.id)">
         <Icon :icon="m.icon" :size="16" />{{ t(m.label) }}
       </button>
     </nav>
