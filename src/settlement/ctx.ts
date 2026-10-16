@@ -395,6 +395,8 @@ export interface Ctx {
   wardTown: boolean
   /** 当前街坊的边上没有路的只是院墙（城里修了街的住人片区，见 generate.ts 的 sealedWard）：尽端巷只从真有路的边进 */
   wardSealed: boolean
+  /** 当前街坊内缩后的院墙边（见 generate.ts 的 wardBlock）：切地块、开尽端巷时不当临街边 */
+  wardWalls: [P, P][]
   /** 当前片区定下功能时的人口（地标按它定规模；没有记录的按现在的人口） */
   wardPop?: number
   /** 当前片区的密度档（决定地块大小、层数与形态，见 scale.ts 的 densityOf） */

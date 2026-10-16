@@ -12,6 +12,7 @@ import { chord, clipConvex,
   circlePoly,
   clipHalf,
   dist,
+  extent,
   insetConvex,
   localBox,
   inscribedRect,
@@ -195,48 +196,39 @@ export function cutByStreets(ctx: Ctx, block: Poly, fronts: Seg[] = []): Poly[] 
   return pieces
 }
 
-/** 边 v→w（往外挪 off）上有路顺着走：三个取样点至少两个挨着走廊（横穿过去的街只碰到一个） */
-export function alongRoad(ctx: Ctx, v: P, w: P, off: P = [0, 0]) {
-  let n = 0
-  for (const t of [0.2, 0.5, 0.8]) {
-    const q = lerpP(v, w, t)
-    if (ctx.corridors.hits([q[0] + off[0], q[1] + off[1]], 1.5) && ++n === 2) return true
-  }
-  return false
+/** q 在当前街坊的院墙边上（见 ctx.wardWalls） */
+export function onWardWall(ctx: Ctx, q: P) {
+  return ctx.wardWalls.some(([a, b]) => segDist(q, a, b).d < 0.5)
 }
 
-/** 街坊的临街边：一般四周都是街巷；收了缝的街坊（ctx.wardSealed）只有外面真有路的边才算，其余是院墙 */
-function blockFronts(ctx: Ctx, block: Poly): Seg[] {
-  const edges = block.map((p, i) => [p, block[(i + 1) % block.length]] as Seg)
-  if (!ctx.wardSealed) return edges
-  const c = centroid(block)
-  return edges.filter(([a, b]) => {
-    const L = dist(a, b) || 1
-    let n: P = [(b[1] - a[1]) / L, -(b[0] - a[0]) / L]
-    if ((c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1] > 0) n = [-n[0], -n[1]]
-    return alongRoad(ctx, a, b, [n[0] * 1.5, n[1] * 1.5])
-  })
+/** 多边形上贴着 fronts 的边（不短于 minLen）的序号 */
+function frontEdges(poly: Poly, fronts: Seg[], minLen: number): number[] {
+  const out: number[] = []
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i]
+    const b = poly[(i + 1) % poly.length]
+    if (dist(a, b) < minLen) continue
+    const m = lerpP(a, b, 0.5)
+    if (fronts.some(([s0, s1]) => segDist(m, s0, s1).d < 0.35)) out.push(i)
+  }
+  return out
 }
 
 /**
  * 临街条带（Vanegas 等 2012）：沿每条临街边（长的先）切出一条进深 D 的条带，再垂直于街切成面宽相近的地块；
  * 先切的条带占住街角（街角地块两面临街）。条带以外的内核是院落深处，交给 rec 接着二分
  */
-function frontStrips(piece: Poly, fronts: Seg[], o: Dens, rng: Ctx['rng'], lots: Poly[]): Poly | null {
+function frontStrips(piece: Poly, fronts: Seg[], o: Dens, rng: Ctx['rng'], keep: (q: Poly | null) => q is Poly, lots: Poly[]): Poly | null {
   const c = centroid(piece)
-  const edges: { a: P; u: P; n: P; L: number }[] = []
-  for (let i = 0; i < piece.length; i++) {
+  const edges = frontEdges(piece, fronts, 6).map((i) => {
     const a = piece[i]
     const b = piece[(i + 1) % piece.length]
     const L = dist(a, b)
-    if (L < 6) continue
-    const m: P = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
-    if (!fronts.some(([s0, s1]) => segDist(m, s0, s1).d < 0.35)) continue
     const u: P = [(b[0] - a[0]) / L, (b[1] - a[1]) / L]
     let n: P = [-u[1], u[0]]
     if ((c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1] < 0) n = [-n[0], -n[1]]
-    edges.push({ a, u, n, L })
-  }
+    return { a, u, n, L }
+  })
   if (!edges.length) return piece
   edges.sort((x, y) => y.L - x.L)
   const D0 = o.depth * 1.3
@@ -245,36 +237,26 @@ function frontStrips(piece: Poly, fronts: Seg[], o: Dens, rng: Ctx['rng'], lots:
   let rest: Poly | null = piece
   for (const { a, u, n } of edges) {
     if (!rest || rest.length < 3) break
-    const ext = rest.reduce((m, v) => Math.max(m, (v[0] - a[0]) * n[0] + (v[1] - a[1]) * n[1]), 0)
+    const F = { o: a, f: u, l: n }
+    const ext = extent(F, rest).b1
     if (ext < 3) continue
     // 剩下的不够再切出一条像样的内核：整个归这条条带
     const D = ext < D0 * 1.5 ? ext + 1 : D0
-    const cut: P = [a[0] + n[0] * D, a[1] + n[1] * D]
-    const strip = clipHalf(rest, cut, n)
-    const left = clipHalf(rest, cut, [-n[0], -n[1]])
+    // splitConvex 的法向是 dir 左转 90°：取 dir 使法向为 n，前一半是离街 D 以内的条带
+    const [strip, left] = splitConvex(rest, [a[0] + n[0] * D, a[1] + n[1] * D], [n[1], -n[0]])
     rest = left.length >= 3 && area(left) > 1 ? left : null
     if (strip.length < 3) continue
     // 沿街切成一块块：分割线大致垂直于街，略带偏斜
-    let t0 = Infinity
-    let t1 = -Infinity
-    for (const v of strip) {
-      const t = (v[0] - a[0]) * u[0] + (v[1] - a[1]) * u[1]
-      t0 = Math.min(t0, t)
-      t1 = Math.max(t1, t)
-    }
-    const cuts: { p: P; m: P }[] = []
+    const { a0: t0, a1: t1 } = extent(F, strip)
+    let cur = strip
     for (let t = t0 + W * (0.75 + rng.next() * 0.5); t < t1 - W * 0.55; t += W * (0.75 + rng.next() * 0.5)) {
       const m = rot(u, (rng.next() - 0.5) * 0.12 * o.irr)
-      cuts.push({ p: [a[0] + u[0] * t, a[1] + u[1] * t], m })
+      if (cur.length < 3) continue
+      const [lot, after] = splitConvex(cur, [a[0] + u[0] * t, a[1] + u[1] * t], [m[1], -m[0]])
+      cur = after
+      if (keep(lot)) lots.push(lot)
     }
-    let cur = strip
-    for (const { p, m } of cuts) {
-      const lot = clipHalf(cur, p, m)
-      cur = clipHalf(cur, p, [-m[0], -m[1]])
-      if (lot.length >= 3 && area(lot) > o.minA * 0.4) lots.push(lot)
-      if (cur.length < 3) break
-    }
-    if (cur.length >= 3 && area(cur) > o.minA * 0.4) lots.push(cur)
+    if (keep(cur)) lots.push(cur)
   }
   return rest
 }
@@ -284,10 +266,12 @@ function frontStrips(piece: Poly, fronts: Seg[], o: Dens, rng: Ctx['rng'], lots:
  * 默认递归二分：每次沿最小外接矩形的长轴垂直切开，面积大时留出小巷。strips：先沿临街边切条带（见 frontStrips）。
  * streets：先沿穿过街坊的街切开（见 generate.ts 的 townStreets），只有城里沿街排房的街坊要
  */
-export function subdivide(ctx: Ctx, block: Poly, o: Dens, streets = false, strips = false): Lot[] {
+export function subdivide(ctx: Ctx, block: Poly, o: Dens, { streets = false, strips = false } = {}): Lot[] {
   const rng = ctx.rng
-  const fronts = blockFronts(ctx, block)
+  // 街坊四周一般都是街巷；院墙边（见 ctx.wardWalls）不临街
+  const fronts = block.map((p, i) => [p, block[(i + 1) % block.length]] as Seg).filter(([a, b]) => !onWardWall(ctx, lerpP(a, b, 0.5)))
   const lots: Poly[] = []
+  const keep = (q: Poly | null): q is Poly => !!q && q.length >= 3 && area(q) > o.minA * 0.4
   // 切口也是临街边，房子沿街排
   const pieces = streets ? cutByStreets(ctx, block, fronts) : [block]
   const rec = (poly: Poly, depth: number) => {
@@ -311,24 +295,14 @@ export function subdivide(ctx: Ctx, block: Poly, o: Dens, streets = false, strip
       fronts.push(...edgesOnLine(p1, [c[0] - n[0] * gap / 2, c[1] - n[1] * gap / 2], n))
       fronts.push(...edgesOnLine(p2, [c[0] + n[0] * gap / 2, c[1] + n[1] * gap / 2], n))
     }
-    for (const q of [p1, p2]) if (q.length >= 3 && area(q) > o.minA * 0.4) rec(q, depth + 1)
+    for (const q of [p1, p2]) if (keep(q)) rec(q, depth + 1)
   }
   for (const piece of pieces) {
-    if (piece.length < 3 || area(piece) <= o.minA * 0.4) continue
-    const core = strips ? frontStrips(piece, fronts, o, rng, lots) : piece
-    if (core && core.length >= 3 && area(core) > o.minA * 0.4) rec(core, 0)
+    if (!keep(piece)) continue
+    const core = strips ? frontStrips(piece, fronts, o, rng, keep, lots) : piece
+    if (keep(core)) rec(core, 0)
   }
-  return lots.map((poly) => {
-    const front: number[] = []
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i]
-      const b = poly[(i + 1) % poly.length]
-      if (dist(a, b) < 0.8) continue
-      const m: P = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
-      if (fronts.some(([s0, s1]) => segDist(m, s0, s1).d < 0.35)) front.push(i)
-    }
-    return { poly, front }
-  })
+  return lots.map((poly) => ({ poly, front: frontEdges(poly, fronts, 0.8) }))
 }
 
 interface Front {
@@ -596,7 +570,8 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
   const tier = `${densKey}_${ctx.wardDensity}`
   const o = TIERED.has(densKey) && DENS[tier] ? DENS[tier] : DENS[densKey]
   const wardRng = ctx.rng
-  const lots = subdivide(ctx, block, o, true, densKey !== 'village' && densKey !== 'hamlet')
+  const rural = densKey === 'village' || densKey === 'hamlet'
+  const lots = subdivide(ctx, block, o, { streets: true, strips: !rural })
   for (const lot of lots) {
     if (reserve.length && overlaps(lot.poly, reserve)) continue
     const c = centroid(lot.poly)
@@ -607,7 +582,7 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
       if (rng.next() < 0.18) scatterTrees(ctx, insetConvex(lot.poly, 2), 0.004, 2.5, 4.5)
       continue
     }
-    if (densKey === 'village' || densKey === 'hamlet') {
+    if (rural) {
       const nb = ctx.out.buildings.length
       if (rng.next() < o.fill) farmstead(ctx, lot)
       else if (rng.next() < 0.4) scatterTrees(ctx, insetConvex(lot.poly, 2), 0.004, 2.5, 4.5)
@@ -974,7 +949,7 @@ export function castle(ctx: Ctx, ward: Ward, block: Poly) {
 
 export function noble(ctx: Ctx, ward: Ward, block: Poly) {
   const rng = ctx.rng
-  const lots = subdivide(ctx, block, { maxA: ctx.p.size === 'city' ? 1500 : 1000, minA: 350, alley: 0, alleyP: 0, depth: 20, fill: 1, irr: 0.5 }, true)
+  const lots = subdivide(ctx, block, { maxA: ctx.p.size === 'city' ? 1500 : 1000, minA: 350, alley: 0, alleyP: 0, depth: 20, fill: 1, irr: 0.5 }, { streets: true })
   for (const lot of lots) {
     const encl = placeable(ctx, insetConvex(lot.poly, 0.8), 3)
     if (!encl || encl.length < 3) continue
@@ -1160,7 +1135,7 @@ export function eastWard(ctx: Ctx, block: Poly, rich: boolean, nearRoad = Infini
   const minA = d === 'high' ? 90 : 160
   const alleyP = d === 'high' ? 0.6 : 0.35
   for (const q of quads) {
-    const lots = subdivide(ctx, q, { maxA, minA, alley: 2.2, alleyP, depth: 30, fill: 1, irr: 0.25 }, true)
+    const lots = subdivide(ctx, q, { maxA, minA, alley: 2.2, alleyP, depth: 30, fill: 1, irr: 0.25 }, { streets: true })
     for (const lot of lots) {
       if (nearRoad < Infinity && ctx.corridors.gap(centroid(lot.poly)) > nearRoad) {
         if (ctx.rng.next() < 0.15) scatterTrees(ctx, insetConvex(lot.poly, 2), 0.004, 2.5, 4)

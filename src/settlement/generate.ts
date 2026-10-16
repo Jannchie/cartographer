@@ -11,6 +11,7 @@ import {
   chaikin,
   circlePoly,
   dist,
+  add,
   bboxOf,
   growConvex,
   insetConvex,
@@ -45,7 +46,7 @@ import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
 import { blindAlleys, buildField, fieldTraits, joinEnds, traceStreamlines, type CityField } from './tensor'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
-import { addBoat, addPier, alongRoad, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
+import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 import { calibrateTrades, perHome, residentsOf } from './people'
 import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, statsOf, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
 import * as dmath from '../gen/dmath'
@@ -173,6 +174,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     wardQuota: Infinity,
     wardTown: true,
     wardSealed: false,
+    wardWalls: [],
     wardDensity: 'mid',
     wardType: 'common',
     tier: 'standard',
@@ -1850,6 +1852,7 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   ctx.wardPop = undefined
   ctx.wardTown = true
   ctx.wardSealed = false
+  ctx.wardWalls = []
   ctx.wardQuota = Infinity
   ctx.wardFill = 1
   ctx.wardDensity = 'mid'
@@ -1965,6 +1968,13 @@ function sealedWard(S: WardStage, pa: Patch) {
   return !S.small && !pa.planned && livedInner(pa)
 }
 
+/** 边 v→w 上有路顺着走：三个取样点至少两个挨着走廊（横穿过去的街只碰到一个） */
+function alongRoad(ctx: Ctx, v: P, w: P) {
+  let n = 0
+  for (const t of [0.2, 0.5, 0.8]) if (ctx.corridors.hits(lerpP(v, w, t), 1.5) && ++n === 2) return true
+  return false
+}
+
 /** 城里住人的片区（宫城除外）：townStreets 在这些片区里修街 */
 function livedInner(pa: Patch) {
   return pa.inner && pa.palace === undefined && LIVED_TYPES.has(pa.type ?? 'wild')
@@ -1981,13 +1991,21 @@ function wardBlock(ctx: Ctx, S: WardStage, i: number): Poly | null {
   // 其余只留一道细缝（田埂、篱笆）。并成一片的农田之间也只是一道田埂
   // 城里沿张量场修了街的街坊（见 sealedWard）：片区边上没有路顺着走的只是相邻两户的院墙，留一道细缝
   const group = S.fields.get(i)
+  const c = centroid(pa.poly)
+  ctx.wardWalls = []
   const insets = pa.poly.map((v, k) => {
     const d = lane * (0.8 + rng.next() * 0.4)
     const w = pa.poly[(k + 1) % pa.poly.length]
     const mid: P = [(v[0] + w[0]) / 2, (v[1] + w[1]) / 2]
     const mate = group?.seams.some(([a, b]) => segDist(mid, a, b).d < 0.5)
-    if (ctx.wardTown && !mate) return ctx.wardSealed && !alongRoad(ctx, v, w) ? 0.5 : d
-    return ctx.corridors.hits(mid, 0.5) ? d : mate ? 0 : 0.6
+    if (!ctx.wardTown || mate) return ctx.corridors.hits(mid, 0.5) ? d : mate ? 0 : 0.6
+    if (!ctx.wardSealed || alongRoad(ctx, v, w)) return d
+    // 院墙：记下内缩后的这条边，切地块、开巷口时不当临街边
+    const L = dist(v, w) || 1
+    let n: P = [-(w[1] - v[1]) / L, (w[0] - v[0]) / L]
+    if ((c[0] - v[0]) * n[0] + (c[1] - v[1]) * n[1] < 0) n = [-n[0], -n[1]]
+    ctx.wardWalls.push([add(v, n, 0.5), add(w, n, 0.5)])
+    return 0.5
   })
   const block = insetConvex(pa.poly, insets)
   return block.length < 3 ? null : block

@@ -24,7 +24,7 @@ import {
 } from '../geom'
 import type { Tri } from '../../gen/naming'
 import type { BuildingKind, Ward } from '../types'
-import { addBuilding, addGroup, cutByStreets, fit, inside, place, scatterTrees, subdivide } from '../wards'
+import { addBuilding, addGroup, cutByStreets, fit, inside, onWardWall, place, scatterTrees, subdivide } from '../wards'
 import { drop } from '../undo'
 import type { CityPlan } from './types'
 import { composer } from '../compose/core'
@@ -458,7 +458,7 @@ export function derbs(ctx: Ctx, block: Poly, spacing: number) {
       const e = add(a, u, L * t)
       if (nearWall(ctx, e, 16) || ctx.T.waterAt(add(e, n, -4)) < 3 || ctx.occ.hitsPoint(add(e, n, 2), 0)) continue
       // 院墙边（片区之间没有路）不开巷
-      if (ctx.wardSealed && !ctx.corridors.hits(add(e, n, -1.5), 1.5)) continue
+      if (onWardWall(ctx, e)) continue
       const pts: P[] = [add(e, n, -1.5), e]
       let cur = e
       let h = rot(n, (rng.next() - 0.5) * 0.5)
