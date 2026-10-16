@@ -300,7 +300,7 @@ select {
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  font-family: var(--mono);
+  font-family: var(--ui);
   font-size: 12px;
   text-align: left;
   transition: background 0.15s;
@@ -337,7 +337,8 @@ select {
 .sec h2::before {
   counter-increment: sec;
   content: counter(sec, decimal-leading-zero);
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   font-weight: 400;
   color: var(--accent);
@@ -402,7 +403,7 @@ input[type='text'] {
   border: 0;
   border-bottom: 1px solid var(--ink);
   padding: 5px 0;
-  font-family: var(--mono);
+  font-family: var(--ui);
   font-size: 12.5px;
   outline: none;
   transition: border-color 0.2s;
@@ -451,6 +452,7 @@ select.lang:hover {
 }
 .seed input {
   flex: 1;
+  font-family: var(--mono);
   font-size: 17px;
   padding: 3px 0 5px;
   letter-spacing: 0.02em;
@@ -574,7 +576,8 @@ select.lang:hover {
   padding: 2px 6px 3px;
   background: var(--ink);
   color: var(--paper);
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   white-space: nowrap;
   pointer-events: none;
@@ -602,7 +605,7 @@ select.lang:hover {
 }
 .scale output,
 .scale-input {
-  font-family: var(--mono);
+  font-family: var(--ui);
   font-size: 11.5px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -884,7 +887,8 @@ select.lang:hover {
   display: flex;
   justify-content: space-between;
   margin-top: 4px;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
 }
 .lp-read span {
@@ -944,7 +948,7 @@ select.lang:hover {
 .counter-ctl button {
   width: 20px;
   height: 20px;
-  font-family: var(--mono);
+  font-family: var(--ui);
   font-size: 13px;
   line-height: 1;
   color: var(--ink-2);
@@ -983,7 +987,7 @@ select.lang:hover {
 .counter-ctl b,
 .counter-ctl input {
   width: 26px;
-  font-family: var(--mono);
+  font-family: var(--ui);
   font-size: 12px;
   font-weight: 400;
   text-align: center;
@@ -1191,7 +1195,8 @@ select.lang:hover {
 }
 .area-group h3 small {
   margin-left: 4px;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-weight: 400;
   letter-spacing: 0;
   color: var(--ink-3);
@@ -1247,7 +1252,8 @@ select.lang:hover {
 }
 .cartouche-title small {
   flex: none;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--ink-3);
 }
@@ -1266,7 +1272,8 @@ select.lang:hover {
 }
 .cartouche dd {
   margin: 2px 0 0;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 12px;
   white-space: nowrap;
 }
@@ -1324,7 +1331,8 @@ select.lang:hover {
 }
 .occ-num {
   margin-left: auto;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--ink-2);
   white-space: nowrap;
@@ -1437,7 +1445,8 @@ select.lang:hover {
 }
 .human-stats dd {
   margin: 2px 0 0;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 13px;
 }
 /* 人文页的国家列表：点一下在纸图上定位 */
@@ -1465,7 +1474,8 @@ select.lang:hover {
 }
 .realm-list small {
   flex: none;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--ink-3);
 }
@@ -1799,7 +1809,7 @@ select.lang:hover {
 .tl-read {
   flex: none;
   min-width: 11em;
-  font-family: var(--mono);
+  font-family: var(--ui);
   font-size: 11px;
   color: var(--paper);
   text-align: right;
@@ -1929,7 +1939,8 @@ select.lang:hover {
   transform: translateY(-3px);
 }
 .probe-row b {
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 11.5px;
   font-weight: 400;
 }
@@ -2019,7 +2030,8 @@ select.lang:hover {
   top: 72px;
   z-index: 4;
   padding: 4px 8px;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--paper);
   background: rgba(26, 24, 21, 0.8);
@@ -2058,7 +2070,8 @@ select.lang:hover {
 .lg-ticks span {
   position: absolute;
   transform: translateX(-50%);
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   white-space: nowrap;
 }
@@ -2272,7 +2285,7 @@ select.lang:hover {
   gap: 4px;
 }
 .plate-no {
-  font-family: var(--mono);
+  font-family: var(--ui);
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -2375,7 +2388,8 @@ select.lang:hover {
   inset: 26px;
   z-index: 1;
   pointer-events: none;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   color: var(--hh-text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -2430,6 +2444,11 @@ select.lang:hover {
 }
 .holo-hud .hh-tiny em {
   font-style: normal;
+  font-family: var(--mono);
+}
+/* 假的编号 / hex 串保留等宽；真实读数（计时、经纬度、比例尺）随父级用正文 + tabular-nums */
+.holo-hud .hh-code {
+  font-family: var(--mono);
 }
 .holo-hud .hh-mini {
   border-collapse: collapse;
@@ -2842,7 +2861,8 @@ select.lang:hover {
 }
 .library-meta small {
   overflow: hidden;
-  font-family: var(--mono);
+  font-family: var(--ui);
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--ink-3);
   white-space: nowrap;
