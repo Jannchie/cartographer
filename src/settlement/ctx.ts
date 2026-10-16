@@ -309,6 +309,39 @@ export class Occupancy {
   }
 }
 
+/** 一条切街坊的街：折线、路面宽、外包框 */
+export interface StreetCut {
+  line: P[]
+  width: number
+  box: BBox
+}
+
+/** 切街坊的街（见 generate.ts 的 townStreets），按 CELL 米一格登记外包框：查一块街坊附近的街只看它压着的格子 */
+export class StreetCuts {
+  private static CELL = 120
+  private list: StreetCut[] = []
+  private grid = new Map<number, number[]>()
+  private cells(b: BBox, f: (k: number) => void) {
+    const c = StreetCuts.CELL
+    for (let j = Math.floor(b[1] / c); j <= Math.floor(b[3] / c); j++) for (let i = Math.floor(b[0] / c); i <= Math.floor(b[2] / c); i++) f(j * 100003 + i)
+  }
+  add(line: P[], width: number) {
+    const k = this.list.length
+    const cut = { line, width, box: bboxOf(line) }
+    this.list.push(cut)
+    this.cells(cut.box, (key) => (this.grid.get(key) ?? this.grid.set(key, []).get(key)!).push(k))
+  }
+  /** 外包框与 b 相交的街（按登记的先后） */
+  near(b: BBox): StreetCut[] {
+    const seen = new Set<number>()
+    this.cells(b, (key) => this.grid.get(key)?.forEach((k) => seen.add(k)))
+    return [...seen]
+      .sort((x, y) => x - y)
+      .map((k) => this.list[k])
+      .filter((c) => c.box[0] <= b[2] && c.box[2] >= b[0] && c.box[1] <= b[3] && c.box[3] >= b[1])
+  }
+}
+
 export interface Ctx {
   p: SettlementParams
   rng: RNG
@@ -341,6 +374,8 @@ export interface Ctx {
    * 片区的站点、方格吸附、街网归属都按它：副中心出现时那一带的片区早已按它划好，不会整片重划
    */
   layoutCores?: Core[]
+  /** 顺张量场修的街：划宅地时先沿它们把街坊切开（见 wards.ts 的 subdivide） */
+  streetCuts?: StreetCuts
   /** 各片城区的城墙（卫星城各有一道；不含城堡幕墙与瓮城） */
   cityWalls: Wall[]
   /** 都城布局时预留的宫城矩形（见 generate.ts 的 palaceZone） */

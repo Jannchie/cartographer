@@ -1,5 +1,6 @@
 import { FEATURE, FUNCTIONS, type FeatureId } from '../../settlement/features'
 import { PLAN_INFO } from '../../settlement/plans'
+import { MOTIF_INFO } from '../../settlement/tensor'
 import { CULTURES } from '../../settlement/culture'
 import { SETTLE_THEMES, type SettleStyleId } from '../../settlement/themes'
 import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
@@ -18,6 +19,7 @@ const ENUMS: Partial<Record<keyof SettlementParams, readonly unknown[]>> = {
   walls: ['auto', 'none', 'palisade', 'stone'],
   function: FUNCTIONS.map((f) => f.id),
   plan: PLAN_INFO.map((f) => f.id),
+  motif: MOTIF_INFO.map((f) => f.id),
 }
 const DEF = DEFAULT_SETTLEMENT as unknown as Record<string, unknown>
 

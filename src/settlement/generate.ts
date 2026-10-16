@@ -1,6 +1,7 @@
 import { RNG, hashString } from '../gen/rng'
+import { MinHeap } from '../gen/util'
 import { contours, simplify } from '../render/atlas/svg/contour'
-import { dryArea, emitArea, Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, mainCore, squareness, seedRng, wardRng, type Core, mark, type Ctx } from './ctx'
+import { dryArea, emitArea, Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, StreetCuts, mainCore, squareness, seedRng, wardRng, type Core, type CorridorTag, mark, type Ctx } from './ctx'
 import { FEATURE, FEATURES, featureEnv, resolveCounts, type FeatureId } from './features'
 import { placeLandmarks, zoneLots, type Lot } from './zoning'
 import { PATCH, POP_OF_SIZE, densityScore, densityTier, farmPerHa, wardRate, isVillage, fullPerHa, housesPerHa, planPopOf, scaleOf, townShare } from './scale'
@@ -39,9 +40,10 @@ import { checkpoint, demolish, drop, rollback } from './undo'
 import { sacredSites } from './sacred'
 import { PLANS } from './plans'
 import type { PlanLot, PlanZone } from './plans/types'
-import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, spacing, vegetation, wild, type Patch } from './outer'
+import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, sitePad, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
+import { buildField, fieldTraits, joinEnds, traceStreamlines, type CityField } from './tensor'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 import { calibrateTrades, perHome, residentsOf } from './people'
@@ -719,19 +721,86 @@ interface Growth {
   lanes: Map<number, number>
 }
 
+/**
+ * 片区的可达性：从已出现的核心出发，沿片区的邻接走（Dijkstra），每一步的代价是两站点的距离，
+ * 按坡度加重、过水（没有大路过桥）加重、沿大路减轻。返回"走过去的代价 ÷ 直线距离"（1 ~ 3），
+ * 生长的远近按它放大：同样远的地，翻一道坡、隔一条河的要晚些才并进城区。
+ * 只看片区站点与地形、最早的两条干道（任何规模都有），与现在的人口无关；按已出现的核心数分别算一次
+ */
+function patchDetour(ctx: Ctx, patches: Patch[], arterials: P[][]) {
+  const { T } = ctx
+  // 干道是寻路出来的，几米一点：抽稀后再量距离
+  const guides = arterials.slice(0, 2).map((r) => fromF32(simplify(toF32(r), 2)))
+  const n = patches.length
+  const edge = new Map<number, number>()
+  const stepCost = (i: number, j: number) => {
+    const key = i < j ? i * n + j : j * n + i
+    const hit = edge.get(key)
+    if (hit !== undefined) return hit
+    const a = patches[i].site
+    const b = patches[j].site
+    const d = dist(a, b)
+    let climb = 0
+    let wet = false
+    for (let k = 1; k < 6; k++) {
+      const q = lerpP(a, b, k / 6)
+      climb = Math.max(climb, T.slopeAt(q))
+      if (T.waterAt(q) < 0) wet = true
+    }
+    const mid = lerpP(a, b, 0.5)
+    const road = guides.some((r) => polylineDist(mid, r) < ctx.cfg.patch * 0.6)
+    const c = d * (1 + climb * 6) * (wet && !road ? 2.4 : 1) * (road ? 0.75 : 1)
+    edge.set(key, c)
+    return c
+  }
+  const memo = new Map<number, Float64Array>()
+  const run = (born: number) => {
+    const acc = new Float64Array(n).fill(Infinity)
+    const heap = new MinHeap(n)
+    ctx.cores.slice(0, born).forEach((_, i) => {
+      acc[i] = 0
+      heap.push(0, i)
+    })
+    while (heap.size) {
+      const i = heap.pop()
+      const c = heap.lastKey
+      if (c > acc[i]) continue
+      for (const j of patches[i].nb) {
+        const nc = c + stepCost(i, j)
+        if (nc < acc[j]) {
+          acc[j] = nc
+          heap.push(nc, j)
+        }
+      }
+    }
+    return acc
+  }
+  return (i: number, born: number) => {
+    let acc = memo.get(born)
+    if (!acc) memo.set(born, (acc = run(born)))
+    const q = patches[i].site
+    let straight = Infinity
+    for (let k = 0; k < born && k < ctx.cores.length; k++) straight = Math.min(straight, dist(q, ctx.cores[k].c))
+    if (!Number.isFinite(acc[i]) || straight < 1) return 1
+    return Math.min(3, Math.max(1, acc[i] / straight))
+  }
+}
+
 function growInner(ctx: Ctx, patches: Patch[], plannedPop: number, arterials: P[][]): Growth {
   const { T, cfg } = ctx
   const typical = cfg.patch * cfg.patch * 0.87
   const dist = layoutDist(ctx, arterials)
   // 已经出现的核心数：副中心出现之前，城区不朝它那边提前长（否则同一段早年的城区随现在有没有副中心而变）
   let born = 1
+  const detour = patchDetour(ctx, patches, arterials)
   const cost = (i: number) => {
     const q = patches[i].site
     // 规划区是建城时的底子：先于有机的外城加入，片区再大也不算"稀疏"
     if (patches[i].planned || patches[i].palace !== undefined) return dist(q, born) * 0.3 * (1 + T.slopeAt(q) * 5)
     // 过大的片区（稀疏处的 Voronoi 单元）不适合作城区
     const big = Math.max(1, area(patches[i].poly) / typical)
-    return dist(q, born) * (1 + T.slopeAt(q) * 5) * (0.85 + hashAt(ctx, q, 'grow.cost') * 0.3) * big
+    // 走过去要绕多远（爬坡、过河）：城区顺着平缓的谷地、沿着大路长，隔河、隔山的一侧晚些才有人住
+    return dist(q, born) * detour(i, born) * (1 + T.slopeAt(q) * 2) * (0.85 + hashAt(ctx, q, 'grow.cost') * 0.3) * big
   }
   // 主中心与各副中心是种子（它们是前 1 + k 个片区）
   const seeds = ctx.cores.map((_, i) => i)
@@ -1665,7 +1734,10 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   // 人口多了才开的干道不再改动片区剖分，直接穿过已有的街坊（像后来新修的路），老城的片区才不会整片重排
   // 规划区：形制给的固定站点切出方正的街坊，区里不再随机布点（落水的、与核心重合的站点丢掉）
   const planSites = plan ? plan.def.sites(ctx, plan.z).filter((q) => T.waterAt(q) > 3 && ctx.cores.every((c) => dist(c.c, q) > 1)) : []
-  const patches = buildPatches(ctx, [...arterials.slice(0, 2), ...streets], plan || pz ? reserved : undefined, [...planSites, ...(pz?.sites ?? [])])
+  const guides = [...arterials.slice(0, 2), ...streets]
+  const traits = fieldTraits(ctx)
+  const tensor: CityField = { field: buildField(ctx, guides, sitePad(ctx), traits), traits }
+  const patches = buildPatches(ctx, guides, tensor, plan || pz ? reserved : undefined, [...planSites, ...(pz?.sites ?? [])])
   if (plan) {
     for (let k = 0; k < planSites.length; k++) patches[ctx.cores.length + k].planned = true
     if (plan.z.contains(ctx.cores[0].c)) patches[0].planned = true
@@ -1738,6 +1810,8 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   }
   {
     const old = new Set(ctx.out.roads)
+    // 城里的街：沿张量场再描一遍街道尺度的流线（见 townStreets）
+    if (!small) townStreets(ctx, tensor, patches, reserved)
     villageLanes(ctx, patches, arterials, lanesFor)
     // 新修的巷子也并进路网（与干道重叠的段落去掉），只给新增的段登记走廊
     ctx.out.roads = tidyRoads(ctx.out.roads, T)
@@ -1782,6 +1856,79 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   if (ctx.plan?.def.avenueTrees !== false) avenueTrees(ctx)
   nameDistricts(ctx)
 }
+
+/**
+ * 城里的街：在住人的城区片区里，沿张量场描主、副两族街道尺度的等距流线（Chen 等 2008），
+ * 主族修成街、副族修成巷；线距按基准街距、片区的密度档与母题定（同心的环街密、脊街的肋巷密……）。
+ * 端头往前接到别的路上成丁字路口。修好的街登记成 streetCuts，划宅地时先沿它们把街坊切开，房子就沿街排
+ */
+function townStreets(ctx: Ctx, t: CityField, patches: Patch[], reserved: (q: P) => boolean) {
+  const { T, cfg } = ctx
+  // 点落在哪块片区：Voronoi 片区里离谁的站点最近就是谁
+  const G = cfg.patch
+  const grid = new Map<number, number[]>()
+  const gk = (x: number, y: number) => Math.floor(y / G) * 100003 + Math.floor(x / G)
+  patches.forEach((pa, i) => (grid.get(gk(pa.site[0], pa.site[1])) ?? grid.set(gk(pa.site[0], pa.site[1]), []).get(gk(pa.site[0], pa.site[1]))!).push(i))
+  // 按 8 米一格缓存（流线每走一步都要问一次）
+  const cache = new Map<number, number>()
+  const patchAt = (q: P) => {
+    const key = Math.floor(q[1] / 8) * 100003 + Math.floor(q[0] / 8)
+    let hit = cache.get(key)
+    if (hit === undefined) cache.set(key, (hit = nearestPatch(q)))
+    return hit
+  }
+  const nearestPatch = (q: P) => {
+    let best = -1
+    let bd = Infinity
+    for (let r = 2; r <= 3 && (best < 0 || r <= 2); r++)
+      for (let y = -r; y <= r; y++)
+        for (let x = -r; x <= r; x++)
+          for (const i of grid.get(gk(q[0] + x * G, q[1] + y * G)) ?? []) {
+            const d = dist(patches[i].site, q)
+            if (d < bd) {
+              bd = d
+              best = i
+            }
+          }
+    return best
+  }
+  const lived = (q: P) => {
+    const i = patchAt(q)
+    return i >= 0 && patches[i].inner && LIVED_TYPES.has(patches[i].type ?? 'wild') && patches[i].palace === undefined
+  }
+  // 住人的城区片区就在城里（不必再问 inside：它要逐块做点在多边形里的判断，太慢）
+  const open = (q: P) => q[0] > 0 && q[1] > 0 && q[0] < ctx.MW && q[1] < ctx.MH && T.waterAt(q) > 4 && T.slopeAt(q) < 0.4 && lived(q) && !reserved(q) && !ctx.corridors.hits(q, 0, WALL_TAG)
+  const DENS: Record<Density, number> = { high: 0.75, mid: 1, low: 1.35 }
+  const base = STREET_SEP
+  const sepAt = (q: P) => {
+    const i = patchAt(q)
+    return base * DENS[(i >= 0 && patches[i].density) || 'mid']
+  }
+  const fixed = ctx.out.roads.filter((r) => r.kind !== 'path').map((r) => r.line)
+  const bounds: [number, number, number, number] = [0, 0, ctx.MW, ctx.MH]
+  const majors = traceStreamlines(ctx, t.field, { sep: (q) => sepAt(q) * t.traits.streetMajor, open, fixed, bounds, family: 0 })
+  const minors = traceStreamlines(ctx, t.field, { sep: (q) => sepAt(q) * t.traits.streetMinor, open, fixed, bounds, family: 1 })
+  const lines = [...majors.map((l) => l.pts), ...minors.map((l) => l.pts)]
+  joinEnds(lines, fixed, base * 0.9, (q) => {
+    const i = patchAt(q)
+    return i >= 0 && patches[i].inner && T.waterAt(q) > 1
+  })
+  ctx.streetCuts ??= new StreetCuts()
+  lines.forEach((pts, k) => {
+    const line = resample(chaikin(fromF32(simplify(toF32(pts), 1.2)), 1), 4)
+    if (polylineLength(line) < base * 0.8) return
+    const major = k < majors.length
+    const road: Road = { line, width: major ? cfg.lane + 1 : cfg.lane, kind: major ? 'street' : 'lane' }
+    ctx.out.roads.push(road)
+    ctx.streetCuts!.add(line, road.width)
+  })
+}
+
+/** 只查城墙的走廊（流线每一步都问，不必每次新建数组） */
+const WALL_TAG: CorridorTag[] = ['wall']
+
+/** 城里街道的基准线距（米）：中档密度下街与街之间约一个进深两排房子加后院 */
+const STREET_SEP = 48
 
 /** 盖片区要用的整城信息（布局阶段定下的） */
 interface WardStage {

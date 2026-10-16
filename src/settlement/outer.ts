@@ -6,6 +6,7 @@ import { chaikin, centroid, dist, insetConvex, obb, pointAt, pointInPoly, polyli
 import type { Density, Field, WardType } from './types'
 import { addBuilding, scatterTrees, subdivide } from './wards'
 import { wetRuns } from './roads'
+import { cellSites, traceStreamlines, type CityField } from './tensor'
 import { isVillage } from './scale'
 import * as dmath from '../gen/dmath'
 
@@ -176,7 +177,11 @@ export function radialStreets(ctx: Ctx, core: Core, i: number): P[][] {
  */
 export const sitePad = (ctx: Ctx) => ctx.cfg.patch * 3
 
-function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extra: P[] = []): P[] {
+/** 流线的线距、沿线的站点间距（按片区间距的倍数）：街坊顺着街长、进深短 */
+const ROW_SEP = 0.8
+const ROW_ALONG = 1.2
+
+function makeSites(ctx: Ctx, arterials: P[][], tensor: CityField, exclude?: (q: P) => boolean, extra: P[] = []): P[] {
   const { T, MW, MH } = ctx
   const pad = sitePad(ctx)
   // 主中心是第 0 个片区，副中心依次是第 1…k 个
@@ -259,6 +264,20 @@ function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extr
       s += sp * 0.95
     }
   }
+  // 顺张量场的流线布点（见 tensor.ts）：两族流线围成的格子各一个站点，片区边界贴着流线，
+  // 街坊顺等高线、大路、水岸弯过去
+  {
+    const { field: F, traits } = tensor
+    const open = (q: P) => !exclude?.(q) && T.waterAt(q) > 3 && q[0] > -pad && q[1] > -pad && q[0] < MW + pad && q[1] < MH + pad
+    const bounds: [number, number, number, number] = [-pad, -pad, MW + pad, MH + pad]
+    const majors = traceStreamlines(ctx, F, { sep: (q) => spacing(ctx, q) * ROW_SEP, open, fixed: river ? [...arterials, river.line] : arterials, bounds, family: 0 })
+    const minors = traceStreamlines(ctx, F, { sep: (q) => spacing(ctx, q) * ROW_ALONG, open, fixed: [], bounds, family: 1 })
+    const cells = cellSites(ctx, majors, minors, { open, along: (sep) => (sep / ROW_SEP) * ROW_ALONG, merge: traits.merge })
+    for (const q of cells) {
+      const s = spacing(ctx, q)
+      if (T.waterAt(q) > 4 && ok(q, s * 0.75)) addSite(q)
+    }
+  }
   // 其余用变密度的随机投点填满；规整度 r 把投点往规整的格点上拉：
   // 方格点（Voronoi 单元是方块）与环 + 辐条点（单元是扇环）按放射度混合，r 为 1 时正好落在混合格点上
   const r = ctx.p.regularity
@@ -310,9 +329,9 @@ function makeSites(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extr
   return sites
 }
 
-export function buildPatches(ctx: Ctx, arterials: P[][], exclude?: (q: P) => boolean, extra: P[] = []): Patch[] {
+export function buildPatches(ctx: Ctx, arterials: P[][], tensor: CityField, exclude?: (q: P) => boolean, extra: P[] = []): Patch[] {
   const { MW, MH, T } = ctx
-  const sites = makeSites(ctx, arterials, exclude, extra)
+  const sites = makeSites(ctx, arterials, tensor, exclude, extra)
   const pad = sitePad(ctx)
   const bounds: [number, number, number, number] = [-pad, -pad, MW + pad, MH + pad]
   const { cells, nb } = voronoiCached(sites, bounds)

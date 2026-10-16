@@ -1,5 +1,6 @@
 import type { CityFunction, FeatureId } from './features'
 import type { P, Poly } from './geom'
+import type { Motif } from './tensor'
 
 /** 规模：决定地图范围、街区数、是否设防 */
 export type SettlementSize = 'hamlet' | 'village' | 'town' | 'city'
@@ -37,6 +38,8 @@ export interface SettlementParams {
   radial: number
   /** 副中心离主城多远 0 ~ 1：0 与主城连成一片，1 是隔着田野、有路相连的卫星城 */
   spread: number
+  /** 街网的母题（见 tensor.ts）：auto 按种子与地形抽 */
+  motif?: Motif | 'auto'
   /** 城市形制：有机生长，或里坊、营寨城、方格新城、麦地那、城下町这类规划（见 plans/） */
   plan?: PlanId
   /** 规划强度 0 ~ 1：规划区住得下的人口占比（0 纯有机，1 整城按规划铺开） */
@@ -104,6 +107,7 @@ export const DEFAULT_SETTLEMENT: SettlementParams = {
   regularity: LAYOUT_DEFAULT.regularity,
   radial: LAYOUT_DEFAULT.radial,
   spread: 0.15,
+  motif: 'auto',
   plan: 'organic',
   planStrength: 0.6,
   capital: false,

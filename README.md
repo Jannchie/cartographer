@@ -90,6 +90,10 @@ Four cultures, each with distinct town plans, building types and naming conventi
 - **Japanese**: castle town (keep, samurai and merchant quarters, temple row, masugata gates), or a Heian-kyō style jōbō grid (Greater Palace, sixteen chō per ward, Rajōmon).
 - **Islamic**: a great mosque and souq at the centre, courtyard houses along dead-end lanes, hammams and caravanserais, and a palace composed of courts along an axis.
 
+### Street network
+
+Block orientation follows a tensor field: contours, arterial roads, river banks and coastlines, rings around the centre and a slowly drifting base direction are blended with doubled-angle weights. Evenly spaced streamlines are traced along the major and minor directions. Streamlines at ward scale enclose the wards; inside the town a second set at street scale (about 50 m, denser in denser districts) becomes the streets and lanes, blocks are cut along them and houses line them, so streets bend with slopes, roads and water. Each town draws a dominant motif from its seed, culture and terrain, or the motif can be set in the panel: concentric (ring streets with radial cross streets), spine (fishbone lanes off a main street), riverside, terraced (along contours) or drifting. The urban area grows by accessibility: travel cost across adjacent wards includes slope and river crossings, so gentle valleys and land along main roads are settled first.
+
 ### Landmarks
 
 Palaces, temples, churches, castles, mosques and parks are composed from skeleton rules and element pools. The layout grammar of each tradition determines the plan (an axial sequence of courts, a temple compound arrangement, the nave and transept of a church, a pond-and-stroll garden, and so on), and the seed selects the components. Palaces of the same culture rarely coincide, and existing landmarks retain their form as the town expands.

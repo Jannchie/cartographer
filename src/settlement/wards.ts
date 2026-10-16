@@ -20,6 +20,7 @@ import { chord, clipConvex,
   rect,
   rot,
   segDist,
+  segIntersect,
   splitConvex,
   type P,
   type Poly,
@@ -100,13 +101,110 @@ function edgesOnLine(poly: Poly, o: P, n: P): Seg[] {
 }
 
 /**
+ * 沿街把街坊切开：每条街与街坊边界的交点两两成一段弦，沿弦切成两块，中间让出路面。
+ * 弦要整个横穿当前这一块才切（两端不在块的里面）：止于别的街的丁字街，要等那条街先切过才轮到它，所以多走几轮。
+ * 切口的边加进 fronts（临街边）
+ */
+function cutByStreets(ctx: Ctx, block: Poly, fronts: Seg[]): Poly[] {
+  const cuts = ctx.streetCuts
+  if (!cuts) return [block]
+  const chords: { p: P; q: P; w: number }[] = []
+  const [bx0, by0, bx1, by1] = bboxOf(block)
+  for (const c of cuts.near([bx0, by0, bx1, by1])) {
+    // 折线与街坊边界的交点（按沿线的距离排），端点落在街坊里的也算一个（丁字街的端头）
+    const hits: { s: number; q: P }[] = []
+    let acc = 0
+    const L = c.line
+    if (pointInPoly(L[0], block)) hits.push({ s: 0, q: L[0] })
+    for (let i = 0; i + 1 < L.length; i++) {
+      const a = L[i]
+      const b = L[i + 1]
+      const len = dist(a, b)
+      // 这一段的外包框碰不到街坊就不必逐边求交
+      if (Math.max(a[0], b[0]) < bx0 || Math.min(a[0], b[0]) > bx1 || Math.max(a[1], b[1]) < by0 || Math.min(a[1], b[1]) > by1) {
+        acc += len
+        continue
+      }
+      for (let k = 0; k < block.length; k++) {
+        const x = segIntersect(a, b, block[k], block[(k + 1) % block.length])
+        if (x && x.t >= 0 && x.t < 1 && x.u >= 0 && x.u <= 1) hits.push({ s: acc + x.t * len, q: [a[0] + (b[0] - a[0]) * x.t, a[1] + (b[1] - a[1]) * x.t] })
+      }
+      acc += len
+    }
+    if (pointInPoly(L[L.length - 1], block)) hits.push({ s: acc, q: L[L.length - 1] })
+    hits.sort((x, y) => x.s - y.s)
+    for (let i = 0; i + 1 < hits.length; i++) {
+      const { q: p } = hits[i]
+      const { q } = hits[i + 1]
+      if (dist(p, q) < 4) continue
+      const m: P = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]
+      if (pointInPoly(m, block)) chords.push({ p, q, w: c.width + 1 })
+    }
+  }
+  if (!chords.length) return [block]
+  // 点在块的里面（离边界超过 tol 米）
+  const deepIn = (q: P, poly: Poly, tol: number) => pointInPoly(q, poly) && poly.every((v, k) => segDist(q, v, poly[(k + 1) % poly.length]).d > tol)
+  let pieces: Poly[] = [block]
+  let left = chords
+  for (let pass = 0; pass < 4 && left.length; pass++) {
+    const next: typeof chords = []
+    for (const ch of left) {
+      const dx = ch.q[0] - ch.p[0]
+      const dy = ch.q[1] - ch.p[1]
+      const L = Math.sqrt(dx * dx + dy * dy)
+      const n: P = [-dy / L, dx / L]
+      const mid: P = [(ch.p[0] + ch.q[0]) / 2, (ch.p[1] + ch.q[1]) / 2]
+      let used = false
+      let blocked = false
+      const out: Poly[] = []
+      for (const piece of pieces) {
+        const side = piece.map((v) => (v[0] - ch.p[0]) * n[0] + (v[1] - ch.p[1]) * n[1])
+        if (Math.min(...side) > -0.5 || Math.max(...side) < 0.5) {
+          out.push(piece)
+          continue
+        }
+        // 弦的端头在这块里面：这条弦不横穿它（丁字街止于还没切出来的街），先不切
+        if (deepIn(ch.p, piece, ch.w) || deepIn(ch.q, piece, ch.w)) {
+          // 弦根本没碰到这块（块在弦的延长线上）就照旧留着
+          if (pointInPoly(mid, piece) || deepIn(ch.p, piece, 0) || deepIn(ch.q, piece, 0)) blocked = true
+          out.push(piece)
+          continue
+        }
+        // 弦与这块不相交（在延长线上）：不切
+        const along = piece.map((v) => ((v[0] - ch.p[0]) * dx + (v[1] - ch.p[1]) * dy) / L)
+        const t0 = Math.min(...along)
+        const t1 = Math.max(...along)
+        if (t1 < 0 || t0 > L || (!pointInPoly(mid, piece) && (t0 > 1 || t1 < L - 1))) {
+          out.push(piece)
+          continue
+        }
+        const [a, b] = splitConvex(piece, ch.p, [dx, dy], ch.w)
+        const h = ch.w / 2
+        fronts.push(...edgesOnLine(a, [ch.p[0] - n[0] * h, ch.p[1] - n[1] * h], n))
+        fronts.push(...edgesOnLine(b, [ch.p[0] + n[0] * h, ch.p[1] + n[1] * h], n))
+        for (const x of [a, b]) if (x.length >= 3 && area(x) > 4) out.push(x)
+        used = true
+      }
+      pieces = out
+      if (!used && blocked) next.push(ch)
+    }
+    if (next.length === left.length) break
+    left = next
+  }
+  return pieces
+}
+
+/**
  * 递归二分街区：每次沿最小外接矩形的长轴垂直切开，面积大时留出小巷。
  * 返回地块及其临街边；不临街的地块是院落内部。
+ * streets：先沿穿过街坊的街切开（见 generate.ts 的 townStreets），只有城里沿街排房的街坊要
  */
-export function subdivide(ctx: Ctx, block: Poly, o: Dens): Lot[] {
+export function subdivide(ctx: Ctx, block: Poly, o: Dens, streets = false): Lot[] {
   const rng = ctx.rng
   const fronts: Seg[] = block.map((p, i) => [p, block[(i + 1) % block.length]] as Seg)
   const lots: Poly[] = []
+  // 切口也是临街边，房子沿街排
+  const pieces = streets ? cutByStreets(ctx, block, fronts) : [block]
   const rec = (poly: Poly, depth: number) => {
     const a = area(poly)
     const target = o.maxA * (0.55 + rng.next() * 0.9)
@@ -130,7 +228,7 @@ export function subdivide(ctx: Ctx, block: Poly, o: Dens): Lot[] {
     }
     for (const q of [p1, p2]) if (q.length >= 3 && area(q) > o.minA * 0.4) rec(q, depth + 1)
   }
-  rec(block, 0)
+  for (const piece of pieces) if (piece.length >= 3 && area(piece) > o.minA * 0.4) rec(piece, 0)
   return lots.map((poly) => {
     const front: number[] = []
     for (let i = 0; i < poly.length; i++) {
@@ -409,7 +507,7 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
   const tier = `${densKey}_${ctx.wardDensity}`
   const o = TIERED.has(densKey) && DENS[tier] ? DENS[tier] : DENS[densKey]
   const wardRng = ctx.rng
-  const lots = subdivide(ctx, block, o)
+  const lots = subdivide(ctx, block, o, true)
   for (const lot of lots) {
     if (reserve.length && overlaps(lot.poly, reserve)) continue
     const c = centroid(lot.poly)
@@ -787,7 +885,7 @@ export function castle(ctx: Ctx, ward: Ward, block: Poly) {
 
 export function noble(ctx: Ctx, ward: Ward, block: Poly) {
   const rng = ctx.rng
-  const lots = subdivide(ctx, block, { maxA: ctx.p.size === 'city' ? 1500 : 1000, minA: 350, alley: 0, alleyP: 0, depth: 20, fill: 1, irr: 0.5 })
+  const lots = subdivide(ctx, block, { maxA: ctx.p.size === 'city' ? 1500 : 1000, minA: 350, alley: 0, alleyP: 0, depth: 20, fill: 1, irr: 0.5 }, true)
   for (const lot of lots) {
     const encl = placeable(ctx, insetConvex(lot.poly, 0.8), 3)
     if (!encl || encl.length < 3) continue
@@ -973,7 +1071,7 @@ export function eastWard(ctx: Ctx, block: Poly, rich: boolean, nearRoad = Infini
   const minA = d === 'high' ? 90 : 160
   const alleyP = d === 'high' ? 0.6 : 0.35
   for (const q of quads) {
-    const lots = subdivide(ctx, q, { maxA, minA, alley: 2.2, alleyP, depth: 30, fill: 1, irr: 0.25 })
+    const lots = subdivide(ctx, q, { maxA, minA, alley: 2.2, alleyP, depth: 30, fill: 1, irr: 0.25 }, true)
     for (const lot of lots) {
       if (nearRoad < Infinity && ctx.corridors.gap(centroid(lot.poly)) > nearRoad) {
         if (ctx.rng.next() < 0.15) scatterTrees(ctx, insetConvex(lot.poly, 2), 0.004, 2.5, 4)

@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import { SETTLE_THEMES } from '../../settlement/themes'
 import { FEATURES, FUNCTIONS, GROUPS, featureEnv, featureName as nameOf, resolveCounts, type FeatureDef } from '../../settlement/features'
 import { PLAN_INFO, planLabel } from '../../settlement/plans'
+import { MOTIF_INFO } from '../../settlement/tensor'
 import { CULTURE_INFO, CULTURES, planFits } from '../../settlement/culture'
 import { POP_MAX, POP_MIN, sizeLabel } from '../../settlement/scale'
 import { LAND_USES } from '../../settlement/landuse'
@@ -37,6 +38,7 @@ const planOpts = computed(() =>
     return { value: f.id, label: l.name, desc: l.desc }
   }),
 )
+const MOTIF_OPTS = MOTIF_INFO.map((m) => ({ value: m.id, label: m.name, desc: m.desc }))
 const MAGIC: { value: SettlementParams['magic']; label: string; title?: string }[] = [
   { value: 0, label: '写实' },
   { value: 1, label: '奇幻', title: '法师塔与魔法阵 / 宗门与仙阁' },
@@ -169,6 +171,9 @@ const zoningLegend = computed(() =>
       <Field label="文明"><Seg :options="CULTURE_OPTS" :model-value="p.culture" @update:model-value="(v) => S.setCulture(v)" /></Field>
       <Field label="布局" title="有机生长、方格、放射三种街道格局的混合比例（与文明无关）">
         <LayoutPicker :regularity="p.regularity" :radial="p.radial" :reset="{ regularity: gen.regularity, radial: gen.radial }" @update="S.setLayout" />
+      </Field>
+      <Field label="街网" title="街坊走向由哪种来源主导：绕城心、顺大街、顺水岸、顺等高线，或缓缓漂移">
+        <Dropdown :options="MOTIF_OPTS" :model-value="p.motif ?? 'auto'" @update:model-value="(v) => S.setParam('motif', v)" />
       </Field>
       <Field label="形制" title="城市的规划形制：规划的核心按形制铺开，外面照旧有机生长">
         <Dropdown :options="planOpts" :model-value="p.plan ?? 'organic'" @update:model-value="(v) => S.setParam('plan', v)" />
