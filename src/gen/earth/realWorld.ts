@@ -15,8 +15,9 @@ import { RNG, hashString } from '../rng'
 import * as dmath from '../dmath'
 import { COVER, earthFeatures, earthFeaturesLoaded, earthGrid, type EarthPlaceKind, type EarthRes } from './real'
 import { fillRings, type LonLatGrid } from './raster'
-import { regionProjection, REGION_INFO, type MapProjection } from './region'
-import { chinaAdminLayer, chinaGrid, sampleChina } from './china'
+import { regionProjection, REGION_INFO, type MapProjection, type RegionId } from './region'
+import { chinaAdminLayer } from './china'
+import { regionGrid, sampleRegionGrid } from './regionGrid'
 
 type Progress = (stage: string, frac: number) => void
 
@@ -53,7 +54,7 @@ export function realEarthWorld(p: WorldParams, progress: Progress = () => {}, ed
   const votes = new Uint16Array(16)
   const colOf = (lon: number) => ((lon + 180) * g.W) / 360 - 0.5
   const rowOf = (lat: number) => ((90 - lat) * g.H) / 180 - 0.5
-  if (proj) sampleRegion(proj, W, H, { e0, tReal, pReal, landF, lakeF, playaF, glacF, code })
+  if (proj) sampleRegion(p.region!, proj, W, H, { e0, tReal, pReal, landF, lakeF, playaF, glacF, code })
   else for (let y = 0; y < H; y++) {
     const lat = latitudeOf(p, y, H)
     const r0 = Math.max(0, Math.ceil(rowOf(lat + dLat / 2)))
@@ -657,12 +658,13 @@ export function earthAreas(world: World): Area[] {
  * 气温、降水与群系取全球 5′ 栅格（双线性 / 最近格）
  */
 function sampleRegion(
+  region: RegionId,
   proj: MapProjection,
   W: number,
   H: number,
   o: { e0: Float32Array; tReal: Float32Array; pReal: Float32Array; landF: Float32Array; lakeF: Float32Array; playaF: Float32Array; glacF: Float32Array; code: Uint8Array },
 ) {
-  const cg = chinaGrid()
+  const cg = regionGrid(region)
   const g = earthGrid('5m')
   const bil = (a: Float32Array, fx: number, fy: number) => {
     const x0 = Math.floor(fx)
@@ -685,7 +687,7 @@ function sampleRegion(
       const fx = ((lon + 180) * g.W) / 360 - 0.5
       const fy = ((90 - lat) * g.H) / 180 - 0.5
       const j = Math.max(0, Math.min(g.H - 1, Math.round(fy))) * g.W + ((Math.round(fx) + g.W) % g.W)
-      const s = sampleChina(cg, lon, lat)
+      const s = sampleRegionGrid(cg, lon, lat)
       const cv = s ? s.cover : g.cover[j]
       o.e0[i] = s ? s.elev : g.elev[j]
       o.tReal[i] = bil(g.temp, fx, fy)

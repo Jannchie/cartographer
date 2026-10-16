@@ -7,8 +7,10 @@ import * as dmath from '../dmath'
  *
  * 中国：兰勃特等角圆锥投影（双标准纬线 25°N、47°N，中央经线 105°E），中国地图的常用投影；
  * 范围从帕米尔到乌苏里江、从漠河到曾母暗沙，南海诸岛不另作附图。
+ * 朝鲜半岛：兰勃特等角圆锥投影（双标准纬线 33°N、43°N，中央经线 127.5°E），
+ * 范围包括整个半岛、辽东半岛、鸭绿江与图们江流域及日本海西岸（约 120°–135°E、32.6°–43.4°N）。
  */
-export type RegionId = 'china'
+export type RegionId = 'china' | 'korea'
 
 export interface MapProjection {
   /** 经纬度 → 地图格坐标 */
@@ -40,9 +42,10 @@ interface RegionDef {
 const R_KM = 6371.0088
 const RAD = Math.PI / 180
 
-/** 投影平面范围由 scripts/china-real.ts 按国界与断续线的外包框再留边定出 */
+/** 中国的投影平面范围由 scripts/china-real.ts 按国界与断续线的外包框再留边定出 */
 const REGIONS: Record<RegionId, RegionDef> = {
   china: { lon0: 105, lat1: 25, lat2: 47, latO: 30, x0: -2900, x1: 2450, y0: -3350, y1: 3000 },
+  korea: { lon0: 127.5, lat1: 33, lat2: 43, latO: 38, x0: -640, x1: 640, y0: -600, y1: 600 },
 }
 
 /** 兰勃特等角圆锥投影（球面），结果单位为公里 */
@@ -129,4 +132,5 @@ export function regionProjection(p: Pick<WorldParams, 'width' | 'height' | 'regi
 /** 区域图的名称与说明（界面、图名用） */
 export const REGION_INFO: Record<RegionId, { en: string; zh: string; ja: string }> = {
   china: { en: 'China', zh: '中国', ja: '中国' },
+  korea: { en: 'Korean Peninsula', zh: '朝鲜半岛', ja: '朝鮮半島' },
 }

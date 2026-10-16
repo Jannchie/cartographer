@@ -1,24 +1,11 @@
 /**
- * "中国"区域模板的数据（由 scripts/china-real.ts 生成，放在 public/china/）：
- * - grid.bin：等经纬度 1′ 的高程与海陆湖覆盖（ETOPO 2022、Natural Earth）
- * - admin.bin：省级与地级行政区、界线与海上断续线（DataV.GeoAtlas，已转为 WGS-84）
- * 气温、降水与生物群系仍取全球 5′ 栅格（real.ts）。
+ * "中国"区域模板的行政区划（由 scripts/china-real.ts 生成，放在 public/china/admin.bin）：
+ * 省级与地级行政区、界线与海上断续线（DataV.GeoAtlas，已转为 WGS-84）。地形栅格见 regionGrid.ts
  */
 import type { AdminBorder, AdminLayer, Label, Peak, Realm } from '../types'
 import { fillRings, simplifyLine, type LonLatGrid } from './raster'
 import { readPublicGz } from './real'
 import type { MapProjection } from './region'
-
-export interface ChinaGrid {
-  W: number
-  H: number
-  /** 西缘经度、北缘纬度（格的外缘），格距 1′ */
-  lonW: number
-  latN: number
-  /** 高程（公里） */
-  elev: Float32Array
-  cover: Uint8Array
-}
 
 interface AdminUnit {
   code: number
@@ -39,29 +26,7 @@ export interface ChinaAdmin {
   peaks: { n: string; zh: string; ja: string; lon: number; lat: number; e: number }[]
 }
 
-let grid: ChinaGrid | null = null
 let admin: ChinaAdmin | null = null
-
-export async function loadChinaGrid(): Promise<ChinaGrid> {
-  if (grid) return grid
-  const buf = await readPublicGz('china/grid.bin')
-  const head = new DataView(buf, 0, 28)
-  if (String.fromCharCode(head.getUint8(0), head.getUint8(1), head.getUint8(2), head.getUint8(3)) !== 'CHN1') throw new Error('中国区域数据格式不对')
-  const W = head.getUint32(4, true)
-  const H = head.getUint32(8, true)
-  const N = W * H
-  const de = new Int16Array(buf, 28, N)
-  const elev = new Float32Array(N)
-  for (let y = 0; y < H; y++) {
-    let v = 0
-    for (let x = 0; x < W; x++) {
-      v += de[y * W + x]
-      elev[y * W + x] = v / 1000
-    }
-  }
-  grid = { W, H, lonW: head.getFloat64(12, true), latN: head.getFloat64(20, true), elev, cover: new Uint8Array(buf, 28 + 2 * N, N) }
-  return grid
-}
 
 /** 坐标在文件里是经纬度 ×10⁵ 的整数 */
 export async function loadChinaAdmin(): Promise<ChinaAdmin> {
@@ -70,29 +35,9 @@ export async function loadChinaAdmin(): Promise<ChinaAdmin> {
   return admin
 }
 
-export const chinaGrid = () => {
-  if (!grid) throw new Error('中国区域数据还没加载（先 await loadChinaGrid()）')
-  return grid
-}
 export const chinaAdmin = () => {
   if (!admin) throw new Error('中国行政区划还没加载（先 await loadChinaAdmin()）')
   return admin
-}
-
-/** 1′ 栅格在 (lon, lat) 处的高程（双线性）与覆盖（最近格） */
-export function sampleChina(g: ChinaGrid, lon: number, lat: number): { elev: number; cover: number } | null {
-  const fx = (lon - g.lonW) * 60 - 0.5
-  const fy = (g.latN - lat) * 60 - 0.5
-  if (fx < 0 || fy < 0 || fx >= g.W - 1 || fy >= g.H - 1) return null
-  const x0 = Math.floor(fx)
-  const y0 = Math.floor(fy)
-  const tx = fx - x0
-  const ty = fy - y0
-  const i = y0 * g.W + x0
-  const e = g.elev
-  const a = e[i] + (e[i + 1] - e[i]) * tx
-  const b = e[i + g.W] + (e[i + g.W + 1] - e[i + g.W]) * tx
-  return { elev: a + (b - a) * ty, cover: g.cover[Math.round(fy) * g.W + Math.round(fx)] }
 }
 
 /** 地图格坐标系下的"网格"：fillRings 按格心填充投影后的环 */

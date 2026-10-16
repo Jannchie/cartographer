@@ -1,5 +1,5 @@
 /**
- * 生成"中国"区域模板的数据：public/china/grid.bin（地形与覆盖栅格）与 public/china/admin.bin（行政区划）。
+ * 生成"中国"区域模板的数据：public/china/grid.bin（地形与覆盖栅格，见 region-grid.ts）与 public/china/admin.bin（行政区划）。
  *
  * 原始数据（放在同一个目录 <src> 下）：
  *   etopo/ETOPO_2022_v1_60s_N90W180_surface.tif   NOAA ETOPO 2022，60″ 地表高程
@@ -12,26 +12,23 @@
  *
  *   pnpm tsx scripts/china-real.ts <src>
  *
- * 栅格：等经纬度 1′，覆盖地图范围（兰勃特投影的图框反算到经纬度再留边）。各层：
- *   高程 int16（米，逐行差分）· 覆盖 uint8（位：1 陆地 2 湖泊 4 盐沼 8 冰川）
- *   文件头：魔数 "CHN1"、W、H（uint32）、西缘经度、北缘纬度（float64，格的外缘），格距 1/60°；整个文件 gzip。
- *
  * 行政区划：DataV 的坐标是 GCJ-02，这里转回 WGS-84。省界、地级界与陆地国界取自同一套地级多边形的拓扑：
  *   两个地级单位共用的边——分属两省为省界，同省为地级界；只属于一个单位的边，外侧是陆地为国界、是海为海岸（不画）。
  *   直辖市、特别行政区与台湾省在地级上按一个整体处理（不画区界）。界线与断续线的立场与 DataV 一致（即国内标准地图的立场）。
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
-import { fromFile } from 'geotiff'
 import * as OpenCC from 'opencc-js'
 import { pinyin } from 'pinyin-pro'
-import { fillRings, type LonLatGrid } from '../src/gen/earth/raster'
+import { fillRings } from '../src/gen/earth/raster'
 import { regionPlane } from '../src/gen/earth/region'
-import { geojson as readGeojson, ringsOf, timedLog } from './natural-earth'
+import { geojson as readGeojson, timedLog } from './natural-earth'
+import { buildRegionGrid } from './region-grid'
 
 const SRC = process.argv[2]
 if (!SRC) throw new Error('用法：tsx scripts/china-real.ts <原始数据目录>')
 const OUT = 'public/china'
+const geojson = (name: string) => readGeojson(SRC, name)
 const log = timedLog()
 
 // —— GCJ-02 → WGS-84（迭代求逆，误差远小于 1 米） ——
@@ -148,91 +145,10 @@ const plane = regionPlane('china')
   if (want.x0 !== d.x0 || want.x1 !== d.x1 || want.y0 !== d.y0 || want.y1 !== d.y1) console.warn(`⚠ src/gen/earth/region.ts 的范围应改为 ${JSON.stringify(want)}（现为 ${JSON.stringify({ x0: d.x0, x1: d.x1, y0: d.y0, y1: d.y1 })}）`)
 }
 
-// —— 栅格窗口：图框边上逐点反算经纬度，取外包再留 0.3° ——
+// —— 地形栅格（与其他区域共用 scripts/region-grid.ts）；覆盖栅格也用来判断界线外侧是不是陆地 ——
+const { W: GW, H: GH, lonW, lonE, latS, latN, grid, cover } = await buildRegionGrid('china', SRC, log)
 const D = 1 / 60
-let lonW = Infinity, lonE = -Infinity, latS = Infinity, latN = -Infinity
-{
-  const d = plane.def
-  const STEPS = 400
-  for (let s = 0; s <= STEPS; s++) {
-    const t = s / STEPS
-    for (const [x, y] of [
-      [d.x0 + (d.x1 - d.x0) * t, d.y0],
-      [d.x0 + (d.x1 - d.x0) * t, d.y1],
-      [d.x0, d.y0 + (d.y1 - d.y0) * t],
-      [d.x1, d.y0 + (d.y1 - d.y0) * t],
-    ]) {
-      const [lon, lat] = plane.inverse(x, y)
-      lonW = Math.min(lonW, lon)
-      lonE = Math.max(lonE, lon)
-      latS = Math.min(latS, lat)
-      latN = Math.max(latN, lat)
-    }
-  }
-}
-// 对齐到 ETOPO 60″ 的格（外缘在整分上）
-lonW = Math.floor((lonW - 0.3) / D) * D
-lonE = Math.ceil((lonE + 0.3) / D) * D
-latS = Math.floor((latS - 0.3) / D) * D
-latN = Math.ceil((latN + 0.3) / D) * D
-const GW = Math.round((lonE - lonW) / D)
-const GH = Math.round((latN - latS) / D)
 const GN = GW * GH
-const grid: LonLatGrid = { W: GW, H: GH, lon0: lonW, lat0: latN, dLon: D, dLat: D }
-log(`栅格 ${GW} × ${GH}：经度 ${lonW.toFixed(2)} ~ ${lonE.toFixed(2)}，纬度 ${latS.toFixed(2)} ~ ${latN.toFixed(2)}`)
-
-// —— 高程 ——
-async function loadElevation() {
-  const tif = await fromFile(`${SRC}/etopo/ETOPO_2022_v1_60s_N90W180_surface.tif`)
-  const im = await tif.getImage()
-  if (im.getWidth() !== 21600 || im.getHeight() !== 10800) throw new Error('ETOPO 尺寸不对')
-  const c0 = Math.round((lonW + 180) / D)
-  const r0 = Math.round((90 - latN) / D)
-  const out = new Float32Array(GN)
-  // 跨过 180° 经线的部分从左边绕回来
-  const parts: [number, number, number][] = []
-  if (c0 + GW <= 21600) parts.push([c0, c0 + GW, 0])
-  else parts.push([c0, 21600, 0], [0, c0 + GW - 21600, 21600 - c0])
-  for (const [a, b, off] of parts) {
-    const r = (await im.readRasters({ window: [a, r0, b, r0 + GH] }))[0] as Float32Array
-    const w = b - a
-    for (let y = 0; y < GH; y++) for (let x = 0; x < w; x++) out[y * GW + off + x] = r[y * w + x]
-  }
-  return out
-}
-
-// —— 覆盖 ——
-const geojson = (name: string) => readGeojson(SRC, name)
-function rasterizeCover() {
-  const cover = new Uint8Array(GN)
-  const paint = (names: string[], bit: number) => {
-    for (const n of names) for (const f of geojson(n)) fillRings(ringsOf(f), grid, (i) => (cover[i] |= bit))
-  }
-  paint(['ne_10m_land', 'ne_10m_minor_islands'], 1)
-  paint(['ne_10m_lakes'], 2)
-  paint(['ne_10m_playas'], 4)
-  paint(['ne_10m_glaciated_areas'], 8)
-  return cover
-}
-
-function encodeGrid(elev: Float32Array, cover: Uint8Array) {
-  const e = new Int16Array(GN)
-  for (let y = 0; y < GH; y++) {
-    let prev = 0
-    for (let x = 0; x < GW; x++) {
-      const v = Math.max(-32768, Math.min(32767, Math.round(elev[y * GW + x])))
-      e[y * GW + x] = v - prev
-      prev = v
-    }
-  }
-  const head = Buffer.alloc(28)
-  head.write('CHN1', 0, 'latin1')
-  head.writeUInt32LE(GW, 4)
-  head.writeUInt32LE(GH, 8)
-  head.writeDoubleLE(lonW, 12)
-  head.writeDoubleLE(latN, 20)
-  return gzipSync(Buffer.concat([head, Buffer.from(e.buffer), Buffer.from(cover)]), { level: 9 })
-}
 
 // —— 行政区划的拓扑：边 → 所属的地级单位 ——
 const unitList = [...units.values()]
@@ -378,10 +294,6 @@ function peaks() {
 const toHans = OpenCC.Converter({ from: 'tw', to: 'cn' })
 
 // —— 主流程 ——
-const [elev] = await Promise.all([loadElevation()])
-log('高程读完')
-const cover = rasterizeCover()
-log('覆盖栅格化完')
 const unitId = rasterizeUnits()
 const lines = borderLines(cover, unitId)
 const count = (k: LineKind) => lines.filter((l) => l.k === k).length
@@ -415,8 +327,6 @@ const admin = {
 }
 
 mkdirSync(OUT, { recursive: true })
-const gbin = encodeGrid(elev, cover)
-writeFileSync(`${OUT}/grid.bin`, gbin)
 const abin = gzipSync(Buffer.from(JSON.stringify(admin)), { level: 9 })
 writeFileSync(`${OUT}/admin.bin`, abin)
-log(`grid.bin ${(gbin.length / 1048576).toFixed(1)} MB，admin.bin ${(abin.length / 1048576).toFixed(1)} MB`)
+log(`admin.bin ${(abin.length / 1048576).toFixed(1)} MB`)
