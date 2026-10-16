@@ -32,6 +32,12 @@ import * as dmath from '../../gen/dmath'
  * - 住宅街坊里偶有浴场、经学院，商人街坊与城郊沿路有商队客栈。
  */
 export const islamic: CultureStyle = {
+  // 老城穿城的街少，街坊（hara）大，里面靠密密的尽端巷进出
+  streets(t) {
+    t.streetMajor *= 2.3
+    t.streetMinor *= 0.5
+    t.blind = 0.9
+  },
   buildWard(ctx, ward, block) {
     const small = isVillage(ctx.p.size)
     switch (ward.type) {

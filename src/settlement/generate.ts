@@ -43,7 +43,7 @@ import type { PlanLot, PlanZone } from './plans/types'
 import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, sitePad, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
-import { buildField, fieldTraits, joinEnds, traceStreamlines, type CityField } from './tensor'
+import { blindAlleys, buildField, fieldTraits, joinEnds, traceStreamlines, type CityField } from './tensor'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 import { calibrateTrades, perHome, residentsOf } from './people'
@@ -172,6 +172,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     wardFill: 1,
     wardQuota: Infinity,
     wardTown: true,
+    wardSealed: false,
     wardDensity: 'mid',
     wardType: 'common',
     tier: 'standard',
@@ -1848,6 +1849,7 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   ctx.rng = baseRng
   ctx.wardPop = undefined
   ctx.wardTown = true
+  ctx.wardSealed = false
   ctx.wardQuota = Infinity
   ctx.wardFill = 1
   ctx.wardDensity = 'mid'
@@ -1894,7 +1896,7 @@ function townStreets(ctx: Ctx, t: CityField, patches: Patch[], reserved: (q: P) 
   }
   const lived = (q: P) => {
     const i = patchAt(q)
-    return i >= 0 && patches[i].inner && LIVED_TYPES.has(patches[i].type ?? 'wild') && patches[i].palace === undefined
+    return i >= 0 && livedInner(patches[i])
   }
   // 住人的城区片区就在城里（不必再问 inside：它要逐块做点在多边形里的判断，太慢）
   const open = (q: P) => q[0] > 0 && q[1] > 0 && q[0] < ctx.MW && q[1] < ctx.MH && T.waterAt(q) > 4 && T.slopeAt(q) < 0.4 && lived(q) && !reserved(q) && !ctx.corridors.hits(q, 0, WALL_TAG)
@@ -1908,20 +1910,33 @@ function townStreets(ctx: Ctx, t: CityField, patches: Patch[], reserved: (q: P) 
   const bounds: [number, number, number, number] = [0, 0, ctx.MW, ctx.MH]
   const majors = traceStreamlines(ctx, t.field, { sep: (q) => sepAt(q) * t.traits.streetMajor, open, fixed, bounds, family: 0 })
   const minors = traceStreamlines(ctx, t.field, { sep: (q) => sepAt(q) * t.traits.streetMinor, open, fixed, bounds, family: 1 })
-  const lines = [...majors.map((l) => l.pts), ...minors.map((l) => l.pts)]
+  // 副族里按 traits.blind 的比例成尽端巷，其余与主族一起是通的街巷
+  const blind: P[][] = []
+  const through: P[][] = []
+  for (const { pts } of minors) (hashAt(ctx, pts[pts.length >> 1], 'tensor.blind') < t.traits.blind ? blind : through).push(pts)
+  const lines = [...majors.map((l) => l.pts), ...through]
   joinEnds(lines, fixed, base * 0.9, (q) => {
     const i = patchAt(q)
     return i >= 0 && patches[i].inner && T.waterAt(q) > 1
   })
+  const smooth = (pts: P[]) => resample(chaikin(fromF32(simplify(toF32(pts), 1.2)), 1), 4)
   ctx.streetCuts ??= new StreetCuts()
+  const built: P[][] = []
   lines.forEach((pts, k) => {
-    const line = resample(chaikin(fromF32(simplify(toF32(pts), 1.2)), 1), 4)
+    const line = smooth(pts)
     if (polylineLength(line) < base * 0.8) return
+    built.push(line)
     const major = k < majors.length
     const road: Road = { line, width: major ? cfg.lane + 1 : cfg.lane, kind: major ? 'street' : 'lane' }
     ctx.out.roads.push(road)
     ctx.streetCuts!.add(line, road.width)
   })
+  // 尽端巷窄，也不切街坊（巷子止在街坊里面；房子按走廊让开它）
+  if (blind.length)
+    for (const pts of blindAlleys(ctx, blind, [...built, ...fixed], base * 0.8, open)) {
+      const line = pts.length > 3 ? smooth(pts) : pts
+      if (line.every(lived)) ctx.out.roads.push({ line, width: Math.max(1.8, cfg.lane * 0.6), kind: 'lane' })
+    }
 }
 
 /** 只查城墙的走廊（流线每一步都问，不必每次新建数组） */
@@ -1945,6 +1960,23 @@ interface WardStage {
   small: boolean
 }
 
+/** 城里修了街的住人街坊（见 townStreets）：街巷就是那些街，片区之间不再留出路面 */
+function sealedWard(S: WardStage, pa: Patch) {
+  return !S.small && !pa.planned && livedInner(pa)
+}
+
+/** 边 v→w 上有路顺着走：三个取样点至少两个挨着走廊（横穿过去的街只碰到一个） */
+function alongRoad(ctx: Ctx, v: P, w: P) {
+  let n = 0
+  for (const t of [0.2, 0.5, 0.8]) if (ctx.corridors.hits(lerpP(v, w, t), 1.5) && ++n === 2) return true
+  return false
+}
+
+/** 城里住人的片区（宫城除外）：townStreets 在这些片区里修街 */
+function livedInner(pa: Patch) {
+  return pa.inner && pa.palace === undefined && LIVED_TYPES.has(pa.type ?? 'wild')
+}
+
 /** 片区去掉四周街巷、田埂以后的可盖范围（按 ctx.wardTown：街坊四周都是街巷） */
 function wardBlock(ctx: Ctx, S: WardStage, i: number): Poly | null {
   const pa = S.patches[i]
@@ -1954,13 +1986,14 @@ function wardBlock(ctx: Ctx, S: WardStage, i: number): Poly | null {
   const lane = pa.inner ? (laneW || ctx.cfg.lane) / 2 + rng.next() * 0.8 : 2
   // 街坊四周都是街巷；零散农家、城外的田地与城郊，片区边界大多不是路：只有真修了路的边才让出路面，
   // 其余只留一道细缝（田埂、篱笆）。并成一片的农田之间也只是一道田埂
+  // 城里沿张量场修了街的街坊（见 sealedWard）：片区边上没有路顺着走的只是相邻两户的院墙，留一道细缝
   const group = S.fields.get(i)
   const insets = pa.poly.map((v, k) => {
     const d = lane * (0.8 + rng.next() * 0.4)
     const w = pa.poly[(k + 1) % pa.poly.length]
     const mid: P = [(v[0] + w[0]) / 2, (v[1] + w[1]) / 2]
     const mate = group?.seams.some(([a, b]) => segDist(mid, a, b).d < 0.5)
-    if (ctx.wardTown && !mate) return d
+    if (ctx.wardTown && !mate) return ctx.wardSealed && !alongRoad(ctx, v, w) ? 0.5 : d
     return ctx.corridors.hits(mid, 0.5) ? d : mate ? 0 : 0.6
   })
   const block = insetConvex(pa.poly, insets)
@@ -2341,6 +2374,7 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
     const pieces: Piece[] = [piece('wards', ward)]
     const late = ctx.corridors
     if (!sp.inner && (sp.type === 'farm' || sp.type === 'wild')) ctx.corridors = early
+    ctx.wardSealed = sp.town && sealedWard(S, pa)
     const block = wardBlock(ctx, S, i)
     if (block) {
       const cp = checkpoint(ctx)

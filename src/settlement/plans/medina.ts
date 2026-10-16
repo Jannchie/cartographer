@@ -24,7 +24,7 @@ import {
 } from '../geom'
 import type { Tri } from '../../gen/naming'
 import type { BuildingKind, Ward } from '../types'
-import { addBuilding, addGroup, fit, inside, place, scatterTrees, subdivide } from '../wards'
+import { addBuilding, addGroup, cutByStreets, fit, inside, place, scatterTrees, subdivide } from '../wards'
 import { drop } from '../undo'
 import type { CityPlan } from './types'
 import { composer } from '../compose/core'
@@ -405,8 +405,10 @@ export interface Fabric {
  */
 export function fabric(ctx: Ctx, block: Poly, o: Fabric, reserve: Poly[] = []) {
   const r0 = ctx.out.roads.length
-  derbs(ctx, block, o.derb)
-  const lots = subdivide(ctx, block, { maxA: o.maxA, minA: o.minA, alley: 0, alleyP: 0, depth: 10, fill: 1, irr: 0.9 })
+  // 城里修了街的街坊先沿街切开，尽端巷也从穿过街坊的街上伸进去
+  const pieces = ctx.wardSealed ? cutByStreets(ctx, block) : [block]
+  for (const q of pieces) derbs(ctx, q, o.derb)
+  const lots = pieces.flatMap((q) => subdivide(ctx, q, { maxA: o.maxA, minA: o.minA, alley: 0, alleyP: 0, depth: 10, fill: 1, irr: 0.9 }))
   for (const lot of lots) {
     if (reserve.some((r) => pointInPoly(centroid(lot.poly), r))) continue
     if (o.reach !== undefined && ctx.corridors.gap(centroid(lot.poly)) > o.reach) continue
@@ -455,6 +457,8 @@ export function derbs(ctx: Ctx, block: Poly, spacing: number) {
       const t = (j + 0.5 + (rng.next() - 0.5) * 0.5) / k
       const e = add(a, u, L * t)
       if (nearWall(ctx, e, 16) || ctx.T.waterAt(add(e, n, -4)) < 3 || ctx.occ.hitsPoint(add(e, n, 2), 0)) continue
+      // 院墙边（片区之间没有路）不开巷
+      if (ctx.wardSealed && !ctx.corridors.hits(add(e, n, -1.5), 1.5)) continue
       const pts: P[] = [add(e, n, -1.5), e]
       let cur = e
       let h = rot(n, (rng.next() - 0.5) * 0.5)

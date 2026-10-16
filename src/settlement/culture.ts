@@ -2,6 +2,7 @@ import type { Ctx } from './ctx'
 import type { FeatureId } from './features'
 import type { P, Poly } from './geom'
 import type { PlanId } from './plans/types'
+import type { FieldTraits } from './tensor'
 import type { Culture, Ward, WardType } from './types'
 
 /**
@@ -113,4 +114,6 @@ export interface CultureStyle {
   plotFill?(ctx: Ctx, plot: Poly, type: WardType): boolean
   /** 城外的农舍：lot 是宅地，front 是临路边的起点，n 朝宅地里；false 用通用的农舍 */
   farmstead?(ctx: Ctx, lot: Poly, front: P, n: P): boolean
+  /** 城里街网的参数：在母题定好的值上改（见 tensor.ts 的 fieldTraits） */
+  streets?(t: FieldTraits): void
 }

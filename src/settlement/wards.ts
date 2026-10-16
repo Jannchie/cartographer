@@ -105,7 +105,7 @@ function edgesOnLine(poly: Poly, o: P, n: P): Seg[] {
  * 弦要整个横穿当前这一块才切（两端不在块的里面）：止于别的街的丁字街，要等那条街先切过才轮到它，所以多走几轮。
  * 切口的边加进 fronts（临街边）
  */
-function cutByStreets(ctx: Ctx, block: Poly, fronts: Seg[]): Poly[] {
+export function cutByStreets(ctx: Ctx, block: Poly, fronts: Seg[] = []): Poly[] {
   const cuts = ctx.streetCuts
   if (!cuts) return [block]
   const chords: { p: P; q: P; w: number }[] = []

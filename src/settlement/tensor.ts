@@ -1,7 +1,7 @@
 import { blur, clamp } from '../gen/util'
 import * as dmath from '../gen/dmath'
 import { hashAt, type Core, type Ctx } from './ctx'
-import { dist, resample, segDist, type P } from './geom'
+import { dist, polylineLength, resample, segDist, type P } from './geom'
 import type { Culture } from './types'
 
 /**
@@ -75,6 +75,8 @@ export interface FieldTraits {
   /** 城里的街：主走向、副走向的线距（按基准街距的倍数）。母题决定哪个方向密：同心的环街密、辐条疏，脊街的肋巷密 */
   streetMajor: number
   streetMinor: number
+  /** 副走向的街里有多少成了尽端巷（只从一头的路口伸进去，不通） */
+  blind: number
 }
 
 /**
@@ -123,6 +125,7 @@ export function fieldTraits(ctx: Ctx, motif: Motif = ctx.p.motif && ctx.p.motif 
     merge: (0.08 + 0.25 * h('merge')) * free,
     streetMajor: 1,
     streetMinor: 1.5 + 0.5 * h('streetMinor'),
+    blind: 0,
   }
   // 母题加强它那一种来源（规整的城市里也照样起作用，只是底向的方格更强）
   if (motif === 'concentric') {
@@ -161,6 +164,7 @@ export function fieldTraits(ctx: Ctx, motif: Motif = ctx.p.motif && ctx.p.motif 
     t.streetMajor = 1.1
     t.streetMinor = 1.25
   }
+  ctx.style.streets?.(t)
   return t
 }
 
@@ -602,4 +606,79 @@ export function joinEnds(lines: P[][], others: P[][], reach: number, open: (q: P
       }
     }
   })
+}
+
+/**
+ * 尽端巷：把线在与 others 相交（相接）处断开，每一段只从一头的路口往里伸一截就到头，两头不通。
+ * 两个路口之间的一段从一头（偶尔两头各一条）伸进去不到一半；线头、线尾只连着一个路口的，从路口往外伸。
+ * 一个路口也不挨着的线不要。长的巷子中途偶尔横着分一个叉（open 管叉的端头能不能到）。返回各条巷子（从路口起）
+ */
+export function blindAlleys(ctx: Ctx, lines: P[][], others: P[][], maxLen: number, open: (q: P) => boolean): P[][] {
+  const hash = new PtHash(8)
+  others.forEach((l, k) => {
+    for (const q of resample(l, 4)) hash.add(q, k)
+  })
+  const out: P[][] = []
+  // 从下标 i 起往 dir 方向沿线走 len 米（不越过 stop）
+  const walk = (l: P[], i: number, dir: 1 | -1, stop: number, len: number) => {
+    const pts: P[] = [l[i]]
+    let acc = 0
+    for (let k = i + dir; dir > 0 ? k <= stop : k >= stop; k += dir) {
+      acc += dist(l[k - dir], l[k])
+      pts.push(l[k])
+      if (acc >= len) break
+    }
+    return acc >= 10 ? pts : null
+  }
+  for (const l of lines) {
+    // 路口：挨着别的路的一串点取中间那个
+    const at: number[] = []
+    let run = -1
+    for (let i = 0; i <= l.length; i++) {
+      const on = i < l.length && hash.nearest(l[i], 4) >= 0
+      if (on && run < 0) run = i
+      if (!on && run >= 0) {
+        at.push((run + i - 1) >> 1)
+        run = -1
+      }
+    }
+    if (!at.length) continue
+    const h = (k: number, tag: string) => hashAt(ctx, l[at[k]], `tensor.blind.${tag}`)
+    const push = (pts: P[] | null) => {
+      if (!pts) return
+      out.push(pts)
+      // 分叉：从中途的一点横着伸出一小段，端头离别的路、别的巷子都远
+      const m = pts.length >> 1
+      const hb = hashAt(ctx, pts[m], 'tensor.blind.branch')
+      if (pts.length < 6 || hb > 0.45) return
+      const d = dist(pts[m - 1], pts[m]) || 1
+      const side = hb < 0.225 ? 1 : -1
+      const len = 8 + 8 * hashAt(ctx, pts[m], 'tensor.blind.branchLen')
+      const n: P = [((-(pts[m][1] - pts[m - 1][1])) / d) * side, ((pts[m][0] - pts[m - 1][0]) / d) * side]
+      const end: P = [pts[m][0] + n[0] * len, pts[m][1] + n[1] * len]
+      const mid: P = [pts[m][0] + n[0] * len * 0.5, pts[m][1] + n[1] * len * 0.5]
+      if (open(end) && hash.nearest(end, 7) < 0 && hash.nearest(mid, 4) < 0) out.push([pts[m], mid, end])
+    }
+    // 线头、线尾各自一半的机会：两头都留时，路口两边的巷子正对着，看着像一条穿过去的街
+    const hh = h(0, 'head')
+    const ht = h(at.length - 1, 'tail')
+    if (hh < 0.55) push(walk(l, at[0], -1, 0, maxLen * (0.6 + 0.7 * hh)))
+    if (ht < 0.55) push(walk(l, at[at.length - 1], 1, l.length - 1, maxLen * (0.6 + 0.7 * ht)))
+    for (let k = 0; k + 1 < at.length; k++) {
+      const a = at[k]
+      const b = at[k + 1]
+      const span = polylineLength(l.slice(a, b + 1))
+      const u = h(k, 'span')
+      if (u < 0.3) {
+        // 两头各伸一条，中间隔开
+        const len = Math.min(maxLen, span * 0.38)
+        push(walk(l, a, 1, b, len))
+        push(walk(l, b, -1, a, len))
+        continue
+      }
+      const len = Math.min(maxLen, span * (0.4 + 0.25 * u))
+      push(u < 0.65 ? walk(l, a, 1, b, len) : walk(l, b, -1, a, len))
+    }
+  }
+  return out
 }
