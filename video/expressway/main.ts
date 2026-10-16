@@ -11,12 +11,13 @@
 import { generateWorld } from '../../src/gen/world'
 import { DEFAULT_PARAMS, normalizeParams, type World, type WorldParams } from '../../src/gen/types'
 import { loadEarthFeatures, loadEarthGrid, readPublicGz } from '../../src/gen/earth/real'
-import { loadChinaAdmin, loadChinaGrid } from '../../src/gen/earth/china'
+import { loadChinaAdmin } from '../../src/gen/earth/china'
+import { loadRegionGrid } from '../../src/gen/earth/regionGrid'
 import { regionProjection } from '../../src/gen/earth/region'
 import { HoloScene, type RoadStyle } from '../../src/render/holo/scene'
 import { setLang } from '../../src/i18n'
-import { decode, drawPanel, drawStatusBar, glitch, panelPhase, type HudStyle } from '../shared/hud'
-import { clamp01, ease, easeIn, easeOut, rand, span } from '../shared/motion'
+import { decode, drawCallout, drawPanel, drawStatusBar, drawTitleCard, glitch, panelPhase, type HudStyle, type ScreenPoint } from '../shared/hud'
+import { clamp01, ease, easeIn, easeOut, span } from '../shared/motion'
 import { H, MONO, overlayContext, runVideo, SANS, stagePixelRatio, W } from '../shared/page'
 import { BOOT, BOOT_LEN, FLOOR_FULL } from '../../src/render/holo/boot'
 import {
@@ -65,7 +66,7 @@ const UNFOLD_R = 100
 /** 准备数据与场景，返回逐帧绘制函数 */
 async function setup() {
   setLang('zh')
-  const [, , , , roadsBuf] = await Promise.all([loadEarthGrid('5m'), loadEarthFeatures(), loadChinaGrid(), loadChinaAdmin(), readPublicGz('china/roads.bin')])
+  const [, , , , roadsBuf] = await Promise.all([loadEarthGrid('5m'), loadEarthFeatures(), loadRegionGrid('china'), loadChinaAdmin(), readPublicGz('china/roads.bin')])
   const data = JSON.parse(new TextDecoder().decode(roadsBuf)) as RoadsData
   // 标准档（1450 格宽）：精细档的海岸线线段过密，加色叠加后发白晕开
   const p: WorldParams = { ...DEFAULT_PARAMS, region: 'china', width: 1450 }
@@ -180,8 +181,6 @@ interface View {
 }
 
 const fmtKm = (km: number) => Math.round(km).toLocaleString('en-US')
-
-type ScreenPoint = { x: number; y: number; behind: boolean }
 
 /** 省会（直辖市另有全息沙盘里的引线标注，不在此列）：画面上的位置与名称 */
 interface CityMark {
@@ -360,7 +359,7 @@ function drawOverlay(
 ) {
   ctx.clearRect(0, 0, W, H)
   ctx.globalAlpha = 1
-  drawTitle(ctx, v)
+  drawTitleCard(ctx, ST, v.sec, v.frame, INTRO.title, { kicker: 'CHINA EXPRESSWAY NETWORK', title: '中国高速公路网', subtitle: '1988 — 2025 · 中国大陆高速公路建设历程' })
   // 顶部状态栏：收起沙盘时倒着收回
   const [f0] = OUTRO.fold
   const statusAge = v.sec < f0 ? v.sec - INTRO.status : 0.6 - (v.sec - f0) * 1.5
@@ -386,44 +385,8 @@ function drawOverlay(
   )
   drawCapitals(ctx, v, capitals)
   drawReadout(ctx, v)
-  for (const c of captionsAt(v.sec)) drawCaption(ctx, v, c.index, c.age, c.life, anchor(c.index))
+  for (const c of captionsAt(v.sec)) drawCallout(ctx, ST, v.frame, { tag: c.c.tag, text: c.c.text, index: c.index, age: c.age, life: c.life, at: anchor(c.index) })
   drawSources(ctx, v)
-}
-
-/**
- * 片头标题：两道竖线先刷出，文字以故障闪现的方式出现（像素块、条带错位与色差，很快稳定），停留后再故障消失
- */
-function drawTitle(ctx: CanvasRenderingContext2D, v: View) {
-  const [a, b] = INTRO.title
-  const sec = v.sec
-  if (sec < a || sec > b) return
-  const cx = W / 2
-  const cy = H / 2 - 10
-  ctx.font = `700 84px ${SANS}`
-  const tw = ctx.measureText('中国高速公路网').width
-  const bx = tw / 2 + 70
-  // 竖线：自中点向上下刷出，结束时收起
-  const lv = Math.min(easeOut(span(sec, a, a + 0.1)), clamp01((b - sec) / 0.08))
-  ctx.fillStyle = INK
-  for (const sx of [-1, 1]) ctx.fillRect(cx + sx * bx - 1, cy - 58 * lv, 2, 116 * lv)
-  // 故障强度：出现时从 1 迅速落到 0（中间偶尔再抽一下），消失前 0.3 秒升回 1
-  const age = sec - a - 0.08
-  if (age < 0 || b - sec < 0.06) return
-  const spike = rand(Math.floor(sec * FPS), 3) > 0.82 ? 0.35 : 0
-  const amount = age < 0.4 ? 1 - age / 0.4 : b - sec < 0.32 ? 1 - (b - sec - 0.06) / 0.26 : age < 0.9 ? spike * (1 - (age - 0.4) / 0.5) : 0
-  glitch(ctx, ST, [cx - bx + 6, cy - 130, bx * 2 - 12, 260], clamp01(amount), v.frame, (g) => {
-    g.textAlign = 'center'
-    g.textBaseline = 'middle'
-    g.fillStyle = DIM
-    g.font = `400 20px ${MONO}`
-    g.fillText('CHINA EXPRESSWAY NETWORK', cx, cy - 92)
-    g.fillStyle = INK
-    g.font = `700 84px ${SANS}`
-    g.fillText('中国高速公路网', cx, cy + 2)
-    g.fillStyle = INK
-    g.font = `500 26px ${SANS}`
-    g.fillText('1988 — 2025 · 中国大陆高速公路建设历程', cx, cy + 92)
-  })
 }
 
 /**
@@ -476,77 +439,6 @@ function drawReadout(ctx: CanvasRenderingContext2D, v: View) {
   ctx.fillStyle = DIM
   ctx.fillText('公里 · 高速公路通车里程', 72 + kw + 16, H - 113)
   ctx.restore()
-}
-
-/**
- * 事件提示：有地点的从地图上的地点引出——地点处一个准星，竖线自地点向上刷到信息栏，信息栏再横向刷开；
- * 没有地点（或地点不在画面里）的显示在画面左上。信息栏：标题行（EVENT 与日期、右侧编号），下面是正文
- */
-function drawCaption(ctx: CanvasRenderingContext2D, v: View, index: number, age: number, life: number, at: ScreenPoint | null) {
-  const c = CAPTIONS[index]
-  ctx.font = `500 26px ${SANS}`
-  const w = Math.max(ctx.measureText(c.text).width + 56, 380)
-  const h = 96
-  const pole = 120
-  const anchored = !!at && !at.behind && at.x > 60 && at.x < W - 60 && at.y > 200 && at.y < H - 60
-  let gx = 72
-  let y = 104
-  let dir: 1 | -1 = 1
-  const t = anchored ? age - 0.1 : age
-  if (anchored) {
-    // 准星：0.06 秒内收拢到位
-    const k = 1 + 2 * (1 - easeOut(clamp01(age / 0.06)))
-    const rest = life - age
-    if (rest > 0.04) {
-      ctx.strokeStyle = THEME.glow
-      ctx.lineWidth = 1.5
-      const r = 9 * k
-      ctx.beginPath()
-      for (const [sx, sy] of [
-        [-1, -1],
-        [1, -1],
-        [1, 1],
-        [-1, 1],
-      ]) {
-        ctx.moveTo(at.x + sx * r, at.y + sy * r * 0.5)
-        ctx.lineTo(at.x + sx * r, at.y + sy * r)
-        ctx.lineTo(at.x + sx * r * 0.5, at.y + sy * r)
-      }
-      ctx.stroke()
-      ctx.fillStyle = THEME.glow
-      ctx.fillRect(at.x - 2, at.y - 2, 4, 4)
-    }
-    // 竖线：自地点向上（太靠上时向下）刷出，收起时最后收回
-    const up = at.y - pole - h > 120
-    dir = at.x + w + 40 > W ? -1 : 1
-    gx = at.x
-    y = up ? at.y - pole - h : at.y + pole
-    const grow = Math.min(easeOut(clamp01(age / 0.1)), clamp01((life - age) / 0.05))
-    ctx.strokeStyle = INK
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    ctx.moveTo(gx, at.y + (up ? -10 : 10))
-    ctx.lineTo(gx, at.y + (up ? -10 - (pole - 10) * grow : 10 + (pole - 10) * grow))
-    ctx.stroke()
-  }
-  const phase = panelPhase(t, life - (anchored ? 0.1 : 0))
-  const x0 = dir > 0 ? gx : gx - w
-  drawPanel(ctx, ST, { gx, y, w, h, dir, ext: anchored ? 0 : 22, phase, seed: v.frame * 7 + index }, (g) => {
-    g.textAlign = 'left'
-    g.textBaseline = 'alphabetic'
-    g.fillStyle = ACCENT
-    g.font = `400 15px ${MONO}`
-    g.fillText(`EVENT  |  ${c.tag}`, x0 + 22, y + 26)
-    g.textAlign = 'right'
-    g.fillStyle = DIM
-    g.fillText(`E-${String(index + 1).padStart(2, '0')}`, x0 + w - 18, y + 26)
-    g.fillStyle = LINE
-    g.fillRect(x0 + 22, y + 38, w - 40, 1)
-    g.textAlign = 'left'
-    g.fillStyle = INK
-    g.font = `500 26px ${SANS}`
-    g.fillText(c.text, x0 + 22, y + 76)
-  })
 }
 
 /** 片尾：沙盘收起后，画面中央刷出数据说明 */

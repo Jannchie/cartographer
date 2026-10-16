@@ -85,6 +85,18 @@ export interface TerrainUniforms {
   uLine: { value: THREE.Color }
   uFill: { value: THREE.Vector2 }
   uGlow: { value: number }
+  /**
+   * 控制区图层（setTerritory）：uOwner 是每格的归属（0 无，1、2 为两方，3 为争夺或不确定），陆地按归属染上 uOwnerA / uOwnerB，
+   * 争夺区画浅色斜纹，
+   * 归属相邻处画一道前线（uFront 色，宽约 uFrontW 格）。uOwnerOn 为 0 时不起作用
+   */
+  uOwner: { value: THREE.Texture | null }
+  uOwnerOn: { value: number }
+  uOwnerA: { value: THREE.Color }
+  uOwnerB: { value: THREE.Color }
+  uOwnerFill: { value: number }
+  uFront: { value: THREE.Color }
+  uFrontW: { value: number }
 }
 
 /**
@@ -112,6 +124,13 @@ export function createTerrainMaterial() {
     uLine: { value: new THREE.Color() },
     uFill: { value: new THREE.Vector2(0.5, 0.8) },
     uGlow: { value: 1 },
+    uOwner: { value: null },
+    uOwnerOn: { value: 0 },
+    uOwnerA: { value: new THREE.Color() },
+    uOwnerB: { value: new THREE.Color() },
+    uOwnerFill: { value: 0.5 },
+    uFront: { value: new THREE.Color() },
+    uFrontW: { value: 1.5 },
   }
   const mat = new THREE.ShaderMaterial({
     uniforms: uniforms as unknown as Record<string, THREE.IUniform>,
@@ -162,6 +181,14 @@ export function createTerrainMaterial() {
       uniform vec3 uLine;
       uniform vec2 uFill;
       uniform float uGlow;
+      uniform sampler2D uOwner;
+      uniform float uOwnerOn;
+      uniform vec3 uOwnerA;
+      uniform vec3 uOwnerB;
+      uniform float uOwnerFill;
+      uniform vec3 uFront;
+      uniform float uFrontW;
+      float ownerAt(vec2 t) { return floor(texture2D(uOwner, t).r * 255.0 + 0.5); }
       varying vec2 vT;
       varying vec3 vWp;
       ${NOISE_GLSL}
@@ -241,6 +268,25 @@ export function createTerrainMaterial() {
         col *= 1.0 + hov * 0.5;
 
         // 开场：从后往前铺开，前沿一道亮线
+        // 控制区：陆地按归属染色；四邻（相距 uFrontW 格）里有另一方的格，就是前线
+        if (uOwnerOn > 0.5) {
+          float o = ownerAt(vT);
+          float has = step(0.5, o) * land;
+          vec3 tint = o > 1.5 ? uOwnerB : uOwnerA;
+          if (o > 2.5) {
+            // 争夺或不确定：浅色斜纹
+            float stripe = step(0.55, fract((vWp.x + vWp.z) * 1.2));
+            tint = mix(uOwnerA, uOwnerB, 0.5) * 0.5 + uFront * 0.35 * stripe;
+          }
+          col = mix(col, col * 0.45 + tint * 0.6, has * uOwnerFill);
+          float front = 0.0;
+          for (int k = 0; k < 4; k++) {
+            vec2 d = k == 0 ? vec2(1.0, 0.0) : k == 1 ? vec2(-1.0, 0.0) : k == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
+            float q = ownerAt(vT + d * tx * uFrontW);
+            front = max(front, step(0.5, q) * step(0.5, abs(q - o)));
+          }
+          col += uFront * front * has * 1.8;
+        }
         float rz = mix(-uSize.y * 0.5 - 2.0, uSize.y * 0.5 + 2.0, uReveal);
         if (vWp.z > rz) discard;
         col += uLine * exp(-(rz - vWp.z) * 2.5) * 2.5 * (1.0 - step(1.0, uReveal));

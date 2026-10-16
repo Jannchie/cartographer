@@ -22,16 +22,19 @@ declare global {
 
 /**
  * 启动录制页：加载字体，执行 setup（准备数据与场景，返回逐帧绘制函数），挂到 window.__video 上；
- * 预览模式下再加上播放控制。label 给出预览进度条旁显示的说明（例如当前年份）
+ * 预览模式下再加上播放控制。duration 可以是函数：时长取决于数据时，在 setup 之后再求值。
+ * label 给出预览进度条旁显示的说明（例如当前年份）
  */
-export function runVideo(opts: { fps: number; duration: number; setup: () => Promise<(i: number) => void>; label?: (sec: number) => string }) {
-  const { fps, duration } = opts
-  window.__video = { ready: false, frames: Math.round(duration * fps), fps, frame: () => {} }
+export function runVideo(opts: { fps: number; duration: number | (() => number); setup: () => Promise<(i: number) => void>; label?: (sec: number) => string }) {
+  const { fps } = opts
+  const duration = () => (typeof opts.duration === 'function' ? opts.duration() : opts.duration)
+  window.__video = { ready: false, frames: 0, fps, frame: () => {} }
   ;(async () => {
     await loadFonts()
     window.__video.frame = await opts.setup()
+    window.__video.frames = Math.round(duration() * fps)
     window.__video.ready = true
-    if (PREVIEW) startPreview(fps, duration, opts.label)
+    if (PREVIEW) startPreview(fps, duration(), opts.label)
   })().catch((e) => {
     window.__video.error = e instanceof Error ? (e.stack ?? e.message) : String(e)
     console.error(e)

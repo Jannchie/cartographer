@@ -38,6 +38,77 @@ export interface RoadStyle {
   haloWidth: number
 }
 
+/**
+ * 三维标注（setMarks）：ground 为贴在地形表面的文字（纸面标注）；stand 为直立标注——地面上一个简洁的几何轮廓
+ * （shape：square 方形、triangle 三角、circle 圆，大小 shapeSize），一根细竖线升到 height，顶上转向镜头的标题与一行小字
+ */
+export interface MarkSpec {
+  id: string
+  kind: 'ground' | 'stand'
+  title: string
+  sub?: string
+  /** 标题与竖线、轮廓的颜色 */
+  color: string
+  /** 标题的字高（场景单位） */
+  size: number
+  height?: number
+  shape?: 'square' | 'triangle' | 'circle'
+  shapeSize?: number
+}
+
+/** 路径（setPaths）：地图格坐标的折线；ground 贴着地形，air / naval 拱离地面（拱高为两端距离的 lift 倍） */
+export interface PathSpec {
+  id: string
+  pts: number[]
+  color: string
+  kind: 'ground' | 'air' | 'naval'
+  /** 头部画不画 V 形箭头与亮点（缺省画；部队走过的轨迹不画） */
+  head?: boolean
+  /** 亮度倍数（缺省 1；轨迹画得淡一些） */
+  opacity?: number
+}
+
+/**
+ * 三维标注的文字贴图：标题（加宽字距的粗体）与下面一行等宽小字，白字带一圈白色光晕（不用深色描边）；
+ * 字高按 spec.size 换算成场景单位。贴地标注用细体、半透明，像印在纸面上
+ */
+function markTexture(spec: MarkSpec) {
+  const PX = 160
+  const sub = spec.sub ?? ''
+  const cv = document.createElement('canvas')
+  const g = cv.getContext('2d')!
+  const fam = `"Archivo", ${cjkFont(lang, true)}`
+  const titleFont = spec.kind === 'ground' ? `300 ${PX}px ${fam}` : `600 ${PX}px ${fam}`
+  const subPx = PX * 0.32
+  const subFont = `400 ${subPx}px "Berkeley Mono", monospace`
+  g.font = titleFont
+  g.letterSpacing = `${PX * 0.12}px`
+  const tw = g.measureText(spec.title).width
+  g.font = subFont
+  g.letterSpacing = `${subPx * 0.25}px`
+  const sw = g.measureText(sub).width
+  const W = Math.ceil(Math.max(tw, sw) + PX * 0.5)
+  const H = Math.ceil(PX * 1.3 + (sub ? subPx * 1.6 : 0))
+  cv.width = W
+  cv.height = H
+  g.textBaseline = 'alphabetic'
+  g.font = titleFont
+  g.letterSpacing = `${PX * 0.12}px`
+  g.shadowColor = 'rgba(255, 255, 255, 0.55)'
+  g.shadowBlur = PX * 0.18
+  g.fillStyle = spec.kind === 'ground' ? 'rgba(236, 242, 250, 0.75)' : '#ffffff'
+  g.fillText(spec.title, PX * 0.2, PX * 1.0)
+  g.shadowBlur = PX * 0.08
+  if (sub) {
+    g.font = subFont
+    g.letterSpacing = `${subPx * 0.25}px`
+    g.fillStyle = spec.kind === 'ground' ? 'rgba(210, 225, 240, 0.5)' : spec.color
+    g.fillText(sub, PX * 0.22, PX * 1.25 + subPx * 1.1)
+  }
+  const k = spec.size / PX
+  return { tex: canvasTexture(cv), w: W * k, h: H * k }
+}
+
 export interface HoloOptions {
   /** 配色方案（见 palettes.ts） */
   palette: string
@@ -145,6 +216,12 @@ export class HoloScene {
   private lineGroup = new THREE.Group()
   private labelGroup = new THREE.Group()
   private annoGroup = new THREE.Group()
+  /** 三维标注、路径与前线光幕（离线录制的战报类视频用） */
+  private markGroup = new THREE.Group()
+  private marks = new Map<string, { group: THREE.Group; spec: MarkSpec; pole?: THREE.Object3D; text: THREE.Mesh; head?: THREE.Group; w: number }>()
+  private paths = new Map<string, { pts: number[]; color: THREE.Color; head: boolean }>()
+  private pathLines: LineSegments2 | null = null
+  private curtain: THREE.Mesh | null = null
   /** 海岸线几何与每个端点所属的陆块（锁定时只重新上色） */
   private coastLines: { inner: LineSegments2; outer: LineSegments2; segMass: Int32Array } | null = null
   /** 引线标注里绕竖轴转向镜头的组 */
@@ -164,6 +241,8 @@ export class HoloScene {
   private dataTex: THREE.DataTexture | null = null
   /** 每格的陆块编号（海上取最近的陆块，+1 后拆成两个字节；0 为无） */
   private idTex: THREE.DataTexture | null = null
+  /** 控制区图层的归属贴图（setTerritory） */
+  private ownerTex: THREE.DataTexture | null = null
   private SZ = 62.5
   private selected = -1
   private hovered = -1
@@ -222,7 +301,7 @@ export class HoloScene {
     // 台座顶面比海面（y = 0）低 0.12：贴得太近时远处分不清深度，台座会从海面里一块块透出来闪烁
     this.skirt = new THREE.Mesh(new THREE.BoxGeometry(1, 0.18, 1), new THREE.MeshBasicMaterial({ color: 0x000000 }))
     this.skirt.position.y = -0.21
-    this.scene.add(floor, this.skirt, this.frameGroup, this.sectionGroup, this.lineGroup, this.labelGroup, this.annoGroup)
+    this.scene.add(floor, this.skirt, this.frameGroup, this.sectionGroup, this.lineGroup, this.labelGroup, this.annoGroup, this.markGroup)
 
     this.hud = new HoloHud(container)
     this.applyPalette()
@@ -562,6 +641,39 @@ export class HoloScene {
     this.dirty = true
   }
 
+  /**
+   * 控制区图层：owner 是每个地图格的归属（0 无，1、2 为两方，3 为争夺或不确定；与地图格一一对应，行优先），
+   * 陆地按归属染色，两方相邻处画一道前线。owner 内容变了之后调 refreshTerritory；传 null 关掉
+   */
+  setTerritory(owner: Uint8Array | null, style?: { a: string; b: string; front: string; fill?: number; width?: number }) {
+    const u = this.terrain.uniforms
+    this.ownerTex?.dispose()
+    this.ownerTex = null
+    u.uOwnerOn.value = 0
+    if (owner && this.world) {
+      const t = new THREE.DataTexture(owner, this.world.W, this.world.H, THREE.RedFormat)
+      t.magFilter = t.minFilter = THREE.NearestFilter
+      t.unpackAlignment = 1
+      t.needsUpdate = true
+      this.ownerTex = t
+      u.uOwner.value = t
+      u.uOwnerOn.value = 1
+    }
+    if (style) {
+      u.uOwnerA.value.copy(linear(style.a))
+      u.uOwnerB.value.copy(linear(style.b))
+      u.uFront.value.copy(linear(style.front))
+      u.uOwnerFill.value = style.fill ?? 0.5
+      u.uFrontW.value = style.width ?? 1.5
+    }
+    this.dirty = true
+  }
+
+  refreshTerritory() {
+    if (this.ownerTex) this.ownerTex.needsUpdate = true
+    this.dirty = true
+  }
+
   /** 进入动画的时钟（秒）：图框与立面的线按它逐段画出，上面的文字（刻度读数、高程读数、立牌）到点闪烁着亮起 */
   private applyBoot(clock: number) {
     bootClock.value = clock
@@ -571,6 +683,323 @@ export class HoloScene {
         const m = (c as THREE.Mesh).material
         if (t !== undefined && m instanceof THREE.MeshBasicMaterial) m.opacity = bootFlicker(clock, t)
       })
+  }
+
+  // —— 战报类视频：三维标注、路径与前线光幕 ——
+
+  /** 建好全部三维标注（之后每帧用 updateMarks 摆放与显现）；传空数组清掉 */
+  setMarks(specs: MarkSpec[]) {
+    disposeGroup(this.markGroup)
+    this.marks.clear()
+    this.panels.clear()
+    this.pathLines = null
+    this.curtain = null
+    for (const spec of specs) {
+      const group = new THREE.Group()
+      const { tex, w, h } = markTexture(spec)
+      const geo = new THREE.PlaneGeometry(w, h).translate(w / 2, h / 2, 0)
+      const text = new THREE.Mesh(geo, textMaterial(tex, 1, { depthTest: false }))
+      text.renderOrder = 30
+      if (spec.kind === 'ground') {
+        // 纸面标注：平躺在地形上，以标注点为中心
+        geo.rotateX(-Math.PI / 2)
+        text.position.set(-w / 2, 0, h / 2)
+        group.add(text)
+        this.marks.set(spec.id, { group, spec, text, w })
+      } else {
+        const H = spec.height ?? 6
+        const color = linear(spec.color)
+        const r = spec.shapeSize ?? 0.8
+        const outline: number[] = []
+        if (spec.shape === 'circle') {
+          for (let k = 0; k < 32; k++) {
+            const a0 = (k / 32) * Math.PI * 2
+            const a1 = ((k + 1) / 32) * Math.PI * 2
+            outline.push(Math.cos(a0) * r, 0, Math.sin(a0) * r, Math.cos(a1) * r, 0, Math.sin(a1) * r)
+          }
+        } else {
+          const n = spec.shape === 'triangle' ? 3 : 4
+          const rot = spec.shape === 'triangle' ? -Math.PI / 2 : Math.PI / 4
+          for (let k = 0; k < n; k++) {
+            const a0 = rot + (k / n) * Math.PI * 2
+            const a1 = rot + ((k + 1) / n) * Math.PI * 2
+            outline.push(Math.cos(a0) * r, 0, Math.sin(a0) * r, Math.cos(a1) * r, 0, Math.sin(a1) * r)
+          }
+        }
+        group.add(segments(outline, this.lineMat(color, 1.6)))
+        const pole = segments([0, 0, 0, 0, H, 0], this.lineMat(color.clone().lerp(new THREE.Color(1, 1, 1), 0.5), 1.1))
+        group.add(pole)
+        // 顶部：转向镜头的标题，左下角压在竖线顶端
+        const head = new THREE.Group()
+        head.position.y = H
+        text.position.set(0.25, -h * 0.25, 0)
+        head.add(text)
+        group.add(head)
+        this.marks.set(spec.id, { group, spec, pole, text, head, w })
+      }
+      group.visible = false
+      this.markGroup.add(group)
+    }
+    this.dirty = true
+  }
+
+  /**
+   * 摆放与显现三维标注：只列出这一帧要显示的；reveal 0~1——直立标注先升竖线（前 40%）、再横向刷开标题，
+   * 纸面标注横向刷开。标注固定在世界空间里（直立标注朝南，即默认镜头的方向），不随镜头转动或缩放。
+   * 直立标注的标题在屏幕上互相避让：字越大的越先摆，与已摆好的重叠的只留竖线与地面轮廓
+   */
+  updateMarks(states: { id: string; cx: number; cy: number; reveal: number }[]) {
+    for (const m of this.marks.values()) m.group.visible = false
+    for (const st of states) {
+      const m = this.marks.get(st.id)
+      if (!m || st.reveal <= 0) continue
+      const x = this.toX(st.cx)
+      const z = this.toZ(st.cy)
+      m.group.position.set(x, this.heightAt(st.cx, st.cy) + 0.06, z)
+      m.group.visible = true
+      const map = (m.text.material as THREE.MeshBasicMaterial).map!
+      if (m.spec.kind === 'ground') {
+        const wipe = 1 - (1 - Math.min(1, st.reveal)) ** 3
+        m.text.scale.x = Math.max(1e-4, wipe)
+        map.repeat.x = wipe
+        continue
+      }
+      const up = Math.min(1, st.reveal / 0.4)
+      const wipe = 1 - (1 - Math.min(1, Math.max(0, (st.reveal - 0.4) / 0.6))) ** 3
+      m.pole!.scale.y = Math.max(1e-4, up)
+      const head = m.head!
+      head.position.y = (m.spec.height ?? 6) * up
+      head.visible = wipe > 0
+      m.text.scale.x = Math.max(1e-4, wipe)
+      map.repeat.x = wipe
+    }
+    this.declutterMarks()
+    this.dirty = true
+  }
+
+  /** 直立标注的标题避让：按字高从大到小，在屏幕上依次摆放标题的外框，与已摆好的重叠的隐去标题 */
+  private declutterMarks() {
+    const el = this.renderer.domElement
+    const W = el.clientWidth
+    const H = el.clientHeight
+    this.camera.updateMatrixWorld()
+    const v = new THREE.Vector3()
+    const toScreen = (p: THREE.Vector3) => {
+      v.copy(p).project(this.camera)
+      return [((v.x + 1) / 2) * W, ((1 - v.y) / 2) * H]
+    }
+    const placed: [number, number, number, number][] = []
+    const stands = [...this.marks.values()].filter((m) => m.group.visible && m.spec.kind === 'stand' && m.head!.visible).sort((a, b) => b.spec.size - a.spec.size)
+    for (const m of stands) {
+      m.group.updateMatrixWorld(true)
+      const geo = m.text.geometry as THREE.PlaneGeometry
+      geo.computeBoundingBox()
+      const bb = geo.boundingBox!
+      const a = toScreen(m.text.localToWorld(new THREE.Vector3(bb.min.x, bb.min.y, 0)))
+      const b = toScreen(m.text.localToWorld(new THREE.Vector3(bb.max.x * m.text.scale.x, bb.max.y, 0)))
+      const r: [number, number, number, number] = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]
+      if (placed.some((q) => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1])) m.head!.visible = false
+      else placed.push(r)
+    }
+  }
+
+  /** 后方立牌的显隐（镜头压低正对沙盘里的面板时收起，免得压在面板后面） */
+  setHeaderVisible(on: boolean) {
+    if (this.header) this.header.visible = on
+    this.dirty = true
+  }
+
+  /** 路径：地图格坐标的折线（之后每帧用 updatePaths 画出其中一段） */
+  setPaths(specs: PathSpec[], lift = { air: 0.28, naval: 0.06 }) {
+    this.paths.clear()
+    for (const sp of specs) {
+      // 加密到约 1 个场景单位一点，贴地或拱起
+      const raw: [number, number][] = []
+      for (let k = 0; k < sp.pts.length; k += 2) raw.push([sp.pts[k], sp.pts[k + 1]])
+      const dense: [number, number][] = []
+      for (let k = 0; k + 1 < raw.length; k++) {
+        const [ax, ay] = raw[k]
+        const [bx, by] = raw[k + 1]
+        const n = Math.max(1, Math.ceil(Math.hypot(this.toX(bx) - this.toX(ax), this.toZ(by) - this.toZ(ay))))
+        for (let i = 0; i < n; i++) dense.push([ax + ((bx - ax) * i) / n, ay + ((by - ay) * i) / n])
+      }
+      dense.push(raw[raw.length - 1])
+      const span = Math.hypot(this.toX(raw[raw.length - 1][0]) - this.toX(raw[0][0]), this.toZ(raw[raw.length - 1][1]) - this.toZ(raw[0][1]))
+      const arch = sp.kind === 'ground' ? 0 : (sp.kind === 'air' ? lift.air : lift.naval) * span
+      const pts: number[] = []
+      dense.forEach(([cx, cy], i) => {
+        const t = i / Math.max(1, dense.length - 1)
+        pts.push(this.toX(cx), this.heightAt(cx, cy) + 0.12 + Math.sin(Math.PI * t) * arch, this.toZ(cy))
+      })
+      this.paths.set(sp.id, { pts, color: linear(sp.color).multiplyScalar(sp.opacity ?? 1), head: sp.head ?? true })
+    }
+  }
+
+  /**
+   * 画出路径：每条只画 [gone, grow] 一段（按长度比例），头部一个 V 形箭头与亮点；等宽的发光细线
+   */
+  updatePaths(states: { id: string; grow: number; gone: number }[]) {
+    if (this.pathLines) {
+      this.markGroup.remove(this.pathLines)
+      this.pathLines.geometry.dispose()
+      ;(this.pathLines.material as LineMaterial).dispose()
+      this.pathLines = null
+    }
+    const pos: number[] = []
+    const col: number[] = []
+    const white = new THREE.Color(1, 1, 1)
+    for (const st of states) {
+      const p = this.paths.get(st.id)
+      if (!p || st.grow <= 0 || st.gone >= 1) continue
+      const n = p.pts.length / 3
+      const len = [0]
+      for (let k = 1; k < n; k++) len.push(len[k - 1] + Math.hypot(p.pts[k * 3] - p.pts[k * 3 - 3], p.pts[k * 3 + 1] - p.pts[k * 3 - 2], p.pts[k * 3 + 2] - p.pts[k * 3 - 1]))
+      const total = len[n - 1]
+      const a = total * st.gone
+      const b = total * st.grow
+      const at = (l: number) => {
+        let k = 1
+        while (k < n - 1 && len[k] < l) k++
+        const f = Math.min(1, Math.max(0, (l - len[k - 1]) / Math.max(1e-6, len[k] - len[k - 1])))
+        return [0, 1, 2].map((c) => p.pts[(k - 1) * 3 + c] + (p.pts[k * 3 + c] - p.pts[(k - 1) * 3 + c]) * f)
+      }
+      let prev = at(a)
+      for (let k = 0; k < n; k++) {
+        if (len[k] <= a) continue
+        const cur = len[k] >= b ? at(b) : [p.pts[k * 3], p.pts[k * 3 + 1], p.pts[k * 3 + 2]]
+        pos.push(...prev, ...cur)
+        col.push(p.color.r, p.color.g, p.color.b, p.color.r, p.color.g, p.color.b)
+        prev = cur
+        if (len[k] >= b) break
+      }
+      if (!p.head) continue
+      // 头部：V 形箭头（在水平面上，张角约 60°）与一个白色亮点
+      const head = at(b)
+      const back = at(Math.max(0, b - 1.2))
+      const dx = head[0] - back[0]
+      const dz = head[2] - back[2]
+      const L = Math.hypot(dx, dz) || 1
+      const ux = dx / L
+      const uz = dz / L
+      const s = 0.9
+      for (const sg of [1, -1]) {
+        const vx = -ux * 0.87 + sg * -uz * 0.5
+        const vz = -uz * 0.87 + sg * ux * 0.5
+        pos.push(head[0], head[1], head[2], head[0] + vx * s, head[1], head[2] + vz * s)
+        col.push(white.r, white.g, white.b, p.color.r, p.color.g, p.color.b)
+      }
+      const d = 0.18
+      pos.push(head[0] - d, head[1], head[2], head[0] + d, head[1], head[2], head[0], head[1], head[2] - d, head[0], head[1], head[2] + d)
+      col.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+    }
+    if (pos.length) {
+      this.pathLines = segments(pos, this.lineMat(null, 1.8, 1, true, true), col)
+      this.markGroup.add(this.pathLines)
+    }
+    this.dirty = true
+  }
+
+  /**
+   * 前线光幕：沿地图格坐标的线段（每段 4 个数）竖起一道发光的幕，自地面向上渐隐（高 height），加色叠加、双面可见。
+   * 每帧可重设；传空数组清掉
+   */
+  setCurtain(segs: number[], color: string, height = 3) {
+    if (this.curtain) {
+      this.markGroup.remove(this.curtain)
+      this.curtain.geometry.dispose()
+    }
+    this.curtain = null
+    const n = segs.length / 4
+    if (!n) return
+    const pos = new Float32Array(n * 18)
+    const v = new Float32Array(n * 6)
+    for (let k = 0; k < n; k++) {
+      const [x0, y0, x1, y1] = [segs[k * 4], segs[k * 4 + 1], segs[k * 4 + 2], segs[k * 4 + 3]]
+      const ax = this.toX(x0)
+      const az = this.toZ(y0)
+      const bx = this.toX(x1)
+      const bz = this.toZ(y1)
+      const ah = this.heightAt(x0, y0) + 0.05
+      const bh = this.heightAt(x1, y1) + 0.05
+      pos.set([ax, ah, az, bx, bh, bz, bx, bh + height, bz, ax, ah, az, bx, bh + height, bz, ax, ah + height, az], k * 18)
+      v.set([0, 0, 1, 0, 1, 1], k * 6)
+    }
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+    geo.setAttribute('v', new THREE.BufferAttribute(v, 1))
+    const mat =
+      (this.curtainMat ??= new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: new THREE.Color() } },
+        vertexShader: 'attribute float v; varying float vV; void main() { vV = v; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: 'uniform vec3 uColor; varying float vV; void main() { float a = pow(clamp(1.0 - vV, 0.0, 1.0), 2.2); gl_FragColor = vec4(uColor * (0.25 + 1.2 * a) * a, 1.0); }',
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }))
+    mat.uniforms.uColor.value.copy(linear(color))
+    this.curtain = new THREE.Mesh(geo, mat)
+    this.curtain.renderOrder = 5
+    this.markGroup.add(this.curtain)
+    this.dirty = true
+  }
+  private curtainMat: THREE.ShaderMaterial | null = null
+
+  private panels = new Map<string, { group: THREE.Group; mesh: THREE.Mesh; pole: LineSegments2 | null }>()
+
+  /**
+   * 画布面板：把调用方的画布作为一块平面放进沙盘空间——宽 width（场景单位，高按画布比例），
+   * 左下角在地图格 (cx, cy) 上方 lift、向东 offset 处，朝南并后仰 lean（弧度；π/2 为平放在地上）。
+   * pole 为 true 时从地面点到面板左下角连一根细线。同一个 id 再调用只更新摆放；canvas 传 null 移除。
+   * 画布内容变了之后调 refreshPanel
+   */
+  setPanel(id: string, canvas: HTMLCanvasElement | null, place?: { cx: number; cy: number; lift: number; width: number; offset?: number; lean?: number; pole?: boolean; visible?: boolean }) {
+    let p = this.panels.get(id)
+    if (!canvas) {
+      if (p) {
+        disposeGroup(p.group)
+        this.markGroup.remove(p.group)
+        this.panels.delete(id)
+      }
+      return
+    }
+    if (!p) {
+      const mat = new THREE.MeshBasicMaterial({ map: canvasTexture(canvas), transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide })
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).translate(0.5, 0.5, 0), mat)
+      mesh.renderOrder = 40
+      const group = new THREE.Group()
+      group.add(mesh)
+      this.markGroup.add(group)
+      p = { group, mesh, pole: null }
+      this.panels.set(id, p)
+    }
+    if (place) {
+      const w = place.width
+      const h = (w * canvas.height) / canvas.width
+      const off = place.offset ?? 0
+      p.group.position.set(this.toX(place.cx), this.heightAt(place.cx, place.cy) + 0.06, this.toZ(place.cy))
+      p.mesh.scale.set(w, h, 1)
+      p.mesh.position.set(off, place.lift, 0)
+      p.mesh.rotation.x = -(place.lean ?? 0)
+      if (p.pole) {
+        p.group.remove(p.pole)
+        p.pole.geometry.dispose()
+        ;(p.pole.material as LineMaterial).dispose()
+        p.pole = null
+      }
+      if (place.pole) {
+        p.pole = segments([0, 0, 0, off, place.lift, 0], this.lineMat(new THREE.Color(1, 1, 1), 1.1))
+        p.group.add(p.pole)
+      }
+      p.group.visible = place.visible ?? true
+    }
+    this.dirty = true
+  }
+
+  refreshPanel(id: string) {
+    const p = this.panels.get(id)
+    if (p) ((p.mesh.material as THREE.MeshBasicMaterial).map as THREE.Texture).needsUpdate = true
+    this.dirty = true
   }
 
   /** 泛光强度（默认 0.12）与扩散半径（默认 0.25，越小越贴着亮处，画面越干净） */
@@ -670,7 +1099,7 @@ export class HoloScene {
   dispose() {
     cancelAnimationFrame(this.raf)
     this.ro.disconnect()
-    for (const g of [this.frameGroup, this.sectionGroup, this.lineGroup, this.labelGroup, this.annoGroup]) disposeGroup(g)
+    for (const g of [this.frameGroup, this.sectionGroup, this.lineGroup, this.labelGroup, this.annoGroup, this.markGroup]) disposeGroup(g)
     this.terrainMesh?.geometry.dispose()
     this.heightTex?.dispose()
     this.dataTex?.dispose()

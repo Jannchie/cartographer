@@ -2,7 +2,7 @@ import { hashString, RNG } from '../../gen/rng'
 import type { HoloPalette } from './palettes'
 
 /**
- * 全息沙盘的屏幕界面：四周成排的小号等宽字读数（任务状态、坐标、时钟、链路、数据表），
+ * 全息沙盘的屏幕界面：四周成排的小号读数（任务状态、坐标、时钟、链路、数据表；假编号用等宽，真实读数用正文 + tabular-nums），
  * 中央的十字基准线，以及悬停 / 锁定陆块时右侧的目标卡片。
  * 读数里的编号都由世界种子决定，同一个世界每次打开都一样。
  */
@@ -50,12 +50,14 @@ export class HoloHud {
     const pick = (chars: string) => chars[int(0, chars.length)]
     const hex = (n: number) => Array.from({ length: n }, () => pick('0123456789abcdef')).join('')
     const code = () => `${pick('ABCDEFHJKLMNPQRSTVWXYZ')}${pick('ABCDEFHJKLMNPQRSTVWXYZ')}-${int(1000, 10000)}-${hex(2)}`
+    /** 假编号 / hex 串：包一层 .hh-code 保留等宽 */
+    const idc = (s: string) => `<span class="hh-code">${s}</span>`
     const comLvd = (): [string, string][] => [['COM', `D-${hex(3)}-${int(10, 100)}`], ['LVD', `0x${hex(4)}`]]
     const mini = (rows: string[][]) =>
       `<table class="hh-mini">${rows.map((row) => `<tr>${row.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`
     const kv = (k: string, v: string, cls = '') => `<div class="hh-kv ${cls}"><span>${k}</span><b>${v}</b></div>`
     const tiny = (pairs: [string, string][]) => `<div class="hh-tiny">${pairs.map(([k, v]) => `<i>${k}</i><em>${v}</em>`).join('')}</div>`
-    const table = Array.from({ length: 3 }, () => Array.from({ length: 6 }, () => code()))
+    const table = Array.from({ length: 3 }, () => Array.from({ length: 6 }, () => idc(code())))
     const hi = int(0, 6)
     const top = `
       <div class="hh-row hh-top">
@@ -65,11 +67,11 @@ export class HoloHud {
         <div class="hh-kv"><span>DESTINATION</span><b data-k="dest">—</b></div>
         <div class="hh-kv"><span>T/L</span><b data-k="clock">0000:00</b></div>
         ${mini([['WRD', 'LS', '—', 'KPT'], ['DTL', 'HLK', 'DOC', 'VIS'], ['INF', 'SVN', 'IMG', 'LNG']])}
-        <div class="hh-kv"><span>LNK 01</span><b>STL-${int(100, 1000)}</b>${tiny([['MID', hex(12)], ['HST', hex(6)], ['IPB', `${hex(4)}:${hex(4)}:${hex(4)}`]])}</div>
+        <div class="hh-kv"><span>LNK 01</span><b>${idc(`STL-${int(100, 1000)}`)}</b>${tiny([['MID', hex(12)], ['HST', hex(6)], ['IPB', `${hex(4)}:${hex(4)}:${hex(4)}`]])}</div>
         <div class="hh-kv dim"><span>LNK 02</span><b>NO SIGNAL</b></div>
         <div class="hh-kv dim hh-wide"><span>LNK 03</span><b>NO SIGNAL</b></div>
         <div class="hh-spacer"></div>
-        ${kv('COM', `BFR-${String(int(0, 99)).padStart(3, '0')}`)}
+        ${kv('COM', idc(`BFR-${String(int(0, 99)).padStart(3, '0')}`))}
         <div class="hh-kv hh-wide"><span>DATA TABLE</span>${mini(table.map((row) => row.map((c, i) => (i === hi && row === table[1] ? `<u>${c}</u>` : c))))}</div>
       </div>`
     const side = (cls: string, items: string[]) => `<div class="hh-side ${cls}">${items.join('')}</div>`
@@ -94,7 +96,7 @@ export class HoloHud {
         ${kv('SCALE', `${Math.round(scaleKm).toLocaleString('en-US')} KM`)}
         <div class="hh-spacer"></div>
         ${kv('TRS', `0${int(1, 10)} / + / 0${int(1, 10)}`)}
-        ${kv('PRM', `${int(100, 1000)}-RW`)}
+        ${kv('PRM', idc(`${int(100, 1000)}-RW`))}
       </div>`
     this.el.innerHTML = `
       <div class="hh-cross-h"></div><div class="hh-cross-v"></div><div class="hh-cross-c"></div>
@@ -132,7 +134,7 @@ export class HoloHud {
     this.target.classList.add('on')
     this.target.classList.toggle('pinned', t.pinned)
     this.target.innerHTML = `
-      <div class="hh-target-head"><span>${t.pinned ? 'TARGET LOCKED' : 'TARGET'}</span><span>UID ${esc(t.uid)}</span></div>
+      <div class="hh-target-head"><span>${t.pinned ? 'TARGET LOCKED' : 'TARGET'}</span><span>UID <span class="hh-code">${esc(t.uid)}</span></span></div>
       <div class="hh-target-name">${esc(t.name)}</div>
       <dl>${t.rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`
   }
