@@ -45,7 +45,7 @@ import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
 import { blindAlleys, buildField, fieldTraits, joinEnds, traceStreamlines, type CityField } from './tensor'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
-import { addBoat, addPier, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
+import { addBoat, addPier, alongRoad, eastCompound, fit, plaza, scatterTrees, urban } from './wards'
 import { calibrateTrades, perHome, residentsOf } from './people'
 import { groupForm, outMark, overlaps, piece, schedule, snapshot, stamp, statsOf, type Form, type HistoryState, type Piece, type SettlementHistory } from './history'
 import * as dmath from '../gen/dmath'
@@ -1963,13 +1963,6 @@ interface WardStage {
 /** 城里修了街的住人街坊（见 townStreets）：街巷就是那些街，片区之间不再留出路面 */
 function sealedWard(S: WardStage, pa: Patch) {
   return !S.small && !pa.planned && livedInner(pa)
-}
-
-/** 边 v→w 上有路顺着走：三个取样点至少两个挨着走廊（横穿过去的街只碰到一个） */
-function alongRoad(ctx: Ctx, v: P, w: P) {
-  let n = 0
-  for (const t of [0.2, 0.5, 0.8]) if (ctx.corridors.hits(lerpP(v, w, t), 1.5) && ++n === 2) return true
-  return false
 }
 
 /** 城里住人的片区（宫城除外）：townStreets 在这些片区里修街 */
