@@ -18,21 +18,65 @@ export function fitTo(el: HTMLElement, view: PanView, size: { width: number; hei
 /** 在 el 上接好拖动与滚轮；view 原地修改，改完调用 apply。fit 给出时双击适配 */
 export function bindPanZoom(el: HTMLElement, view: PanView, apply: () => void, o: { min: number; max: number; fit?: () => void }) {
   let drag: { x: number; y: number; vx: number; vy: number } | null = null
+  // 触屏双指：按下的手指位置；两指时以两指中点为中心缩放，同时跟着中点平移
+  const touches = new Map<number, { x: number; y: number }>()
+  let pinch: { d: number; cx: number; cy: number } | null = null
+  const pinchOf = () => {
+    const [a, b] = [...touches.values()]
+    const r = el.getBoundingClientRect()
+    return { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), cx: (a.x + b.x) / 2 - r.left, cy: (a.y + b.y) / 2 - r.top }
+  }
+  /** 剩一根手指（或松开第二指）时，从它当前位置接着单指拖动，免得地图跳一下 */
+  const restartDrag = () => {
+    const p = [...touches.values()][0]
+    drag = p ? { x: p.x, y: p.y, vx: view.x, vy: view.y } : null
+  }
   el.addEventListener('pointerdown', (e) => {
+    el.setPointerCapture(e.pointerId)
+    if (e.pointerType === 'touch') {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (touches.size === 2) {
+        pinch = pinchOf()
+        drag = null
+        return
+      }
+      if (touches.size > 2) return
+    }
     drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }
     el.classList.add('dragging')
-    el.setPointerCapture(e.pointerId)
   })
   el.addEventListener('pointermove', (e) => {
+    if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pinch && touches.size === 2) {
+      const p = pinchOf()
+      const nk = Math.min(o.max, Math.max(o.min, (view.k * p.d) / pinch.d))
+      // 先跟着中点平移，再以新中点为中心缩放
+      view.x += p.cx - pinch.cx
+      view.y += p.cy - pinch.cy
+      view.x = p.cx - ((p.cx - view.x) * nk) / view.k
+      view.y = p.cy - ((p.cy - view.y) * nk) / view.k
+      view.k = nk
+      pinch = p
+      apply()
+      return
+    }
     if (!drag) return
     view.x = drag.vx + e.clientX - drag.x
     view.y = drag.vy + e.clientY - drag.y
     apply()
   })
-  el.addEventListener('pointerup', () => {
+  const up = (e: PointerEvent) => {
+    if (touches.delete(e.pointerId) && touches.size) {
+      pinch = touches.size === 2 ? pinchOf() : null
+      if (!pinch) restartDrag()
+      return
+    }
+    pinch = null
     drag = null
     el.classList.remove('dragging')
-  })
+  }
+  el.addEventListener('pointerup', up)
+  el.addEventListener('pointercancel', up)
   el.addEventListener(
     'wheel',
     (e) => {

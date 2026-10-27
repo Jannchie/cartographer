@@ -16,6 +16,7 @@ import WorldStage from './world/WorldStage.vue'
 import Library from './world/Library.vue'
 import * as W from './world/world'
 import { ws } from './world/world'
+import { narrow, useSheet } from './sheet'
 
 // 导出格式：纸图才有矢量版本
 const worldExports = computed(() => [
@@ -66,8 +67,12 @@ function onFile(e: Event) {
 }
 // 侧边栏宽度：拖右缘调节，双击恢复默认；记住上次的宽度
 const PANEL_W = 320
-const clampW = (w: number) => Math.round(Math.min(Math.max(280, w), Math.max(280, Math.min(640, window.innerWidth * 0.5))))
-const panelW = ref(clampW(Number(storeGet('panelWidth')) || PANEL_W))
+// 存的是想要的宽度，显示时才按窗口宽度夹住：窗口一时变窄（转屏、窄屏打开）不会把它永久压小
+const vw = ref(window.innerWidth)
+window.addEventListener('resize', () => (vw.value = window.innerWidth))
+const clampW = (w: number) => Math.round(Math.min(Math.max(280, w), Math.max(280, Math.min(640, vw.value * 0.5))))
+const panelW = ref(Number(storeGet('panelWidth')) || PANEL_W)
+const shownW = computed(() => clampW(panelW.value))
 const resizing = ref(false)
 function onResizeDown(e: PointerEvent) {
   if (e.button !== 0) return
@@ -83,7 +88,7 @@ function endResize() {
   commitWidth()
 }
 function resetWidth() {
-  panelW.value = clampW(PANEL_W)
+  panelW.value = PANEL_W
   commitWidth()
 }
 /** 松手后记下宽度，并让舞台按新尺寸重新适配（与窗口缩放同一套处理） */
@@ -91,7 +96,21 @@ function commitWidth() {
   storeSet('panelWidth', String(panelW.value))
   requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
 }
-window.addEventListener('resize', () => (panelW.value = clampW(panelW.value)))
+
+// 窄屏：侧边栏成了底部抽屉（见 sheet.ts）
+const panel = ref<HTMLElement>()
+const sheet = useSheet(panel)
+const appStyle = computed(() =>
+  narrow.value ? { '--sheet-h': `${sheet.live.value}px`, '--stage-b': `${sheet.stage.value}px` } : { '--panel-w': `${shownW.value}px` },
+)
+function pickWorldTab(tab: W.WorldTab) {
+  W.setTab(tab)
+  if (narrow.value) sheet.reveal()
+}
+function pickSettleTab(tab: S.SettleTab) {
+  S.setTab(tab)
+  if (narrow.value) sheet.reveal()
+}
 watchEffect(() => {
   document.documentElement.lang = langRef.value === 'zh' ? 'zh-CN' : langRef.value
   document.title = t('Cartographer · 世界地图生成器')
@@ -102,8 +121,22 @@ watchEffect(() => {
 <template>
   <Home v-show="app.module === 'home'" @open="openLibrary" />
   <Library @import="openFile" />
-  <div v-show="app.module !== 'home'" class="app" :class="{ resizing }" :style="{ '--panel-w': `${panelW}px` }">
-    <aside class="panel">
+  <div v-show="app.module !== 'home'" class="app" :class="{ resizing, [`sheet-${sheet.snap.value}`]: narrow, 'sheet-drag': sheet.dragging.value }" :style="appStyle">
+    <aside ref="panel" class="panel">
+      <!-- 窄屏抽屉的把手：拖动换档，轻点开合 -->
+      <div
+        class="sheet-grip"
+        role="button"
+        :aria-label="t(sheet.snap.value === 'peek' ? '展开面板' : '收起面板')"
+        :aria-expanded="sheet.snap.value !== 'peek'"
+        @pointerdown="sheet.onDown"
+        @pointermove="sheet.onMove"
+        @pointerup="sheet.onUp"
+        @pointercancel="sheet.onUp"
+        @lostpointercapture="sheet.onUp"
+      >
+        <i aria-hidden="true"></i>
+      </div>
       <header class="masthead">
         <div class="masthead-top">
           <button type="button" class="wordmark" :title="t('回到首页')" @click="app.module = 'home'">Cartographer</button>
@@ -113,8 +146,8 @@ watchEffect(() => {
             <LangSelect />
           </div>
         </div>
-        <PanelTabs v-if="app.module === 'world'" :tabs="worldTabs" :model-value="ws.tab" @update:model-value="W.setTab" />
-        <PanelTabs v-else :tabs="settleTabs" :model-value="S.ss.tab" @update:model-value="S.setTab" />
+        <PanelTabs v-if="app.module === 'world'" :tabs="worldTabs" :model-value="ws.tab" @update:model-value="pickWorldTab" />
+        <PanelTabs v-else :tabs="settleTabs" :model-value="S.ss.tab" @update:model-value="pickSettleTab" />
       </header>
       <div class="panel-scroll">
         <WorldPanel v-show="app.module === 'world'" />
@@ -148,6 +181,8 @@ watchEffect(() => {
         @dblclick="resetWidth"
       ></div>
     </aside>
+    <!-- 全屏抽屉盖住舞台时，点露出的那截地图收起抽屉 -->
+    <div v-if="narrow && sheet.snap.value === 'full'" class="sheet-scrim" @click="sheet.setSnap('half')"></div>
     <WorldStage v-show="app.module === 'world'" />
     <SettlementStage v-show="app.module === 'settlement'" />
   </div>
