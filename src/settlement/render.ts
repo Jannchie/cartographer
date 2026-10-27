@@ -10,6 +10,7 @@ import { tr } from '../i18n'
 import { regionShown, type SettleRegion } from './regions'
 import * as dmath from '../gen/dmath'
 import { GLYPH_R, HALO_RATIO, LABEL_PAD, labelPx } from '../render/atlas/labelSize'
+import { chromeFit, chromeTop, type InsetOf } from '../render/atlas/svg/inset'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -1648,13 +1649,18 @@ function compass(list: DisplayList, th: SettleTheme, X: number, Y: number, MW: n
   list.text('page', { t: 'N', x: nx, y: ny - 42, font: `600 14px ${th.font.title}`, align: 'middle', baseline: 'central', fill: { color: th.label.color, alpha: 1 }, opacity: 1, bbox: [nx - 10, ny - 52, nx + 10, ny - 32] })
 }
 
-/** 纸边到图框内框的距离 */
+/** 纸边到图框内框的距离（窄舞台上按 chromeFit 收紧） */
 const RIM = 30
+const rimAt = (w: number) => Math.round(RIM * chromeFit(w))
 /**
  * 浏览器里图框内框离舞台边的最小距离：外面还有一圈纸（RIM）和暗色桌面；上边让出"地图 / 区域"的页签，底边多留，放成长时间轴与操作提示。
  * 地图比可用区域小时（缩小了），图框贴着地图收拢，见 AtlasViewer 的图框模式。
  */
-export const SETTLE_FRAME_INSET = { t: 34 + RIM, r: 20 + RIM, b: 76 + RIM, l: 20 + RIM }
+export const SETTLE_FRAME_INSET: InsetOf = (w) => {
+  const R = rimAt(w)
+  const side = Math.round(8 + 12 * chromeFit(w)) + R
+  return { t: chromeTop(w) + R, r: side, b: 76 + R, l: side }
+}
 
 /**
  * 浏览器里固定不动的图廓层（见 AtlasViewer 的图框模式）：纸边、图框、标题、指北针、比例尺、区划图例
@@ -1677,7 +1683,8 @@ export function buildSettlementChrome(
   const { x, y } = box
   // 纸：内框外的一圈
   const band = (a: number, b: number, c: number, d: number) => `M${a} ${b}H${c}V${d}H${a}Z`
-  const [x0, y0, x1, y1] = [x - RIM, y - RIM, x + box.w + RIM, y + box.h + RIM]
+  const R = rimAt(w)
+  const [x0, y0, x1, y1] = [x - R, y - R, x + box.w + R, y + box.h + R]
   list.path('page', band(x0, y0, x1, y) + band(x0, y + box.h, x1, y1) + band(x0, y, x, y + box.h) + band(x + box.w, y, x1, y + box.h), {
     fill: { color: th.paper, alpha: 1 },
   })

@@ -2,6 +2,7 @@ import type { DisplayList } from './displayList'
 import { LABEL_SHRINK, MIN_LABEL_PX } from '../labelSize'
 import { clamp } from '../../../gen/util'
 import { cpuContext, TileCache } from './tiles'
+import type { InsetOf } from './inset'
 
 export interface Box {
   x: number
@@ -47,7 +48,7 @@ export class AtlasViewer {
   private wrap = document.createElement('div')
   private chromeCanvas = document.createElement('canvas')
   private chrome: Chrome | null = null
-  private inset: Inset = { t: 0, r: 0, b: 0, l: 0 }
+  private inset: InsetOf = { t: 0, r: 0, b: 0, l: 0 }
   private chromeRaf = 0
   private list: DisplayList | null = null
   private baseScale = 1
@@ -89,7 +90,7 @@ export class AtlasViewer {
   }
 
   /** 开关图框模式；backdrop 是图框里、地图范围以外的底色 */
-  setChrome(make: Chrome | null, backdrop = 'transparent', inset: Inset = { t: 0, r: 0, b: 0, l: 0 }) {
+  setChrome(make: Chrome | null, backdrop = 'transparent', inset: InsetOf = { t: 0, r: 0, b: 0, l: 0 }) {
     this.inset = inset
     // 进出图框模式时底图要重画（图框模式下底图不含图廓）
     const toggled = !!make !== !!this.chrome
@@ -121,7 +122,7 @@ export class AtlasViewer {
     const w = this.host.clientWidth
     const h = this.host.clientHeight
     if (!this.chrome) return { x: 0, y: 0, w, h }
-    const s = this.inset
+    const s = typeof this.inset === 'function' ? this.inset(w, h) : this.inset
     return { x: s.l, y: s.t, w: Math.max(40, w - s.l - s.r), h: Math.max(40, h - s.t - s.b) }
   }
 

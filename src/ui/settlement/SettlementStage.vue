@@ -57,8 +57,8 @@ const hint = computed(() =>
     </div>
     <div class="neatline" aria-hidden="true"></div>
     <nav class="tabs" role="tablist">
-      <button v-for="m in MODES" :key="m.id" type="button" role="tab" :aria-selected="ss.mode === m.id" :class="{ on: ss.mode === m.id }" @click="setMode(m.id)">
-        <Icon :icon="m.icon" :size="16" />{{ t(m.label) }}
+      <button v-for="m in MODES" :key="m.id" type="button" role="tab" :aria-selected="ss.mode === m.id" :class="{ on: ss.mode === m.id }" :title="t(m.label)" @click="setMode(m.id)">
+        <Icon :icon="m.icon" :size="16" /><span>{{ t(m.label) }}</span>
       </button>
     </nav>
     <SettlementTimeline />
