@@ -172,8 +172,11 @@ const FRAG_BODY = /* glsl */ `
       float sl = length(dh);
       vec2 d = sl > 1e-3 ? dh / sl : vec2(0.0, 1.0);
       vec2 tr = vec2(-d.y, d.x);
-      float along = dot(vLocal.xz, tr);
-      float down = dot(vLocal.xz, d) / max(abs(N.y), 0.3);
+      // 旋转体的屋面（圆锥、半锥）：横坡坐标用顶点给的方位角 × 半径；按坐标的像素足迹淡出（近顶处瓦列收拢）
+      bool rot = vUv.y < -0.5;
+      float along = rot ? vUv.x : dot(vLocal.xz, tr);
+      float down = rot ? -vLocal.y / max(sl, 0.3) : dot(vLocal.xz, d) / max(abs(N.y), 0.3);
+      gAA = max(gAA, max(fwidth(along), fwidth(down)) * 0.7);
       float age = vnoise(vLocal.xz * 0.45 + vSeed * 5.0);
       float streak = vnoise(vec2(along * 1.7 + vSeed * 3.0, down * 0.22));
       if (m == 1.0) {
@@ -207,9 +210,11 @@ const FRAG_BODY = /* glsl */ `
       } else if (m == 2.0) {
         // 东亚筒瓦：板瓦沟与筒瓦垄顺坡而下，筒瓦每节有接缝
         float tw = 0.3;
-        float k = fadeP(tw);
+        // 筒瓦垄的边按像素足迹放宽（硬边在中景的斜坡上出摩尔纹），淡出也比别的纹样早
+        float k = 1.0 - smoothstep(0.1, 0.25, gAA / tw);
         float c = fract(along / tw) - 0.5;
-        float cover = 1.0 - smoothstep(0.16, 0.2, abs(c));
+        float ew = max(0.02, gAA / tw);
+        float cover = 1.0 - smoothstep(0.18 - ew, 0.18 + ew, abs(c));
         float prof = mix(-0.4 * cos(c * 3.14159), cos(clamp(c / 0.2, -1.0, 1.0) * 1.5708), cover);
         float joint = edgeMask(abs(fract(down / 0.36) - 0.5) * 0.36, 0.012, aa) * cover * fine;
         float tone = 0.9 + 0.2 * hash12(vec2(floor(along / tw), floor(down / 0.36)) + vSeed);
@@ -286,10 +291,11 @@ const FRAG_BODY = /* glsl */ `
       // —— 墙面：沿墙坐标 x（米）、离地高度 y ——
       vec2 tg = vec2(N.z, -N.x) / max(length(N.xz), 1e-4);
       float Lraw = vUv.y;
-      float sty = floor(Lraw / 1024.0 + 0.002);
+      float sty = max(floor(Lraw / 1024.0 + 0.002), 0.0);
       float L = Lraw - sty * 1024.0;
       bool hasL = Lraw > 0.1;
-      float x = hasL ? vUv.x : dot(vLocal.xz, tg);
+      // 旋转体（vUv.y = −1）的横向坐标是方位角 × 半径
+      float x = hasL || Lraw < -0.5 ? vUv.x : dot(vLocal.xz, tg);
       float y = vLocal.y - vBase - 0.6;
       vec2 p = vec2(x, y);
       float storey = uStorey;
@@ -343,11 +349,13 @@ const FRAG_BODY = /* glsl */ `
         gBump -= j * 0.01 * k;
       } else if (m == 27.0) {
         // 土坯、夯土：一版一版的夯层，掺着草秆与小石
-        float k = fadeP(0.5);
-        float lay = edgeMask(gridD(y + 0.04 * vnoise(vec2(x * 0.8, 3.0)), 0.5), 0.012, aa);
-        col *= (0.88 + 0.22 * vnoise(p * 1.3 + vSeed * 9.0)) * mix(1.0, 1.0 - 0.14 * lay, k);
+        // 夯层约 0.7 米一版：层线不规则、柔和，各版的土色略有深浅（细而硬的层线近看像木板墙）
+        float k = fadeP(0.7);
+        float yl = y + 0.25 * (vnoise(vec2(x * 0.3, 3.0 + vSeed)) - 0.5);
+        float lay = edgeMask(gridD(yl, 0.72), 0.05, aa) * smoothstep(0.3, 0.7, vnoise(vec2(x * 0.5, floor(yl / 0.72) * 3.1)));
+        float lift = hash12(vec2(floor(yl / 0.72), vSeed * 7.0));
+        col *= (0.86 + 0.26 * vnoise(p * vec2(0.9, 1.6) + vSeed * 9.0)) * mix(1.0, (0.95 + 0.08 * lift) * (1.0 - 0.05 * lay), k);
         col *= mix(1.0, 0.92 + 0.16 * vnoise(p * 9.0), fine);
-        gBump -= lay * 0.006 * k;
         gRough = 0.95;
       } else if (m == 26.0) {
         // 白石：须弥座的几道线脚；带栏杆的（样式非 0）顶上一段是望柱与栏板
@@ -601,7 +609,30 @@ const FRAG_BODY = /* glsl */ `
         }
       } else if (sty == 3.0 || sty == 4.0) {
         // 教堂的尖拱长窗（每开间一扇）；高侧窗只占墙顶一段
-        if (win && nb > 0.0 && H > 4.5) {
+        if (win && nb > 0.0 && H > 4.5 && uCulture > 2.5) {
+          // 伊斯兰：墙高处一排不大的尖拱窗，窗洞里是石膏的几何花格（嵌少许彩色玻璃），不是教堂的长窗
+          float wh = clamp(H * 0.24, 1.5, 3.4);
+          float y1 = H - max(1.1, H * 0.12);
+          float hwv = min(bw * 0.16, 0.32 + wh * 0.1);
+          vec2 q = vec2(px, y - (y1 - wh));
+          vec2 qi;
+          float arch = hash12(vec2(vSeed, 4.4)) > 0.5 ? 3.0 : 1.0;
+          vec3 hh = hole(q, hwv, wh, arch, 0.35, qi);
+          float fr = hh.y * smoothstep(-0.06 - aa, -0.06 + aa, holeD(qi, hwv, wh, arch));
+          // 花格：两组斜线交成菱格
+          vec2 g = vec2(qi.x + qi.y, qi.x - qi.y) * 0.7071;
+          float grille = edgeMask(min(gridD(g.x, 0.24), gridD(g.y, 0.24)), 0.025, aa) * fadeP(0.24);
+          float hc = hash12(floor(g / 0.24) + vSeed * 3.0);
+          vec3 gc = mix(vec3(0.03, 0.03, 0.035), hc < 0.25 ? vec3(0.06, 0.12, 0.16) : hc < 0.4 ? vec3(0.16, 0.1, 0.03) : vec3(0.035), fine);
+          vec3 wc = mix(gc, col * 1.02, max(fr, grille * 0.85));
+          col = mix(col, mix(col * 0.9 * hh.z, wc, hh.y), hh.x * coarse);
+          // 窗套：洞口外一圈浅的线脚
+          float mould = edgeMask(abs(holeD(q, hwv, wh, arch) - 0.08), 0.045, aa) * (1.0 - hh.x);
+          col *= 1.0 + 0.08 * mould * mid;
+          gBump += mould * 0.02 * mid;
+          lit = hh.y * (1.0 - max(fr, grille)) * 0.45 * coarse;
+          col *= mix(0.95, 1.0, coarse);
+        } else if (win && nb > 0.0 && H > 4.5) {
           float wh = sty == 4.0 ? clamp(H * 0.26, 2.2, 7.0) : clamp(H * 0.55, 2.4, 14.0);
           float y1 = H - max(0.9, H * 0.07);
           float hwv = min(bw * 0.24, 0.5 + wh * 0.11);

@@ -1107,6 +1107,24 @@ export function lathe(w: Writer, c: P, y: number, prof: readonly (readonly [numb
     const b = a0 + ((a1 - a0) * i) / n
     return [Math.cos(b), Math.sin(b)]
   })
+  // 立面坐标：(方位角 × 最大半径, −1, 0)。着色器在旋转体上用它当横向坐标（按世界坐标量的横向坐标随法线转动，近顶处出摩尔纹）
+  const own = !w.uvOf
+  let R = 0
+  for (const q of prof) R = Math.max(R, q[0])
+  let bm = 0
+  const uv: [number, number, number] = [0, -1, 0]
+  if (own)
+    w.uvOf = (p) => {
+      const dx = p[0] - c[0]
+      const dz = p[2] - c[1]
+      let t = bm
+      if (dx * dx + dz * dz > 1e-8) {
+        t = Math.atan2(dz, dx) - bm
+        t = bm + t - Math.round(t / (Math.PI * 2)) * Math.PI * 2
+      }
+      uv[0] = t * R
+      return uv
+    }
   for (let j = 0; j < m - 1; j++) {
     const [r0, h0] = prof[j]
     const [r1, h1] = prof[j + 1]
@@ -1118,6 +1136,7 @@ export function lathe(w: Writer, c: P, y: number, prof: readonly (readonly [numb
     for (let i = 0; i < n; i++) {
       const [c0, s0] = cs[i]
       const [c1, s1] = cs[i + 1]
+      bm = a0 + ((a1 - a0) * (i + 0.5)) / n
       const p00: V3 = [c[0] + c0 * r0, y + h0, c[1] + s0 * r0]
       const p01: V3 = [c[0] + c1 * r0, y + h0, c[1] + s1 * r0]
       const p10: V3 = [c[0] + c0 * r1, y + h1, c[1] + s0 * r1]
@@ -1130,6 +1149,7 @@ export function lathe(w: Writer, c: P, y: number, prof: readonly (readonly [numb
       w.triN(p00, p11, p10, n00, n11, n10)
     }
   }
+  if (own) w.uvOf = null
 }
 
 /** 圆柱（或圆台）：自 y0 到 y1，半径 r0 → r1，光滑法线；top 为真时封顶 */
