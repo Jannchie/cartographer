@@ -34,12 +34,34 @@ const COMPOSITE_FRAG = /* glsl */ `
   uniform float uFogHeight;
   uniform vec4 uBox;
   uniform vec4 uSub;
+  uniform sampler2D uAO;
+  uniform float uAoAmt;
+  uniform vec2 uAoPx;
+  uniform float uAoKey;
   varying vec2 vUv;
+  float aoKey(vec4 c) { return c.g * 65280.0 + c.b * 255.0; }
   void main() {
     vec2 suv = min(vUv * uSub.xy, uSub.zw);
     vec4 s = texture2D(uScene, suv);
     vec3 col = s.rgb;
     float depth = texture2D(uDepth, suv).r;
+    if (uAoAmt > 0.0 && depth < 0.9999 && s.a > 0.0) {
+      // 环境光遮蔽：3×3 的保边模糊（深度相近的邻点才参与），抹掉逐像素旋转取样的噪点
+      vec4 c0 = texture2D(uAO, suv);
+      float k0 = aoKey(c0);
+      float acc = c0.r;
+      float wsum = 1.0;
+      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+        if (i == 0 && j == 0) continue;
+        vec4 c = textureLod(uAO, min(suv + vec2(float(i), float(j)) * uAoPx, uSub.zw), 0.0);
+        float w = max(0.0, 1.0 - abs(aoKey(c) - k0) * uAoKey);
+        acc += c.r * w;
+        wsum += w;
+      }
+      // 遮蔽只该压暗环境光：直射光照亮的地方（亮的像素）少压一些，夜里的窗灯不受影响
+      float lum = max(col.r, max(col.g, col.b));
+      col *= mix(1.0, acc / wsum, uAoAmt * (1.0 - 0.55 * smoothstep(0.08, 0.7, lum)));
+    }
     if (depth < 0.9999 && s.a > 0.0 && uHazeDensity + uFogDensity > 0.0) {
       // 由深度重建世界坐标
       vec2 ndc = vUv * 2.0 - 1.0;
@@ -77,6 +99,73 @@ const COMPOSITE_FRAG = /* glsl */ `
     // 云（预乘，没有云时绑定的是透射率为 1 的空纹理）叠在最上面；背景保持透明
     vec4 c = texture2D(uClouds, min(vUv * uCloudSub.xy, uCloudSub.zw));
     gl_FragColor = vec4(col * c.a + c.rgb, 1.0 - (1.0 - s.a) * c.a);
+  }
+`
+
+/**
+ * 环境光遮蔽（McGuire 的 Scalable Ambient Obscurance）：由深度重建视空间位置与法线，
+ * 在屏幕上沿螺线取若干点，按"邻点高出切平面多少、离得多近"累加遮蔽。
+ * 螺线每像素转一个角度、每个累积帧再转一次：单帧靠合成时的保边模糊，静止后由时间累积收敛。
+ * 取样半径按世界尺寸给，换算到屏幕后有上下限：远看时半径不足几个像素，就按像素下限放大（并随之减弱），
+ * 成片的房子之间仍有一层淡淡的压暗；贴近时不超过上限，取样不至于太散。
+ * 输出：r 为遮蔽（1 = 不遮），gb 为 16 位的对数深度（供合成时的保边模糊比较，不必再读深度图）
+ */
+const AO_FRAG = /* glsl */ `
+  uniform sampler2D uDepth;
+  uniform mat4 uInvProj;
+  uniform vec4 uSub;
+  uniform vec2 uPx;
+  uniform float uRadius;
+  uniform float uProj;
+  uniform float uIntensity;
+  uniform float uSeed;
+  uniform float uNear;
+  uniform float uFar;
+  uniform vec2 uPxRange;
+  varying vec2 vUv;
+  float rawDepth(vec2 uv) { return textureLod(uDepth, min(uv * uSub.xy, uSub.zw), 0.0).r; }
+  vec3 viewPos(vec2 uv, float d) {
+    vec4 p = uInvProj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    return p.xyz / p.w;
+  }
+  vec3 viewAt(vec2 uv) { return viewPos(uv, rawDepth(uv)); }
+  void main() {
+    float d0 = rawDepth(vUv);
+    if (d0 >= 0.99999) { gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); return; }
+    vec3 P = viewPos(vUv, d0);
+    float z = -P.z;
+    // 法线：每个方向取深度更接近的那一侧求差分，边缘上不会跨到别的表面
+    vec3 l = viewAt(vUv - vec2(uPx.x, 0.0));
+    vec3 r = viewAt(vUv + vec2(uPx.x, 0.0));
+    vec3 b = viewAt(vUv - vec2(0.0, uPx.y));
+    vec3 t = viewAt(vUv + vec2(0.0, uPx.y));
+    vec3 dx = abs(l.z - P.z) < abs(r.z - P.z) ? P - l : r - P;
+    vec3 dy = abs(b.z - P.z) < abs(t.z - P.z) ? P - b : t - P;
+    vec3 N = normalize(cross(dx, dy));
+    float want = uRadius * uProj / z;
+    float rpx = clamp(want, uPxRange.x, uPxRange.y);
+    float R = rpx * z / uProj;
+    // 半径被像素下限放大得越多越弱；深度缓冲的精度不够分辨这个半径时（贴地平视的远处）也淡出
+    float k = uIntensity * (1.0 - smoothstep(3.0, 9.0, R / uRadius));
+    k *= 1.0 - smoothstep(0.04, 0.25, z * z / (uNear * 8.0e6) / R);
+    float ao = 1.0;
+    if (k > 0.0) {
+      float phi = (fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) + uSeed) * 6.2831853;
+      float sum = 0.0;
+      float R2 = R * R;
+      for (int i = 0; i < 10; i++) {
+        float a = (float(i) + 0.5) / 10.0;
+        float ang = phi + a * 6.2831853 * 3.0;
+        vec3 v = viewAt(vUv + vec2(cos(ang), sin(ang)) * (a * rpx) * uPx) - P;
+        float vv = dot(v, v);
+        float f = max(R2 - vv, 0.0);
+        sum += f * f * f * max((dot(v, N) - 0.03 * R) / (vv + 0.01 * R2), 0.0);
+      }
+      ao = max(0.0, 1.0 - k * 0.5 * sum * R / (R2 * R2 * R2));
+    }
+    float key = floor(clamp(log2(z / uNear) / log2(uFar / uNear), 0.0, 1.0) * 65535.0 + 0.5);
+    float hi = floor(key / 256.0);
+    gl_FragColor = vec4(ao, hi / 255.0, (key - hi * 256.0) / 255.0, 1.0);
   }
 `
 
@@ -360,7 +449,8 @@ export class PostPipeline {
   private bloomLevels = 6
   /** 上一帧的渲染缩放：变了就重新累积（不把低清帧混进成片） */
   private lastScale = 1
-  private sub = new THREE.Vector4(1, 1, 1, 1)
+  /** 上一帧实际渲染的子区域（uSub 的格式）：在场景深度图上取样的外部 pass（自动对焦）要用 */
+  readonly sub = new THREE.Vector4(1, 1, 1, 1)
 
   constructor() {
     this.sceneRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
@@ -385,6 +475,10 @@ export class PostPipeline {
       uFogHeight: { value: 0.5 },
       uBox: { value: new THREE.Vector4(-1e4, -1e4, 1e4, 1e4) },
       uSub: { value: this.sub },
+      uAO: { value: this.empty },
+      uAoAmt: { value: 0 },
+      uAoPx: { value: new THREE.Vector2() },
+      uAoKey: { value: 1 },
     })
     this.dof = mat(DOF_FRAG, {
       uColor: { value: this.hdrRT.texture },
@@ -448,6 +542,51 @@ export class PostPipeline {
     this.aberration = k.aberration
     u.uAberration.value = (k.aberration * this.h) / 1000
   }
+  /**
+   * 环境光遮蔽（默认关：世界沙盘的地表是连续的高度场，不需要；聚落沙盘的房子、树要靠它接地）。
+   * radius：取样半径（世界单位）；intensity：强度；amount：压暗的比例 0~1。传 null 关掉并释放渲染目标
+   */
+  setAO(o: { radius: number; intensity: number; amount: number } | null) {
+    if (!o) {
+      this.aoRT?.dispose()
+      this.aoRT = null
+      this.aoMat?.dispose()
+      this.aoMat = null
+      this.comp.uniforms.uAoAmt.value = 0
+      this.comp.uniforms.uAO.value = this.empty
+      this.reset()
+      return
+    }
+    if (!this.aoRT) {
+      this.aoRT = new THREE.WebGLRenderTarget(this.w, this.h, { depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter })
+      this.aoMat = new THREE.ShaderMaterial({
+        vertexShader: FS_VERT,
+        fragmentShader: AO_FRAG,
+        depthTest: false,
+        depthWrite: false,
+        uniforms: {
+          uDepth: { value: this.sceneRT.depthTexture },
+          uInvProj: { value: new THREE.Matrix4() },
+          uSub: { value: this.sub },
+          uPx: { value: new THREE.Vector2() },
+          uRadius: { value: 1 },
+          uProj: { value: 1 },
+          uIntensity: { value: 1 },
+          uSeed: { value: 0 },
+          uNear: { value: 0.1 },
+          uFar: { value: 1000 },
+          uPxRange: { value: new THREE.Vector2(4, 160) },
+        },
+      })
+      this.comp.uniforms.uAO.value = this.aoRT.texture
+    }
+    this.aoMat!.uniforms.uRadius.value = o.radius
+    this.aoMat!.uniforms.uIntensity.value = o.intensity
+    this.comp.uniforms.uAoAmt.value = o.amount
+    this.reset()
+  }
+  private aoRT: THREE.WebGLRenderTarget | null = null
+  private aoMat: THREE.ShaderMaterial | null = null
   private aberration = 0
   private ev = 0
   /** 曝光补偿（昼夜：夜里提亮），乘在观感的曝光上；只影响终合成，不打断累积 */
@@ -476,6 +615,7 @@ export class PostPipeline {
     this.h = h
     this.sceneRT.setSize(w, h)
     for (const rt of [this.hdrRT, this.dofRT, ...this.acc]) rt.setSize(w, h)
+    this.aoRT?.setSize(w, h)
     for (const rt of [...this.bloomRTs, ...this.bloomUp]) rt.dispose()
     this.bloomRTs = []
     this.bloomUp = []
@@ -530,7 +670,8 @@ export class PostPipeline {
     const sw = Math.max(1, Math.round(this.w * scale))
     const sh = Math.max(1, Math.round(this.h * scale))
     this.sub.set(sw / this.w, sh / this.h, (sw - 0.5) / this.w, (sh - 0.5) / this.h)
-    for (const rt of [this.sceneRT, this.hdrRT, this.dofRT]) {
+    for (const rt of [this.sceneRT, this.hdrRT, this.dofRT, this.aoRT]) {
+      if (!rt) continue
       rt.viewport.set(0, 0, sw, sh)
       rt.scissor.set(0, 0, sw, sh)
       rt.scissorTest = scale < 1
@@ -554,6 +695,22 @@ export class PostPipeline {
     cu.uInvProj.value.copy(camera.projectionMatrixInverse)
     cu.uCamWorld.value.copy(camera.matrixWorld)
     cu.uCamPos.value.setFromMatrixPosition(camera.matrixWorld)
+    if (this.aoRT && this.aoMat) {
+      timer?.begin('环境光遮蔽')
+      const au = this.aoMat.uniforms
+      au.uInvProj.value.copy(camera.projectionMatrixInverse)
+      au.uPx.value.set(1 / sw, 1 / sh)
+      // 视空间里 z = 1 处一个世界单位占的渲染像素数
+      au.uProj.value = (sh / 2) * camera.projectionMatrix.elements[5]
+      au.uSeed.value = (n * 0.61803398875) % 1
+      au.uNear.value = camera.near
+      au.uFar.value = camera.far
+      au.uPxRange.value.set(4 * scale * (this.h / 1000), 150 * scale * (this.h / 1000))
+      this.fs.render(renderer, this.aoMat, this.aoRT)
+      cu.uAoPx.value.set(1 / this.w, 1 / this.h)
+      // 保边模糊的深度门限：相对深度差约 3% 时权重降到零（对数深度的 16 位编码）
+      cu.uAoKey.value = Math.log2(camera.far / camera.near) / (65535 * Math.log2(1.03))
+    }
     timer?.begin('体积云')
     clouds?.render(renderer, camera, n, this.sub)
     cu.uClouds.value = clouds ? clouds.texture : this.empty
@@ -620,6 +777,8 @@ export class PostPipeline {
 
   dispose() {
     for (const rt of [this.sceneRT, this.hdrRT, this.dofRT, ...this.acc, ...this.bloomRTs, ...this.bloomUp]) rt.dispose()
+    this.aoRT?.dispose()
+    this.aoMat?.dispose()
     for (const m of [this.comp, this.dof, this.accMat, this.down, this.up, this.final]) m.dispose()
     this.fs.dispose()
     this.empty.dispose()

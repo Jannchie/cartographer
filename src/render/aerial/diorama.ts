@@ -200,13 +200,21 @@ function walnutMaterial(env: THREE.Texture) {
   return mat
 }
 
-/** 桌面：深色亚麻，光池外沉进暗处 */
-function tableMaterial(radius: number) {
+/** 弧形背景墙的参数（桌面材质与背景穹顶共用）：uCoveFall 为 0 时关闭 */
+interface CoveUniforms {
+  uCoveH: { value: THREE.Color }
+  uCoveTop: { value: THREE.Color }
+  uCoveFall: { value: number }
+}
+
+/** 桌面：深色亚麻，光池外沉进暗处；有弧形背景墙时，掠射角上映出背景墙的亮带（远处与背景接上，没有一道黑边） */
+function tableMaterial(radius: number, cove: CoveUniforms) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0 })
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uR = { value: radius }
+    Object.assign(sh.uniforms, cove)
     shadeByWorldPos(sh, {
-      fragDecl: 'uniform float uR;\nfloat gFall;',
+      fragDecl: 'uniform float uR;\nuniform vec3 uCoveH;\nuniform vec3 uCoveTop;\nuniform float uCoveFall;\nfloat gFall;',
       color: /* glsl */ `
         {
           // 亚麻织纹：经纬两向的细密起伏 + 粗细不匀的纱线
@@ -221,7 +229,16 @@ function tableMaterial(radius: number) {
           diffuseColor.rgb = c;
         }`,
     })
-    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', 'outgoingLight *= gFall;\n#include <opaque_fragment>')
+    sh.fragmentShader = sh.fragmentShader.replace(
+      '#include <opaque_fragment>',
+      /* glsl */ `outgoingLight *= gFall;
+      if (uCoveFall > 0.0) {
+        // 视线与桌面夹角的正弦；反射方向的仰角与它相同，背景墙在那个仰角上的亮度乘菲涅耳反射率
+        float ce = clamp(normalize(cameraPosition - vWp).y, 0.0, 1.0);
+        outgoingLight += mix(uCoveTop, uCoveH, exp(-ce / uCoveFall)) * (0.04 + 0.96 * pow(1.0 - ce, 5.0));
+      }
+      #include <opaque_fragment>`,
+    )
   }
   mat.customProgramCacheKey = () => 'table'
   return mat
@@ -292,6 +309,7 @@ export class Diorama {
   private env: THREE.Texture
   private pmrem: THREE.PMREMGenerator
   private sky = createSky()
+  private cove: CoveUniforms = { uCoveH: { value: new THREE.Color(0, 0, 0) }, uCoveTop: { value: new THREE.Color(0, 0, 0) }, uCoveFall: { value: 0 } }
 
   constructor(renderer: THREE.WebGLRenderer) {
     this.pmrem = new THREE.PMREMGenerator(renderer)
@@ -325,9 +343,34 @@ export class Diorama {
     u.uMoonK.value = moonUp * night
   }
 
+  /**
+   * 弧形背景墙（在 setSky 之后调用，覆盖它定下的背景色）：低机位平视时，地平线以上不是一片纯黑的虚空，
+   * 而是一面自下而上打光的展厅背景墙——贴地一条亮带（horizon），向上按 fall（仰角正弦的尺度）衰减到 top；
+   * 桌面在掠射角上映出这条亮带。glow 是太阳方位上的一团暖光（日出日落）。fall 为 0 时关闭，回到暗灰的展厅。
+   * 世界沙盘不调用这个方法，背景不变
+   */
+  setCove(horizon: THREE.Color, top: THREE.Color, fall: number, sunDir?: THREE.Vector3, glow?: THREE.Color) {
+    const u = this.sky.mat.uniforms
+    u.uCove.value = fall
+    this.cove.uCoveFall.value = fall
+    if (fall <= 0) return
+    u.uHorizon.value.copy(horizon)
+    u.uTop.value.copy(top)
+    this.cove.uCoveH.value.copy(horizon)
+    this.cove.uCoveTop.value.copy(top)
+    if (sunDir) u.uSun.value.copy(sunDir)
+    if (glow) u.uSunColor.value.copy(glow)
+    else u.uSunColor.value.setRGB(0, 0, 0)
+  }
+
   set time(t: number) {
     this.seaSection.uniforms.uTime.value = t
     this.sky.mat.uniforms.uTime.value = t
+  }
+
+  /** 桌面的高度（世界坐标；底座高 2.4、包边 0.14，见 build） */
+  get tableY() {
+    return this.content.position.y - 2.54
   }
 
   /** 岩层剖面底面高度（随垂直夸张变化） */
@@ -386,7 +429,7 @@ export class Diorama {
     // 桌面与接触阴影：桌面只铺到光池暗透的地方，再往外是展厅背景
     const tableY = -trim - hP
     const R = Math.max(PW, PD) * 1.05
-    const table = new THREE.Mesh(new THREE.PlaneGeometry(R * 8, R * 8).rotateX(-Math.PI / 2), tableMaterial(R))
+    const table = new THREE.Mesh(new THREE.PlaneGeometry(R * 8, R * 8).rotateX(-Math.PI / 2), tableMaterial(R, this.cove))
     table.position.y = tableY
     table.receiveShadow = true
     const ao = new THREE.Mesh(
