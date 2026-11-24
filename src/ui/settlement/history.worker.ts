@@ -28,7 +28,7 @@ self.onmessage = (e: MessageEvent<HistoryRequest>) => {
       for (const c of town.chunks) transfer.push(...[c.pos, c.nrm, c.col, c.uv, c.life, c.ids].map((a) => a.buffer as ArrayBuffer))
       for (const t of town.trees) transfer.push(t.data.buffer as ArrayBuffer)
       const r = town.terrain
-      transfer.push(...[r.pos, r.uv, r.nrm, r.idx, r.water].map((a) => a.buffer as ArrayBuffer))
+      transfer.push(...[r.pos, r.nrm, r.idx, r.carve, r.nrm2, r.wet, r.rim, r.shore].map((a) => a.buffer as ArrayBuffer))
       self.postMessage({ kind: 'town', seq: m.seq, town }, { transfer })
     } catch (err) {
       console.error(err)

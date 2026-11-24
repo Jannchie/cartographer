@@ -47,6 +47,13 @@ try {
   town.setActive(true)
   await town.setTown(hist, build, st, pop, (q.get('ground') ?? 'color') as SettleStyleId, { name: st.nameZh, sub: `${(st.width / 1000).toFixed(1)} 公里 · 种子 ${params.seed}` })
   const t3 = performance.now()
+  // 成长回放时的地面重画：换几个相邻的快照各重画一次，取耗时（首次含显示列表的构建，另记）
+  const tp = town as unknown as { paintGround(pop: number, st: unknown): void; paint: { cost: number } }
+  const paint: number[] = [tp.paint.cost]
+  for (const f of [0.96, 0.98, 1]) {
+    tp.paintGround(pop * f, snapshot(hist, pop * f))
+    paint.push(tp.paint.cost)
+  }
   const H = (x: number, z: number) => {
     const T = hist.st.terrain
     const i = Math.min(T.W - 1, Math.max(0, Math.round(x / T.cell)))
@@ -63,7 +70,7 @@ try {
       height: st.height,
       pop,
       until: hist.until,
-      ms: { history: t1 - t0, build: t2 - t1, scene: t3 - t2 },
+      ms: { history: t1 - t0, build: t2 - t1, scene: t3 - t2, paint },
       tris: build.tris,
       trees: build.trees.map((t) => [t.kind, t.count]),
       buildings: st.buildings.length,
