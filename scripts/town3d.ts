@@ -55,7 +55,7 @@ try {
   console.log(
     `${info.name} · ${info.width}×${info.height} 米 · 人口 ${info.pop} · 建筑 ${info.buildings} · 体块三角形 ${(info.tris / 1000).toFixed(0)}k · 树 ${info.trees.map((t) => `${t[0]} ${t[1]}`).join(' / ')}`,
   )
-  console.log(`成长史 ${info.ms.history.toFixed(0)} ms · 体块 ${info.ms.build.toFixed(0)} ms · 场景 ${info.ms.scene.toFixed(0)} ms · 类别 ${JSON.stringify(info.kinds)}`)
+  console.log(`成长史 ${info.ms.history.toFixed(0)} ms · 体块 ${info.ms.build.toFixed(0)} ms · 场景 ${info.ms.scene.toFixed(0)} ms · 地面重画 ${info.ms.paint.map((x: number) => x.toFixed(0)).join(' / ')} ms · 类别 ${JSON.stringify(info.kinds)}`)
 
   const W = info.width
   const D = info.height
