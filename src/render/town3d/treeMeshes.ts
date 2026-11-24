@@ -713,9 +713,9 @@ const bamboo: Make = (b) => {
       const t = 0.36 + (0.64 * (k + 0.6)) / tufts
       const p = t < 0.58 ? lerp3(base, mid, t / 0.58) : lerp3(mid, tip, (t - 0.58) / 0.42)
       // 叶团挂在秆的一侧，越往梢越小
-      const r = b.r(0.15, 0.22) * (1.15 - 0.4 * t)
+      const r = b.r(0.18, 0.27) * (1.15 - 0.4 * t)
       const sa = a + b.r(-1.6, 1.6)
-      b.lump(add(p, [Math.cos(sa) * r * 0.7, b.r(-0.08, 0.02), Math.sin(sa) * r * 0.7]), [r * 1.25, r * 0.6, r * 1.25], { amp: 0.32, round: 0.15, up: 0.3, level: -1 }, skip || (b.lod > 0 && k % 2 === 1))
+      b.lump(add(p, [Math.cos(sa) * r * 0.7, b.r(-0.08, 0.02), Math.sin(sa) * r * 0.7]), [r * 1.25, r * 0.6, r * 1.25], { amp: 0.32, round: 0.15, up: 0.3, level: -1 }, skip || (b.lod === 2 && k % 2 === 1))
     }
   }
 }

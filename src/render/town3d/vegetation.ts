@@ -785,7 +785,8 @@ function lowPlants(st: Settlement, low: Bag, env: LowEnv) {
   }
   st.fields.forEach((f, id) => {
     const bocage = culture === 'western' && f.kind === 'pasture' && ih(id, seed, 41) < 0.7
-    const kitchen = f.kind === 'garden' && ih(id, seed, 42) < 0.3
+    // 菜园的矮篱只有西式与和式的城边有（东方、伊斯兰的菜园是土埂与土墙）
+    const kitchen = f.kind === 'garden' && (culture === 'western' || culture === 'wa') && ih(id, seed, 42) < 0.2
     if (!bocage && !kitchen) return
     const v: Variety = bocage ? V.hedgerow : V.hedge
     const r = bocage ? 1.15 : 0.6

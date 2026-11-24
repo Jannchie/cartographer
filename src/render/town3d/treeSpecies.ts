@@ -62,6 +62,8 @@ export interface SpeciesSpec {
   leaf: { cell: number; stretch: number; erode: number; hole: number; rough: number }
   /** 朝向随实例给定（绿篱、藤架沿线排布），不按随机数转；也不做个体形变与高宽变化 */
   aligned?: boolean
+  /** 分层针叶的层数：远景回转体按它画出一层层明暗（与近景网格的层大致对上） */
+  tiers?: number
 }
 
 export const SPECIES: SpeciesSpec[] = [
@@ -104,6 +106,7 @@ export const SPECIES: SpeciesSpec[] = [
     lean: 0.003,
     warp: 0.03,
     leaf: { cell: 0.16, stretch: 0.8, erode: 0.8, hole: 0.08, rough: 0.9 },
+    tiers: 5,
   },
   // pine
   {

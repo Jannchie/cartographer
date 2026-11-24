@@ -302,6 +302,8 @@ const FAR_VERT_PARS = /* glsl */ `
   /** 各树形：树干半径、轮廓的参差、倾斜量、朝向固定 */
   uniform vec4 uSpec[${NS}];
   uniform vec3 uBark[${NS}];
+  /** 各树形分层针叶的层数（0 为不分层） */
+  uniform float uTier[${NS}];
 `
 /** 摆放：算出 tPos、tn（单位树的法线）、tAoV、tPart（1 树干）、tTipV、tTone、lk、tFade */
 const FAR_PLACE = /* glsl */ `
@@ -348,6 +350,7 @@ const FAR_PLACE = /* glsl */ `
 const FAR_FRAG_PARS = /* glsl */ `
   ${FRAG_COMMON}
   varying vec3 vFar;
+  varying float vTier;
 `
 const FAR_FRAG_COLOR = /* glsl */ `
   ${FADE_FRAG}
@@ -355,6 +358,12 @@ const FAR_FRAG_COLOR = /* glsl */ `
   float tLeafM = 1.0 - vFar.y;
   float tTip = vFar.z;
   diffuseColor.rgb = vLeaf;
+  // 分层针叶：每层上沿受光、下沿是上一层投下的暗处；层窄到一两个像素时淡出到平均色（不出摩尔纹）
+  if (vTier > 0.5 && tLeafM > 0.5) {
+    float ty = vTree.y * vTier;
+    float band = smoothstep(0.0, 0.85, fract(ty));
+    diffuseColor.rgb *= mix(0.93, mix(0.66, 1.08, band), 1.0 - smoothstep(0.2, 0.5, fwidth(ty)));
+  }
 `
 
 export interface TreeMaterials {
@@ -459,7 +468,7 @@ function farTables(): Uniforms {
     const c = new THREE.Color(s.bark)
     bark.push(new THREE.Vector3(c.r, c.g, c.b))
   }
-  return { uProf: { value: prof }, uSpec: { value: spec }, uBark: { value: bark } }
+  return { uProf: { value: prof }, uSpec: { value: spec }, uBark: { value: bark }, uTier: { value: SPECIES.map((s) => s.tiers ?? 0) } }
 }
 
 /** 远景材质：所有树形共用一对 */
@@ -469,7 +478,7 @@ export function farMaterials(shared: Uniforms, range: LodRange): TreeMaterials {
   hook(mat, 'town-tree-far', (sh) => {
     Object.assign(sh.uniforms, shared, own)
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\n${FAR_VERT_PARS}\n${SHADOW_FAR_PARS}\nvarying vec2 vFade;\nvarying vec3 vLeaf;\nvarying vec3 vTree;\nvarying vec3 vFar;`)
+      .replace('#include <common>', `#include <common>\n${FAR_VERT_PARS}\n${SHADOW_FAR_PARS}\nvarying vec2 vFade;\nvarying vec3 vLeaf;\nvarying vec3 vTree;\nvarying vec3 vFar;\nvarying float vTier;`)
       .replace('#include <beginnormal_vertex>', `${FAR_PLACE}\nvec3 objectNormal = treeNormal(tn);`)
       .replace(
         '#include <begin_vertex>',
@@ -482,7 +491,8 @@ export function farMaterials(shared: Uniforms, range: LodRange): TreeMaterials {
         if (tAccent > 0.5) tLeafC = mix(tLeafC, tAccent < 1.5 ? vec3(0.5, 0.05, 0.035) : tAccent < 2.5 ? vec3(0.72, 0.27, 0.02) : vec3(0.85, 0.76, 0.78), 0.05);
         vLeaf = tPart > 0.5 ? uBark[tSi] * 0.9 : tLeafC;
         vTree = vec3(aTreeA.z, tHr, tAccent);
-        vFar = vec3(tAoV, tPart, tTipV);`,
+        vFar = vec3(tAoV, tPart, tTipV);
+        vTier = uTier[tSi];`,
       )
       // 自身的明暗由法线给出：阴影只查朝太阳挪出树冠的那一点（别的树、房子、山投来的）
       .replace('#include <shadowmap_vertex>', `#include <shadowmap_vertex>\n${SHADOW_FAR_VERT}\n#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0\nvDirectionalShadowCoord[ 0 ] = vShadowFar;\n#endif`)
