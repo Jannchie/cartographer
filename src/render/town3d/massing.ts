@@ -57,7 +57,7 @@ export function buildTown(st: Settlement, life: Map<object, Life>): TownBuild {
     const ct = centroid(b.poly)
     w.at(ct[0], ct[1])
     w.id = i
-    building(c, b, fac[i])
+    building(c, b, fac[i], st)
   })
   w.id = -1
   for (const wall of st.walls) {

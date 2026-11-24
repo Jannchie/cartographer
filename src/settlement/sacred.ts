@@ -216,7 +216,7 @@ function miniShrine(ctx: Ctx, c: P, f: P, s: number, o: { torii?: number; role?:
   if (!free(ctx, precinct, 0.5)) return null
   clear(ctx, precinct)
   place(ctx, haiden, 'hall', { pad: 0.2 })
-  place(ctx, honden, 'temple', { pad: 0.2 }, o.role ? { role: o.role } : undefined)
+  place(ctx, honden, 'temple', { pad: 0.2 }, o.role ? { role: o.role, part: 'honden' } : { part: 'honden' })
   const nt = o.torii ?? 1
   for (let k = 0; k < nt; k++) {
     const a = 2 + k * Math.min(6, (D * 0.3) / Math.max(1, nt))
@@ -278,7 +278,7 @@ function senbonTorii(ctx: Ctx): boolean {
       rollback(ctx, cp)
       continue
     }
-    place(ctx, oku, 'temple', { pad: 0.2 }, { role: '奥社' })
+    place(ctx, oku, 'temple', { pad: 0.2 }, { role: '奥社', part: 'honden' })
     ctx.out.roads.push({ line: body, width: 1.6, kind: 'path' })
     clearTrees(ctx, body, hw + 1)
     // 鸟居：约 1.2 米一座；开头一段两条并行（千本鸟居的双隧道）
@@ -357,7 +357,7 @@ function umiTorii(ctx: Ctx): boolean {
     for (const p of deck) ctx.out.piers.push(p)
     for (const p of deck) ctx.occ.add(p)
     const honden = box(8, 17, -5, 5)
-    place(ctx, honden, 'temple', { pad: 0.2 }, { role: '本殿' })
+    place(ctx, honden, 'temple', { pad: 0.2 }, { role: '本殿', part: 'honden' })
     place(ctx, box(20, 28, 7, 15), 'hall', { pad: 0.2 }, { role: '社务所' })
     placeWet(ctx, torii, 'torii', { role: '海上鸟居' })
     emitArea(ctx, 'enclosures', land)

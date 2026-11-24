@@ -222,18 +222,18 @@ export function westCastle(ctx: Ctx, curtain0: Poly, o: { connect?: boolean } = 
   const form = keepAt === 'none' ? 'square' : C.pick('keepForm', KEEP_FORM, { size: Math.sqrt(area(ward)) })
   const ks = Math.min(24, Math.sqrt(area(ward)) * 0.32)
   const kr = C.num('keepRatio', 0.8, 1.1)
-  const shape = (q: P, s: number): [Poly, BuildingKind][] => {
-    if (form === 'round') return [[circlePoly(q, ks * 0.5 * s, 18), 'keep']]
+  const shape = (q: P, s: number): [Poly, BuildingKind, string][] => {
+    if (form === 'round') return [[circlePoly(q, ks * 0.5 * s, 18), 'keep', 'donjon']]
     const main = rect(q, b.axis, ks * s, ks * kr * s)
     if (form === 'forebuilding') {
       // 前楼：主楼朝院门一侧贴一座窄楼（上主楼的台阶在里面）
       const f: P = [q[0] + outer.n[0] * -(ks * kr * 0.5 + ks * 0.18) * s, q[1] + outer.n[1] * -(ks * kr * 0.5 + ks * 0.18) * s]
-      return [[main, 'keep'], [rect(f, b.axis, ks * 0.45 * s, ks * 0.36 * s), 'keep']]
+      return [[main, 'keep', 'donjon'], [rect(f, b.axis, ks * 0.45 * s, ks * 0.36 * s), 'keep', 'forebuilding']]
     }
-    return [[main, 'keep']]
+    return [[main, 'keep', 'donjon']]
   }
   const away: P = [wc[0] + outer.n[0] * b.wid * 0.18, wc[1] + outer.n[1] * b.wid * 0.18]
-  const okKeep = (parts: [Poly, BuildingKind][]) => parts.every(([p]) => inside(p, ward) && isFree(ctx, p, { pad: 1 }))
+  const okKeep = (parts: [Poly, BuildingKind, string][]) => parts.every(([p]) => inside(p, ward) && isFree(ctx, p, { pad: 1 }))
   let keepPoly: Poly | null = null
   if (keepAt !== 'none' && form === 'shell') {
     // 贝壳主楼：一圈环形的矮墙（门朝院门）围着几座屋
@@ -274,7 +274,7 @@ export function westCastle(ctx: Ctx, curtain0: Poly, o: { connect?: boolean } = 
     }
     for (const s of [1, 0.8, 0.65]) {
       const parts = shape(best!, s)
-      if (parts.every(([p]) => isFree(ctx, p, { pad: 0.5 })) && parts.every(([p]) => place(ctx, p, 'keep'))) {
+      if (parts.every(([p]) => isFree(ctx, p, { pad: 0.5 })) && parts.every(([p, , part]) => place(ctx, p, 'keep', {}, { part }))) {
         keepPoly = parts[0][0]
         break
       }
@@ -282,7 +282,7 @@ export function westCastle(ctx: Ctx, curtain0: Poly, o: { connect?: boolean } = 
   } else if (keepAt !== 'none') {
     const at0 = keepAt === 'rear' ? away : wc
     const got = fit(ward, (q, s) => shape(keepAt === 'rear' ? [(q[0] + at0[0]) / 2, (q[1] + at0[1]) / 2] : q, s), okKeep, [1, 0.85, 0.7])
-    if (got) for (const [p, k] of got) if (addBuilding(ctx, p, k, 1) && !keepPoly) keepPoly = p
+    if (got) for (const [p, k, part] of got) if (addBuilding(ctx, p, k, 1, Infinity, part) && !keepPoly) keepPoly = p
   }
   C.note('keepBuilt', !!keepPoly)
   // 沿墙的殿：没有主楼时围满一圈（方院城堡），离门最远的一面是大厅

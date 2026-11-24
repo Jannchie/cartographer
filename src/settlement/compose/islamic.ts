@@ -103,24 +103,25 @@ export function mosqueParts(m: P, q: P, D: number, W: number, deep: number, arca
   const kiosk = o.plan === 'kiosk'
   if (kiosk) deep = D * 0.62
   const hallA = D / 2 - deep
-  const parts: [Poly, BuildingKind][] = []
+  // 第三项是部件名（Building.part）：三维沙盘按它定各部分的高度与屋顶
+  const parts: [Poly, BuildingKind, string][] = []
   const dr = Math.min(deep * 0.3, W * 0.13)
   // 礼拜殿
   if (o.plan === 'ottoman') {
     // 方殿，一座大穹顶，前后两个半穹顶；殿前一道门廊
     const hw = Math.min(W / 2, deep * 0.62)
-    parts.push([box(hallA, D / 2, -hw, hw), 'temple'])
+    parts.push([box(hallA, D / 2, -hw, hw), 'temple', 'prayerHall'])
     const R = Math.min(hw, deep / 2) * 0.72
     const ac = D / 2 - deep / 2
-    parts.push([circlePoly(at(ac, 0), R, 20), 'temple'])
-    parts.push([half(ac + R * 0.9, 0, R * 0.55, 1), 'temple'])
-    parts.push([half(ac - R * 0.9, 0, R * 0.55, -1), 'temple'])
-    parts.push([box(hallA - arcade * 0.9, hallA, -hw * 0.8, hw * 0.8), 'temple'])
+    parts.push([circlePoly(at(ac, 0), R, 20), 'temple', 'dome'])
+    parts.push([half(ac + R * 0.9, 0, R * 0.55, 1), 'temple', 'semidome'])
+    parts.push([half(ac - R * 0.9, 0, R * 0.55, -1), 'temple', 'semidome'])
+    parts.push([box(hallA - arcade * 0.9, hallA, -hw * 0.8, hw * 0.8), 'temple', 'portico'])
   } else if (o.plan === 'iwan') {
     // 四伊旺：礼拜殿是礼拜墙前一座穹顶殿，两旁是冬季礼拜厅
-    parts.push([box(hallA, D / 2, -W / 2, W / 2), 'temple'])
+    parts.push([box(hallA, D / 2, -W / 2, W / 2), 'temple', 'prayerHall'])
     const R = Math.min(deep * 0.42, W * 0.18)
-    parts.push([circlePoly(at(D / 2 - deep * 0.45, 0), R, 18), 'temple'])
+    parts.push([circlePoly(at(D / 2 - deep * 0.45, 0), R, 18), 'temple', 'dome'])
   } else if (o.roof === 'aisles' || o.plan === 'tplan') {
     // 一道道垂直礼拜墙的廊（T 形：中廊加宽，沿礼拜墙再一道横廊）
     const n = o.bays
@@ -130,53 +131,53 @@ export function mosqueParts(m: P, q: P, D: number, W: number, deep: number, arca
     const t0 = o.plan === 'tplan' ? D / 2 - Math.min(deep * 0.28, 7) : D / 2
     for (let i = 0; i < n; i++) {
       const w = i === (n - 1) / 2 ? unit * mid : unit
-      parts.push([box(hallA, t0, s + 0.25, s + w - 0.25), 'temple'])
+      parts.push([box(hallA, t0, s + 0.25, s + w - 0.25), 'temple', 'aisle'])
       s += w
     }
-    if (o.plan === 'tplan') parts.push([box(t0 - 0.2, D / 2, -W / 2, W / 2), 'temple'])
+    if (o.plan === 'tplan') parts.push([box(t0 - 0.2, D / 2, -W / 2, W / 2), 'temple', 'aisle'])
   } else if (o.roof === 'transverse') {
     // 平行礼拜墙的几道廊（大马士革）；正中一道横穿的高廊
     const n = o.bays
     const t = deep / n
-    for (let i = 0; i < n; i++) parts.push([box(hallA + i * t + 0.25, hallA + (i + 1) * t - 0.25, -W / 2, W / 2), 'temple'])
-    parts.push([box(hallA, D / 2, -W * 0.08, W * 0.08), 'temple'])
-  } else parts.push([box(hallA, D / 2, -W / 2, W / 2), 'temple'])
+    for (let i = 0; i < n; i++) parts.push([box(hallA + i * t + 0.25, hallA + (i + 1) * t - 0.25, -W / 2, W / 2), 'temple', 'aisle'])
+    parts.push([box(hallA, D / 2, -W * 0.08, W * 0.08), 'temple', 'transept'])
+  } else parts.push([box(hallA, D / 2, -W / 2, W / 2), 'temple', 'prayerHall'])
   // 穹顶
   if (o.plan !== 'ottoman' && o.plan !== 'iwan') {
-    if (o.domes === 'mihrab' || o.domes === 'three') parts.push([circlePoly(at(D / 2 - deep * 0.32, 0), dr, 16), 'temple'])
-    if (o.domes === 'three') for (const sd of [-1, 1]) parts.push([circlePoly(at(D / 2 - deep * 0.32, sd * W * 0.3), dr * 0.55, 12), 'temple'])
+    if (o.domes === 'mihrab' || o.domes === 'three') parts.push([circlePoly(at(D / 2 - deep * 0.32, 0), dr, 16), 'temple', 'dome'])
+    if (o.domes === 'three') for (const sd of [-1, 1]) parts.push([circlePoly(at(D / 2 - deep * 0.32, sd * W * 0.3), dr * 0.55, 12), 'temple', 'domeSmall'])
     if (o.domes === 'row') {
       const k = Math.max(3, Math.round(W / (dr * 2.6)))
-      for (let i = 0; i < k; i++) parts.push([circlePoly(at(D / 2 - dr * 0.8, -W / 2 + (W * (i + 0.5)) / k), Math.min(dr * 0.6, W / k / 2.4), 12), 'temple'])
+      for (let i = 0; i < k; i++) parts.push([circlePoly(at(D / 2 - dr * 0.8, -W / 2 + (W * (i + 0.5)) / k), Math.min(dr * 0.6, W / k / 2.4), 12), 'temple', 'domeSmall'])
     }
   }
   // 壁龛
-  parts.push([box(D / 2 - 0.2, D / 2 + Math.min(3, D * 0.05), -Math.min(3, W * 0.06), Math.min(3, W * 0.06)), 'temple'])
+  parts.push([box(D / 2 - 0.2, D / 2 + Math.min(3, D * 0.05), -Math.min(3, W * 0.06), Math.min(3, W * 0.06)), 'temple', 'mihrab'])
   // 庭院与回廊
   const rs = o.riwaq === 'none' ? 0 : arcade
   const rf = o.riwaq === 'three' ? arcade : 0
   if (!kiosk) {
-    if (rf) parts.push([box(-D / 2, -D / 2 + rf, -W / 2, W / 2), 'temple'])
-    if (rs) for (const sd of [-1, 1]) parts.push([box(-D / 2 + rf, hallA, sd < 0 ? -W / 2 : W / 2 - rs, sd < 0 ? -W / 2 + rs : W / 2), 'temple'])
+    if (rf) parts.push([box(-D / 2, -D / 2 + rf, -W / 2, W / 2), 'temple', 'riwaq'])
+    if (rs) for (const sd of [-1, 1]) parts.push([box(-D / 2 + rf, hallA, sd < 0 ? -W / 2 : W / 2 - rs, sd < 0 ? -W / 2 + rs : W / 2), 'temple', 'riwaq'])
     if (o.plan === 'iwan') {
       // 庭院四面正中的伊旺（朝礼拜方向那座最大）
       const iw = Math.min(W * 0.2, 14)
       const id = arcade * 1.6
-      parts.push([box(hallA - id * 1.3, hallA + 0.5, -iw * 0.65, iw * 0.65), 'temple'])
-      parts.push([box(-D / 2, -D / 2 + id, -iw / 2, iw / 2), 'temple'])
+      parts.push([box(hallA - id * 1.3, hallA + 0.5, -iw * 0.65, iw * 0.65), 'temple', 'iwan'])
+      parts.push([box(-D / 2, -D / 2 + id, -iw / 2, iw / 2), 'temple', 'iwan'])
       const am = (-D / 2 + rf + hallA) / 2
-      for (const sd of [-1, 1]) parts.push([box(am - iw / 2, am + iw / 2, sd * (W / 2 - id), sd * (W / 2)), 'temple'])
+      for (const sd of [-1, 1]) parts.push([box(am - iw / 2, am + iw / 2, sd * (W / 2 - id), sd * (W / 2)), 'temple', 'iwan'])
     }
     if (o.plan === 'ottoman') {
       // 前院回廊上一排小穹顶
       const k = Math.max(3, Math.round(W / (arcade * 2.2)))
-      for (let i = 0; i < k; i++) parts.push([circlePoly(at(-D / 2 + rf / 2, -W / 2 + (W * (i + 0.5)) / k), Math.min(arcade * 0.42, W / k / 2.4), 10), 'temple'])
+      for (let i = 0; i < k; i++) parts.push([circlePoly(at(-D / 2 + rf / 2, -W / 2 + (W * (i + 0.5)) / k), Math.min(arcade * 0.42, W / k / 2.4), 10), 'temple', 'domeSmall'])
     }
-  } else parts.push([box(hallA - 2.5, hallA + 0.3, -W * 0.3, W * 0.3), 'temple'])
+  } else parts.push([box(hallA - 2.5, hallA + 0.3, -W * 0.3, W * 0.3), 'temple', 'portico'])
   // 宣礼塔
   const mt = Math.max(4, Math.min(7.5, W * 0.12))
   const edge = W / 2 - mt / 2 + 1
-  const tower = (a: number, s: number, k = 1) => parts.push([box(a, a + mt * k, s - (mt * k) / 2, s + (mt * k) / 2), 'tower'])
+  const tower = (a: number, s: number, k = 1) => parts.push([box(a, a + mt * k, s - (mt * k) / 2, s + (mt * k) / 2), 'tower', 'minaret'])
   const front = -D / 2 - 1.5
   if (o.minaret === 'corner') tower(front, o.side * edge)
   else if (o.minaret === 'axial') tower(front - mt * 0.2, 0, 1.2)

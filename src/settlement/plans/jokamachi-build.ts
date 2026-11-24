@@ -118,7 +118,9 @@ export function tenshu(ctx: Ctx, F: Frame, a: number, b: number, s: number, side
   }
   for (const [x, y] of form.small) tiers.push(bx(x, y, kh * 0.62, kw * 0.62))
   if (form.extra.length) tiers.push(bx(tk[0], tk[1], tk[2] * 0.6, tk[3] * 0.6))
-  for (const p of tiers) ctx.out.buildings.push({ poly: p, kind: 'keep', tone, ridge })
+  // 部件名（Building.part）：三维沙盘由大天守一并搭出各重，逐层收小的平面只供二维图
+  const partOf = (i: number) => (i === 0 ? 'tenshu' : i <= smalls.length ? 'kotenshu' : i <= smalls.length + form.extra.length ? 'tsuke' : i < bases.length ? 'watari' : i < bases.length + n - 1 ? 'tenshuTier' : 'tierSmall')
+  tiers.forEach((p, i) => ctx.out.buildings.push({ poly: p, kind: 'keep', tone, ridge, part: partOf(i) }))
   for (const p of bases) ctx.occ.add(p)
   C.done(at(F, a, b))
   return true
