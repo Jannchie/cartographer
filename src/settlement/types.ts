@@ -203,6 +203,11 @@ export interface Building {
   households?: Household[]
   /** 用途（悬停说明的中文键）：祠、鸟居、路边十字架这类由类型推不出的，盖的时候写明 */
   role?: string
+  /**
+   * 组合地标里的部件名（中殿 nave、侧廊 aisle、礼拜殿 prayerHall、天守 tenshu……）：三维沙盘按它定高度与屋顶形式，
+   * 相接的部件并成一组（见 render/town3d/groups.ts）。二维渲染不看这个字段
+   */
+  part?: string
 }
 
 /** 一户人家：户主的行当（people.ts 里各文明的行当 id）与口数（连未成年人、学徒、仆役） */

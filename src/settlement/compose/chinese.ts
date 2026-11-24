@@ -12,8 +12,11 @@ import { allot, composer, flanks, type Elem, type Preset } from './core'
  */
 
 
-/** 院落的局部坐标：a 从正面往里（米），b 横向（米）；inside 给了就只在它里面盖 */
-export function yard(ctx: Ctx, F: Frame, o: { pad?: number; inside?: Poly } = {}) {
+/**
+ * 院落的局部坐标：a 从正面往里（米），b 横向（米）；inside 给了就只在它里面盖。
+ * part 是这座院落群的部件名前缀（Building.part，如 palace）：盖的每栋都记上"前缀.角色"，三维沙盘按它定形制
+ */
+export function yard(ctx: Ctx, F: Frame, o: { pad?: number; inside?: Poly; part?: string } = {}) {
   const B = (a0: number, a1: number, b0: number, b1: number): Poly => box(F, Math.min(a0, a1), Math.max(a0, a1), Math.min(b0, b1), Math.max(b0, b1))
   const big = (a0: number, a1: number, b0: number, b1: number, s: number) => Math.abs(a1 - a0) >= s && Math.abs(b1 - b0) >= s
   return {
@@ -22,11 +25,11 @@ export function yard(ctx: Ctx, F: Frame, o: { pad?: number; inside?: Poly } = {}
     B,
     at: (a: number, b: number) => at(F, a, b),
     /** 一栋不住人的建筑（宫殿、寺观的殿宇都不占民居名额）；压路、压水、压别的房子就不盖 */
-    put(kind: BuildingKind, a0: number, a1: number, b0: number, b1: number) {
+    put(kind: BuildingKind, a0: number, a1: number, b0: number, b1: number, role?: string) {
       if (!big(a0, a1, b0, b1, 1.2)) return false
       const p = B(a0, a1, b0, b1)
       if (o.inside && !p.every((q) => pointInPoly(q, o.inside!))) return false
-      return addBuilding(ctx, p, kind, o.pad ?? 0.2)
+      return addBuilding(ctx, p, kind, o.pad ?? 0.2, Infinity, o.part ? (role ? `${o.part}.${role}` : o.part) : role)
     },
     pave(a0: number, a1: number, b0: number, b1: number) {
       if (big(a0, a1, b0, b1, 1)) emitArea(ctx, 'plazas', B(a0, a1, b0, b1))
@@ -110,16 +113,16 @@ export function jin(K: Yard, a0: number, a1: number, b0: number, b1: number, s: 
   // 院门
   const gw = clamp(w * 0.12, 2.5, 7)
   const gd = clamp(d * 0.08, 2.5, 5)
-  if (s.gate === 'men' || s.gate === 'triple') K.put('hall', a0 + 0.3, a0 + 0.3 + gd, bm - gw, bm + gw)
-  if (s.gate === 'triple') for (const sd of [-1, 1]) K.put('hall', a0 + 0.3, a0 + 0.3 + gd * 0.75, bm + sd * (gw + 2), bm + sd * (gw + 2 + gw * 0.6))
-  if (s.gate === 'chuihua') K.put('hall', a0 + 0.3, a0 + 0.3 + gd * 0.7, bm - gw * 0.6, bm + gw * 0.6)
+  if (s.gate === 'men' || s.gate === 'triple') K.put('hall', a0 + 0.3, a0 + 0.3 + gd, bm - gw, bm + gw, 'gate')
+  if (s.gate === 'triple') for (const sd of [-1, 1]) K.put('hall', a0 + 0.3, a0 + 0.3 + gd * 0.75, bm + sd * (gw + 2), bm + sd * (gw + 2 + gw * 0.6), 'gate')
+  if (s.gate === 'chuihua') K.put('hall', a0 + 0.3, a0 + 0.3 + gd * 0.7, bm - gw * 0.6, bm + gw * 0.6, 'gate')
   // 两侧：配殿在院门与正殿之间
   const s0 = a0 + m + gd + 1.5
   const s1 = e0 - 1.5
   const sw = clamp(w * 0.13, 3, 8)
   if (s.side === 'lang') {
     const t = clamp(w * 0.05, 2, 3.5)
-    for (const sd of [-1, 1]) K.put('hall', a0 + m + gd * 0.5, e1, sd < 0 ? b0 + m : b1 - m - t, sd < 0 ? b0 + m + t : b1 - m)
+    for (const sd of [-1, 1]) K.put('hall', a0 + m + gd * 0.5, e1, sd < 0 ? b0 + m : b1 - m - t, sd < 0 ? b0 + m + t : b1 - m, 'gallery')
   } else if (s.side !== 'none' && s1 - s0 > 6) {
     const segs: [number, number][] = s.side === 'double' && s1 - s0 > 18 ? [[s0, (s0 + s1) / 2 - 1], [(s0 + s1) / 2 + 1, s1]] : [[s0 + (s1 - s0) * 0.08, s1 - (s1 - s0) * 0.08]]
     for (const [p, q] of segs) for (const sd of [-1, 1]) K.put('hall', p, q, sd < 0 ? b0 + m : b1 - m - sw, sd < 0 ? b0 + m + sw : b1 - m)
@@ -141,13 +144,13 @@ export function jin(K: Yard, a0: number, a1: number, b0: number, b1: number, s: 
         K.put('pagoda', cc - ps, cc + ps, bm + inner * 0.27 - ps, bm + inner * 0.27 + ps)
         break
       case 'ding':
-        K.put('pagoda', cc - 1.6, cc + 1.6, bm - 1.6, bm + 1.6)
+        K.put('pagoda', cc - 1.6, cc + 1.6, bm - 1.6, bm + 1.6, 'pavilion')
         break
       case 'trees':
         for (const sd of [-1, 1]) K.tree(cc, bm + sd * inner * 0.22, clamp(inner * 0.06, 2, 3.6))
         break
       case 'belldrum':
-        for (const sd of [-1, 1]) K.put('pagoda', s0 + 0.5, s0 + 5, bm + sd * inner * 0.3 - 2.25, bm + sd * inner * 0.3 + 2.25)
+        for (const sd of [-1, 1]) K.put('pagoda', s0 + 0.5, s0 + 5, bm + sd * inner * 0.3 - 2.25, bm + sd * inner * 0.3 + 2.25, 'bell')
         break
       case 'pool': {
         const r = clamp(Math.min(inner * 0.18, room * 0.3), 2.5, 9)
@@ -260,7 +263,7 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: Kind): Poly | null {
   else emitArea(ctx, 'enclosures', court)
   emitArea(ctx, 'plazas', court)
   const F: Frame = { o: A.at(uc, vc - ch / 2), f: n, l: e }
-  const K = yard(ctx, F, { inside: area0 })
+  const K = yard(ctx, F, { inside: area0, part: kind === 'palace' ? 'yamen' : kind })
   const rank = Math.min(2, (ctx.p.capital ? 2 : ctx.p.size === 'city' ? 1 : 0) + (grand ? 1 : 0))
   const C = composer(siteDice(ctx, centroid(area0), `east.${kind}`), `east-${kind}`, PRESETS[kind], { size: Math.min(cw, ch), rank, tier: ctx.tier })
   const big: BuildingKind = kind === 'palace' ? 'keep' : 'temple'
@@ -273,7 +276,7 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: Kind): Poly | null {
   // 山门前
   const front = C.pick('front', FRONT, { size: Wc })
   const fd = front === 'yingbi' ? 7 : 0
-  if (front === 'yingbi') K.put('hall', 1.5, 3, -Math.min(10, Wc * 0.22), Math.min(10, Wc * 0.22))
+  if (front === 'yingbi') K.put('hall', 1.5, 3, -Math.min(10, Wc * 0.22), Math.min(10, Wc * 0.22), 'screen')
   // 中轴的进数：随进深（每进至少二十来米）与等级
   const maxN = Math.max(2, Math.min(kind === 'sect' ? 4 : grand ? 6 : 5, Math.floor((ch - fd) / 22)))
   const N = C.int('jin', Math.min(maxN, 2 + (rank > 0 ? 1 : 0)), maxN)
@@ -326,7 +329,7 @@ export function eastCompound(ctx: Ctx, area0: Poly, kind: Kind): Poly | null {
       const pond = circlePoly(pc, pr, 16, C.num('pondPh', 0, 3))
       emitArea(ctx, 'plazas', pond)
       ctx.occ.add(pond)
-      K.put('pagoda', a1 - 2 - 5, a1 - 2, Wc * 0.25 - 2.5, Wc * 0.25 + 2.5)
+      K.put('pagoda', a1 - 2 - 5, a1 - 2, Wc * 0.25 - 2.5, Wc * 0.25 + 2.5, 'pavilion')
       K.trees(a0 + 2, a1 - 2, b0 + 2, b1 - 2, 0.012, 2, 3.6)
       return
     }
@@ -378,7 +381,7 @@ export function wingFill(K: Yard, C: { num: (n: string, a: number, b: number) =>
   } else if (wing === 'garden') {
     K.green('garden', a0 + 1, a1 - 1, c0 + 1, c1 - 1)
     const ph = C.num(`wg${sd}`, 0.3, 0.7)
-    K.put('pagoda', a0 + d * ph - 2.5, a0 + d * ph + 2.5, (c0 + c1) / 2 - 2.5, (c0 + c1) / 2 + 2.5)
+    K.put('pagoda', a0 + d * ph - 2.5, a0 + d * ph + 2.5, (c0 + c1) / 2 - 2.5, (c0 + c1) / 2 + 2.5, 'pavilion')
     K.trees(a0 + 1.5, a1 - 1.5, c0 + 1.5, c1 - 1.5, 0.014, 2, 3.8)
   } else if (wing === 'stores') {
     for (let a = a0 + 2; a + 7 < a1 - 1; a += 10) K.put('shed', a, a + 7, c0 + 1.5, c1 - 1.5)

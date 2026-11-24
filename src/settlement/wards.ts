@@ -441,7 +441,7 @@ function record(ctx: Ctx, poly: Poly, kind: BuildingKind, extra?: Partial<Buildi
   ctx.out.buildings.push({ poly, kind, tone: hashAt(ctx, b.center, 'building.tone'), ridge: dmath.atan2(b.axis[1], b.axis[0]), ...extra, ...(households.length ? { households } : {}) })
 }
 
-export function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house', pad = 0, floorCap = Infinity): boolean {
+export function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house', pad = 0, floorCap = Infinity, part?: string): boolean {
   // 民居预算用完：不再盖住户（人口已够目标）；占用率不到的宅地空着（按位置哈希，占用率升高只会多盖）
   if (dwelling(kind) && !ctx.uncounted && (ctx.houseBudget <= 0 || ctx.wardQuota <= 0 || occupied(ctx, poly) >= ctx.wardFill)) return false
   if (!isFree(ctx, poly, { pad })) return false
@@ -452,7 +452,7 @@ export function addBuilding(ctx: Ctx, poly: Poly, kind: BuildingKind = 'house', 
     ctx.houseBudget -= extra.units!
     ctx.wardQuota -= extra.units!
   }
-  record(ctx, poly, kind, extra)
+  record(ctx, poly, kind, part ? { ...extra, part } : extra)
   ctx.occ.add(poly)
   return true
 }
@@ -470,18 +470,18 @@ export function place(ctx: Ctx, poly: Poly, kind: BuildingKind, o: { pad?: numbe
   return true
 }
 
-/** 一组部件（中殿、耳堂、后殿）要么全部放下，要么一个都不放；部件之间允许相交 */
-export function addGroup(ctx: Ctx, parts: [Poly, BuildingKind][], pad: number): boolean {
+/** 一组部件（中殿、耳堂、后殿）要么全部放下，要么一个都不放；部件之间允许相交。第三项是部件名（Building.part，可缺省） */
+export function addGroup(ctx: Ctx, parts: [Poly, BuildingKind, string?][], pad: number): boolean {
   for (const [p] of parts) if (!isFree(ctx, p, { pad })) return false
-  for (const [p, kind] of parts) {
+  for (const [p, kind, part] of parts) {
     // 不算人口的（城外的村子、宫殿）：不占民居预算，住户记 0
-    if (dwelling(kind) && ctx.uncounted) record(ctx, p, kind, { floors: 1, units: 0 })
+    if (dwelling(kind) && ctx.uncounted) record(ctx, p, kind, { floors: 1, units: 0, ...(part ? { part } : {}) })
     else {
       if (dwelling(kind)) {
         ctx.houseBudget--
         ctx.wardQuota--
       }
-      record(ctx, p, kind)
+      record(ctx, p, kind, part ? { part } : undefined)
     }
   }
   for (const [p] of parts) ctx.occ.add(p)

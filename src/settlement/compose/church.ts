@@ -110,41 +110,42 @@ export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boole
     const ed = eastEnd === 'chevet' ? hb + wn * 0.3 : eastEnd === 'flat' ? wn * 1.3 : eastEnd === 'lady' ? wn * 2.6 : wn
     const aW = -L / 2
     const aE = L / 2 - ed
-    const core: [Poly, BuildingKind][] = []
-    const extra: [Poly, BuildingKind][] = []
+    // 第三项是部件名（Building.part）：三维沙盘按它定各部分的高度与屋顶
+    const core: [Poly, BuildingKind, string][] = []
+    const extra: [Poly, BuildingKind, string][] = []
     // 中殿与侧廊（侧廊在东端收住）
-    core.push([B(aW, aE + 0.3, -wn, wn), 'temple'])
-    if (aisles) core.push([B(aW, aE, -hb, hb), 'temple'])
+    core.push([B(aW, aE + 0.3, -wn, wn), 'temple', 'nave'])
+    if (aisles) core.push([B(aW, aE, -hb, hb), 'temple', 'aisle'])
     // 耳堂
     const ac = aW + (aE - aW) * tpos
     const proj = transept === 'short' ? hb * 0.3 + 2 : hb * 0.75 + wn
-    if (transept !== 'none') core.push([B(ac - wn * 0.95, ac + wn * 0.95, -hb - proj, hb + proj), 'temple'])
+    if (transept !== 'none') core.push([B(ac - wn * 0.95, ac + wn * 0.95, -hb - proj, hb + proj), 'temple', 'transept'])
     if (transept === 'double') {
       const a2 = ac + (aE - ac) * 0.6
-      core.push([B(a2 - wn * 0.7, a2 + wn * 0.7, -hb - proj * 0.55, hb + proj * 0.55), 'temple'])
+      core.push([B(a2 - wn * 0.7, a2 + wn * 0.7, -hb - proj * 0.55, hb + proj * 0.55), 'temple', 'transept'])
     }
     // 东端
     const half = (o: P, r: number) => circlePoly(o, r, 16).filter((q) => (q[0] - o[0]) * east[0] + (q[1] - o[1]) * east[1] >= -0.01)
-    if (eastEnd === 'apse' || eastEnd === 'triple') core.push([half(at(F, aE, 0), wn), 'temple'])
-    if (eastEnd === 'triple') for (const sd of [-1, 1]) core.push([half(at(F, aE, sd * (wn + wa / 2)), wa * 0.5), 'temple'])
+    if (eastEnd === 'apse' || eastEnd === 'triple') core.push([half(at(F, aE, 0), wn), 'temple', 'apse'])
+    if (eastEnd === 'triple') for (const sd of [-1, 1]) core.push([half(at(F, aE, sd * (wn + wa / 2)), wa * 0.5), 'temple', 'apsidiole'])
     if (eastEnd === 'chevet') {
       // 回廊（半圆）外一圈放射状的小礼拜堂
-      core.push([half(at(F, aE, 0), hb), 'temple'])
-      for (const t of [-1.15, -0.4, 0.4, 1.15]) core.push([circlePoly(at(F, aE + dmath.cos(t) * hb, dmath.sin(t) * hb), wn * 0.34, 10), 'temple'])
+      core.push([half(at(F, aE, 0), hb), 'temple', 'ambulatory'])
+      for (const t of [-1.15, -0.4, 0.4, 1.15]) core.push([circlePoly(at(F, aE + dmath.cos(t) * hb, dmath.sin(t) * hb), wn * 0.34, 10), 'temple', 'chapel'])
     }
-    if (eastEnd === 'flat' || eastEnd === 'lady') core.push([B(aE, aE + wn * 1.3, -wn * 0.9, wn * 0.9), 'temple'])
-    if (eastEnd === 'lady') core.push([B(aE + wn * 1.3 - 0.3, aE + wn * 2.6, -wn * 0.6, wn * 0.6), 'temple'])
+    if (eastEnd === 'flat' || eastEnd === 'lady') core.push([B(aE, aE + wn * 1.3, -wn * 0.9, wn * 0.9), 'temple', 'chancel'])
+    if (eastEnd === 'lady') core.push([B(aE + wn * 1.3 - 0.3, aE + wn * 2.6, -wn * 0.6, wn * 0.6), 'temple', 'ladyChapel'])
     // 西端
     if (west === 'twin' && s > 0.75) {
       const q = Math.max(wa * 1.5, wn * 0.8)
-      for (const sd of [-1, 1]) core.push([B(aW - q * 0.15, aW + q * 0.85, sd * (hb - q / 2) - q / 2, sd * (hb - q / 2) + q / 2), 'temple'])
+      for (const sd of [-1, 1]) core.push([B(aW - q * 0.15, aW + q * 0.85, sd * (hb - q / 2) - q / 2, sd * (hb - q / 2) + q / 2), 'temple', 'westTower'])
     } else if (west === 'single' || (west === 'twin' && s <= 0.75)) {
       const q = wn * 1.35
-      core.push([B(aW - q * 0.35, aW + q * 0.65, -q / 2, q / 2), 'temple'])
-    } else if (west === 'westwork') core.push([B(aW - wn * 0.8, aW + wn * 0.4, -hb * 1.08, hb * 1.08), 'temple'])
+      core.push([B(aW - q * 0.35, aW + q * 0.65, -q / 2, q / 2), 'temple', 'westTower'])
+    } else if (west === 'westwork') core.push([B(aW - wn * 0.8, aW + wn * 0.4, -hb * 1.08, hb * 1.08), 'temple', 'westwork'])
     // 十字交叉：塔、穹顶
-    if (crossing === 'tower') core.push([B(ac - wn * 1.05, ac + wn * 1.05, -wn * 1.05, wn * 1.05), 'keep'])
-    else if (crossing === 'dome') core.push([circlePoly(at(F, ac, 0), wn * 1.15, 18), 'keep'])
+    if (crossing === 'tower') core.push([B(ac - wn * 1.05, ac + wn * 1.05, -wn * 1.05, wn * 1.05), 'keep', 'crossingTower'])
+    else if (crossing === 'dome') core.push([circlePoly(at(F, ac, 0), wn * 1.15, 18), 'keep', 'crossingDome'])
     // 附件：扶壁（每个开间一对）、侧礼拜堂（开间之间）、南门廊、独立钟楼
     const bay = (aE - aW) / bays
     const inTransept = (a: number) => transept !== 'none' && Math.abs(a - ac) < wn * 1.3
@@ -153,23 +154,23 @@ export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boole
       if (inTransept(a)) continue
       if (buttress !== 'none') {
         const t = buttress === 'flying' ? Math.max(2.2, wa * 0.9) : 1.4
-        for (const sd of [-1, 1]) extra.push([B(a - 0.6, a + 0.6, sd * hb, sd * (hb + t)), 'temple'])
+        for (const sd of [-1, 1]) extra.push([B(a - 0.6, a + 0.6, sd * hb, sd * (hb + t)), 'temple', 'buttress'])
       }
-      if (chapels && k < bays - 1 && !inTransept(a + bay / 2)) for (const sd of [-1, 1]) extra.push([B(a + 1, a + bay - 1, sd * hb, sd * (hb + wa * 0.7)), 'temple'])
+      if (chapels && k < bays - 1 && !inTransept(a + bay / 2)) for (const sd of [-1, 1]) extra.push([B(a + 1, a + bay - 1, sd * hb, sd * (hb + wa * 0.7)), 'temple', 'chapel'])
     }
     if (porch) {
       const a = aW + bay * 1.5
-      extra.push([B(a - 2.2, a + 2.2, -gs * hb, -gs * (hb + 4)), 'temple'])
+      extra.push([B(a - 2.2, a + 2.2, -gs * hb, -gs * (hb + 4)), 'temple', 'porch'])
     }
     if (campanile) {
       const q = wn * 0.9
-      extra.push([B(aW + q * 0.2, aW + q * 1.2, -gs * (hb + 5), -gs * (hb + 5 + q)), 'tower'])
+      extra.push([B(aW + q * 0.2, aW + q * 1.2, -gs * (hb + 5), -gs * (hb + 5 + q)), 'tower', 'campanile'])
     }
     // 回廊院：中殿一侧、耳堂以西（东廊让开耳堂）一方四面的廊，当中是草地；牧师会堂（八角形）接在东廊外
     const side = hb + (buttress === 'flying' ? Math.max(2.2, wa * 0.9) : 1.4) + (chapels ? wa * 0.7 : 0)
     const ue = transept === 'none' ? L * 0.1 : ac - wn - 2
     const cs = Math.min(L * 0.42, hb * 3.4, ue - aW - 1)
-    let cl: { ranges: [Poly, BuildingKind][]; garth: Poly; around: Poly; chapter: Poly | null } | null = null
+    let cl: { ranges: [Poly, BuildingKind, string][]; garth: Poly; around: Poly; chapter: Poly | null } | null = null
     if (withCloister && cs > 14) {
       const t = Math.max(2.5, cs * 0.14)
       const [u0, u1] = [ue - cs, ue]
@@ -177,10 +178,10 @@ export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boole
       const r = Math.min(cs * 0.22, 7)
       cl = {
         ranges: [
-          [B(u0, u1, v0, v0 + t), 'hall'],
-          [B(u0, u1, v1 - t, v1), 'hall'],
-          [B(u0, u0 + t, v0 + t, v1 - t), 'hall'],
-          [B(u1 - t, u1, v0 + t, v1 - t), 'hall'],
+          [B(u0, u1, v0, v0 + t), 'hall', 'cloister'],
+          [B(u0, u1, v1 - t, v1), 'hall', 'cloister'],
+          [B(u0, u0 + t, v0 + t, v1 - t), 'hall', 'cloister'],
+          [B(u1 - t, u1, v0 + t, v1 - t), 'hall', 'cloister'],
         ],
         garth: B(u0 + t, u1 - t, v0 + t, v1 - t),
         around: B(u0 - 2, u1 + 2 + (chapter ? r * 2 : 0), v0 - 2, v1 + 2),
@@ -201,7 +202,7 @@ export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boole
     if (o.fill !== false) urban(ctx, block, 'common')
     return false
   }
-  for (const [p, k] of got.extra) if (inside(p, block)) place(ctx, p, k, { pad: 0.5 })
+  for (const [p, k, part] of got.extra) if (inside(p, block)) place(ctx, p, k, { pad: 0.5 }, { part })
   C.note('scale', got.L < L0 * 0.8 ? 'small' : 'full')
   const { c: tc, L, hb, cl } = got
   const reserve: Poly[] = [rect(tc, east, L + 14, hb * 2 + 30)]
@@ -215,7 +216,7 @@ export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boole
     emitArea(ctx, 'greens', cl.garth, 'courtyard')
     ctx.occ.add(cl.garth)
     reserve.push(cl.around)
-    if (cl.chapter && inside(cl.chapter, block)) place(ctx, cl.chapter, 'temple', { pad: 0.5 })
+    if (cl.chapter && inside(cl.chapter, block)) place(ctx, cl.chapter, 'temple', { pad: 0.5 }, { part: 'chapterHouse' })
   }
   if (!walled) {
     const gz = placeable(ctx, rect(beside(gs, hb + L * 0.3), east, L * 0.7, hb * 2.4), 2)

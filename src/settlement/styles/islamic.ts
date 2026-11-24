@@ -884,13 +884,13 @@ function mosque(K: Kit, bx: Box) {
   const ar = Math.max(3, Math.min(6, Wd * 0.1))
   const mt = Math.max(4.5, Math.min(8, Wd * 0.13))
   const vm = (c + d) / 2
-  const parts: [Poly, BuildingKind][] = [
-    [g.box(b - hd, b, c, d), 'temple'],
-    [circlePoly(g.box(b - hd * 0.45, b, vm, vm)[0], Math.min(hd * 0.3, Wd * 0.14), 16), 'temple'],
-    [g.box(a, a + ar, c, d), 'temple'],
-    [g.box(a + ar, b - hd, c, c + ar), 'temple'],
-    [g.box(a + ar, b - hd, d - ar, d), 'temple'],
-    [g.box(a, a + mt, d - mt, d), 'tower'],
+  const parts: [Poly, BuildingKind, string][] = [
+    [g.box(b - hd, b, c, d), 'temple', 'prayerHall'],
+    [circlePoly(g.box(b - hd * 0.45, b, vm, vm)[0], Math.min(hd * 0.3, Wd * 0.14), 16), 'temple', 'dome'],
+    [g.box(a, a + ar, c, d), 'temple', 'riwaq'],
+    [g.box(a + ar, b - hd, c, c + ar), 'temple', 'riwaq'],
+    [g.box(a + ar, b - hd, d - ar, d), 'temple', 'riwaq'],
+    [g.box(a, a + mt, d - mt, d), 'tower', 'minaret'],
   ]
   if (!addGroup(ctx, parts, 0.5)) {
     pave(K, bx)

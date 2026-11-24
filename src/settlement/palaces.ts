@@ -237,7 +237,7 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
   // 地图上 y 向下：南是 +y
   const { F, W, D } = rectFrame(R, [0, 1])
   if (W < 70 || D < 70) return false
-  const K = yard(ctx, F)
+  const K = yard(ctx, F, { part: 'palace' })
   const C = composer(cityDice(ctx, 'imperial'), 'imperial', IMP_PRESETS, { size: Math.min(W, D), rank: 2 })
   const m = 4
   const U = W / 2 - m
@@ -278,11 +278,11 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
     for (const [sb, sa] of [[-1, 0], [1, 0], [-1, 1], [1, 1]] as const) {
       const b = sb * (U - tw / 2)
       const a = sa === 0 ? m + tw / 2 : D - m - tw / 2
-      K.put('civic', a - tw / 2, a + tw / 2, b - tw / 2, b + tw / 2)
+      K.put('civic', a - tw / 2, a + tw / 2, b - tw / 2, b + tw / 2, 'corner')
       // 角阙：曲尺形，顺着两面墙各伸出一截
       if (corner === 'que') {
-        K.put('civic', a - tw / 2, a + tw / 2, b - sb * tw * 1.6, b - sb * tw * 0.5)
-        K.put('civic', a + (sa === 0 ? 1 : -1) * tw * 0.5, a + (sa === 0 ? 1 : -1) * tw * 1.6, b - tw / 2, b + tw / 2)
+        K.put('civic', a - tw / 2, a + tw / 2, b - sb * tw * 1.6, b - sb * tw * 0.5, 'corner')
+        K.put('civic', a + (sa === 0 ? 1 : -1) * tw * 0.5, a + (sa === 0 ? 1 : -1) * tw * 1.6, b - tw / 2, b + tw / 2, 'corner')
       }
     }
   // 宫门：门楼压到伸进宫门的御道就往里挪几米
@@ -401,14 +401,14 @@ export function imperialPalace(ctx: Ctx, R: Poly): boolean {
     K.green('garden', ga, g1, -gw, gw)
     K.put('keep', ga + (g1 - ga) * 0.35, ga + (g1 - ga) * 0.65, -W * 0.04, W * 0.04)
     const pw = Math.min(6, W * 0.02)
-    for (const sd of [-1, 1]) for (const t of [0.25, 0.7]) K.put('pagoda', ga + (g1 - ga) * t - pw, ga + (g1 - ga) * t + pw, sd * gw * 0.6 - pw, sd * gw * 0.6 + pw)
+    for (const sd of [-1, 1]) for (const t of [0.25, 0.7]) K.put('pagoda', ga + (g1 - ga) * t - pw, ga + (g1 - ga) * t + pw, sd * gw * 0.6 - pw, sd * gw * 0.6 + pw, 'pavilion')
     K.trees(ga, g1, -gw, gw, 0.01, 2.2, 3.4)
   } else if (garden === 'pond') pondGarden(ctx, F, -gw, gw, ga, g1, C.num('gardenPond', 0, 1))
   else if (garden === 'grove') {
     // 古柏林：园墙里一行行的柏树，当中一座亭
     K.fence(ga, g1, -gw, gw)
     K.green('park', ga, g1, -gw, gw)
-    K.put('pagoda', (ga + g1) / 2 - 5, (ga + g1) / 2 + 5, -5, 5)
+    K.put('pagoda', (ga + g1) / 2 - 5, (ga + g1) / 2 + 5, -5, 5, 'pavilion')
     for (let a = ga + 4; a < g1 - 2; a += 7) for (let b = -gw + 4; b < gw - 2; b += 7) K.tree(a, b, 2.2)
   } else palaceJin(K, C, ga, g1, -gw, gw, 'trees')
   // 后门（神武门）
@@ -563,14 +563,15 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
   const mid = C.pick('mid', MID)
   const ac = W * C.num('ac', 0.05, 0.09)
   const ends = C.chance('ends', plan === 'block' || plan === 'T' ? 0.8 : 0.3)
-  const body: [Poly, BuildingKind][] = [[K.B(fm, fm + md, -mw, mw), 'hall']]
-  if (mid === 'avant') body.push([K.B(fm - 5, fm + md + 4, -ac, ac), 'keep'])
+  // 第三项是部件名（Building.part）
+  const body: [Poly, BuildingKind, string][] = [[K.B(fm, fm + md, -mw, mw), 'hall', 'corps']]
+  if (mid === 'avant') body.push([K.B(fm - 5, fm + md + 4, -ac, ac), 'keep', 'pavilion'])
   else if (mid === 'dome') {
     const r = Math.min(md * 0.6, W * 0.07)
-    body.push([circlePoly(at(fm + md / 2, 0), r, 18), 'keep'])
-    body.push([K.B(fm - 6, fm + 1, -r * 0.7, r * 0.7), 'keep'])
-  } else if (mid === 'portico') body.push([K.B(fm - 7, fm + 1, -ac * 0.8, ac * 0.8), 'keep'])
-  if (ends) for (const sd of [-1, 1]) body.push([K.B(fm - 6, fm + md + 5, sd * mw - (sd < 0 ? W * 0.02 : W * 0.05), sd * mw + (sd < 0 ? W * 0.05 : W * 0.02)), 'keep'])
+    body.push([circlePoly(at(fm + md / 2, 0), r, 18), 'keep', 'rotunda'])
+    body.push([K.B(fm - 6, fm + 1, -r * 0.7, r * 0.7), 'keep', 'portico'])
+  } else if (mid === 'portico') body.push([K.B(fm - 7, fm + 1, -ac * 0.8, ac * 0.8), 'keep', 'portico'])
+  if (ends) for (const sd of [-1, 1]) body.push([K.B(fm - 6, fm + md + 5, sd * mw - (sd < 0 ? W * 0.02 : W * 0.05), sd * mw + (sd < 0 ? W * 0.05 : W * 0.02)), 'keep', 'pavilion'])
   if (!addGroup(ctx, body, 0.2)) return false
   // 翼楼
   let back = fm + md
@@ -580,26 +581,26 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
     for (const sd of [-1, 1]) {
       const [a, b] = wingBox(sd)
       // 两端有角阁时翼楼接在角阁上
-      K.put('hall', wf, ends ? fm - 6.5 : fm - 0.3, a, b)
+      K.put('hall', wf, ends ? fm - 6.5 : fm - 0.3, a, b, 'corps')
       if (plan === 'H') {
         const bk = fm + md + D * C.num('hback', 0.08, 0.14)
-        K.put('hall', ends ? fm + md + 5.5 : fm + md + 0.3, bk, a, b)
+        K.put('hall', ends ? fm + md + 5.5 : fm + md + 0.3, bk, a, b, 'corps')
         back = Math.max(back, bk)
       }
     }
   const tips = plan !== 'block' && plan !== 'T' && !ends && C.chance('tips', 0.4)
-  if (tips) for (const sd of [-1, 1]) K.put('keep', wf - 3, wf + ww * 1.1, sd < 0 ? -mw - 2 : mw - ww - 2, sd < 0 ? -mw + ww + 2 : mw + 2)
+  if (tips) for (const sd of [-1, 1]) K.put('keep', wf - 3, wf + ww * 1.1, sd < 0 ? -mw - 2 : mw - ww - 2, sd < 0 ? -mw + ww + 2 : mw + 2, 'pavilion')
   if (plan === 'closed') {
     const t = Math.min(10, D * 0.05)
     addGroup(ctx, [
-      [K.B(fp + D * 0.01, fp + D * 0.01 + t, -(mw - ww) + 0.6, mw - ww - 0.6), 'hall'],
-      [K.B(fp + D * 0.01 - 3, fp + D * 0.01 + t + 2, -W * 0.05, W * 0.05), 'keep'],
+      [K.B(fp + D * 0.01, fp + D * 0.01 + t, -(mw - ww) + 0.6, mw - ww - 0.6), 'hall', 'corps'],
+      [K.B(fp + D * 0.01 - 3, fp + D * 0.01 + t + 2, -W * 0.05, W * 0.05), 'keep', 'pavilion'],
     ], 0.2)
   }
-  if (plan === 'E') K.put('hall', fp + D * C.num('eFront', 0.03, 0.09), mid === 'avant' || mid === 'portico' || mid === 'dome' ? fm - 7.5 : fm - 0.3, -ww * 0.6, ww * 0.6)
+  if (plan === 'E') K.put('hall', fp + D * C.num('eFront', 0.03, 0.09), mid === 'avant' || mid === 'portico' || mid === 'dome' ? fm - 7.5 : fm - 0.3, -ww * 0.6, ww * 0.6, 'corps')
   if (plan === 'T') {
     const bk = fm + md + D * C.num('tback', 0.08, 0.14)
-    K.put('hall', mid === 'avant' ? fm + md + 4.5 : mid === 'dome' ? fm + md / 2 + Math.min(md * 0.6, W * 0.07) + 0.5 : fm + md + 0.3, bk, -ww * 0.9, ww * 0.9)
+    K.put('hall', mid === 'avant' ? fm + md + 4.5 : mid === 'dome' ? fm + md / 2 + Math.min(md * 0.6, W * 0.07) + 0.5 : fm + md + 0.3, bk, -ww * 0.9, ww * 0.9, 'corps')
     back = Math.max(back, bk)
   }
   // 阅兵广场（place d'armes）
@@ -625,9 +626,9 @@ export function royalPalace(ctx: Ctx, R: Poly): boolean {
   // 外伸的翼：沿正面的长翼、沿阅兵广场两侧的前翼（只在没有附属院落时）
   const outer = C.pick('outer', OUTER, { only: (o) => o !== 'forward' || service === 'none' })
   if (outer === 'long' && !open)
-    for (const sd of [-1, 1]) K.put('hall', fm - D * 0.03, fm - D * 0.03 + Math.max(12, D * 0.05), sd < 0 ? -W * 0.46 : mw, sd < 0 ? -mw : W * 0.46)
+    for (const sd of [-1, 1]) K.put('hall', fm - D * 0.03, fm - D * 0.03 + Math.max(12, D * 0.05), sd < 0 ? -W * 0.46 : mw, sd < 0 ? -mw : W * 0.46, 'corps')
   if (outer === 'forward')
-    for (const sd of [-1, 1]) K.put('hall', D * 0.03, fm - D * 0.03, sd * (mw + W * 0.02) + (sd < 0 ? -ww * 0.8 : 0), sd * (mw + W * 0.02) + (sd < 0 ? 0 : ww * 0.8))
+    for (const sd of [-1, 1]) K.put('hall', D * 0.03, fm - D * 0.03, sd * (mw + W * 0.02) + (sd < 0 ? -ww * 0.8 : 0), sd * (mw + W * 0.02) + (sd < 0 ? 0 : ww * 0.8), 'corps')
   // 附属院落：马厩、厨房、仆役（四面围合的院子）
   // 只有一侧附属院落时在哪边
   const ss = service === 'one' ? C.side('serviceSide') : 1
