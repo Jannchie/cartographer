@@ -207,9 +207,15 @@ const strHash = (s: string) => {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
   return h >>> 0
 }
+/** 色值解析（有缓存：每棵树取两次叶色） */
+const HEX = new Map<string, [number, number, number]>()
 const hexRGB = (s: string): [number, number, number] => {
-  const n = parseInt(s.slice(1, 7), 16)
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  let c = HEX.get(s)
+  if (!c) {
+    const n = parseInt(s.slice(1, 7), 16)
+    HEX.set(s, (c = [(n >> 16) & 255, (n >> 8) & 255, n & 255]))
+  }
+  return c
 }
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
 const sstep = (a: number, b: number, x: number) => {
@@ -292,22 +298,51 @@ const ALWAYS: Span = { born: 0, died: Infinity }
 
 /** 实例的写入缓冲：收齐后按细格排序 */
 class Bag {
-  f: number[] = []
-  b: number[] = []
+  /** 写入缓冲（按需倍增；普通数组逐个 push 在十万棵上要几十毫秒） */
+  f = new Float32Array(1024 * INST_F)
+  b = new Uint8Array(1024 * INST_B)
+  n = 0
   counts = new Array<number>(SPECIES.length).fill(0)
   /**
    * 一个实例：位置、冠径（米）、生卒、树形、点缀、高矮（0 ~ 1）、郁闭度（0 ~ 1）、
    * 随机数（朝向固定的树形是朝向 / 2π）、叶色、第二个随机数、地面坡度
    */
   push(x: number, y: number, z: number, r: number, life: Span, sp: number, accent: number, hs: number, crowd: number, seed: number, col: [number, number, number], seed2: number, sx: number, sz: number) {
-    this.f.push(x, y, z, r, life.born, life.died === Infinity ? NEVER : life.died)
-    const q = (v: number) => Math.round(clamp01(v) * 255)
-    this.b.push(sp + accent * 16, q(hs), q(crowd), q(seed), col[0], col[1], col[2], q(seed2), Math.round(128 + Math.max(-1.27, Math.min(1.27, sx)) * 100), Math.round(128 + Math.max(-1.27, Math.min(1.27, sz)) * 100), 0, 0)
+    if (this.n * INST_F >= this.f.length) {
+      const f = new Float32Array(this.f.length * 2)
+      f.set(this.f)
+      this.f = f
+      const b = new Uint8Array(this.b.length * 2)
+      b.set(this.b)
+      this.b = b
+    }
+    const o = this.n * INST_F
+    const F = this.f
+    F[o] = x
+    F[o + 1] = y
+    F[o + 2] = z
+    F[o + 3] = r
+    F[o + 4] = life.born
+    F[o + 5] = life.died === Infinity ? NEVER : life.died
+    const p = this.n * INST_B
+    const B = this.b
+    // 写进 Uint8Array 时自动截成整数：先加 0.5 即四舍五入
+    B[p] = sp + accent * 16
+    B[p + 1] = clamp01(hs) * 255 + 0.5
+    B[p + 2] = clamp01(crowd) * 255 + 0.5
+    B[p + 3] = clamp01(seed) * 255 + 0.5
+    B[p + 4] = col[0]
+    B[p + 5] = col[1]
+    B[p + 6] = col[2]
+    B[p + 7] = clamp01(seed2) * 255 + 0.5
+    B[p + 8] = 128.5 + Math.max(-1.27, Math.min(1.27, sx)) * 100
+    B[p + 9] = 128.5 + Math.max(-1.27, Math.min(1.27, sz)) * 100
+    this.n++
     this.counts[sp]++
   }
   /** 按细格排序：分块号在前（同一分块的格相邻，远景按分块取一段连续的实例） */
   finish(W: number, D: number): TreeSet {
-    const n = this.f.length / INST_F
+    const n = this.n
     const nx = Math.max(1, Math.ceil(W / CELL))
     const nz = Math.max(1, Math.ceil(D / CELL))
     const per = Math.max(1, Math.ceil(Math.max(nx, nz) / 10))
@@ -335,8 +370,8 @@ class Bag {
     for (let i = 0; i < n; i++) {
       const k = key[i]
       const o = at[k]++
-      for (let c = 0; c < INST_F; c++) inst[o * INST_F + c] = this.f[i * INST_F + c]
-      for (let c = 0; c < INST_B; c++) attr[o * INST_B + c] = this.b[i * INST_B + c]
+      inst.set(this.f.subarray(i * INST_F, i * INST_F + INST_F), o * INST_F)
+      attr.set(this.b.subarray(i * INST_B, i * INST_B + INST_B), o * INST_B)
       const y = this.f[i * INST_F + 1]
       if (y < yr[k * 2]) yr[k * 2] = y
       if (y > yr[k * 2 + 1]) yr[k * 2 + 1] = y
