@@ -1,7 +1,7 @@
 {
   "name": "cartographer",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -20,7 +20,8 @@
     "earth": "tsx scripts/earth.ts",
     "china": "tsx scripts/china-real.ts",
     "video": "tsx video/record.ts",
-    "check:dmath": "tsx scripts/check-dmath.ts"
+    "check:dmath": "tsx scripts/check-dmath.ts",
+    "release:notes": "tsx scripts/release-notes.ts"
   },
   "dependencies": {
     "@jannchie/icons": "^0.5.0",
