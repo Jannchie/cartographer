@@ -13,7 +13,7 @@ import { INST_B, INST_F, type TreeBuild, type TreeSet } from './vegetation'
  * | 中 | 28 ~ 90 米 | 同一套团块细分 1 次（一两千） | 同上 |
  * | 低 | 90 ~ 260 米 | 同一套团块不细分（几百） | 同上 |
  * | 远甲 | 260 ~ 750 米 | 回转体（7 边、带树干，55 个三角形），所有树形共用 | 分块的静态缓冲，按视锥裁剪 |
- * | 远乙 | > 750 米 | 回转体（5 边，31 个三角形） | 同上 |
+ * | 远乙 | > 750 米 | 回转体（5 边、不带树干，25 个三角形） | 同上 |
  *
  * 每一级的着色器只留下距离落在自己范围里的实例，交界处抖动着交叉淡入淡出（见 treeShader.ts），所以分块与细格
  * 只是粗筛：前三级把视点周围的格子里的实例拷进动态缓冲（几千棵，逐帧重填），远景两级按分块到镜头的距离开关。
@@ -182,7 +182,7 @@ export class TreeLayer {
   /** life：成长的共享 uniform（uPop、uPrev、uT，见 buildingShader.ts 的 LIFE_GLSL） */
   constructor(data: TreeBuild, life: Uniforms) {
     this.sets = [data.trees, data.low]
-    this.shared = { uPop: life.uPop, uPrev: life.uPrev, uT: life.uT, uLodCam: { value: new THREE.Vector3(0, 1e6, 0) }, uDither: { value: 0 } }
+    this.shared = { uPop: life.uPop, uPrev: life.uPrev, uT: life.uT, uNight: life.uNight, uLodCam: { value: new THREE.Vector3(0, 1e6, 0) }, uDither: { value: 0 } }
     const own = (m: TreeMaterials) => {
       this.materials.push(m.mat, m.depth)
       return m
@@ -213,7 +213,7 @@ export class TreeLayer {
       ]
       this.near.push(
         ranges.map((r, lod) => {
-          const m = own(nearMaterials(sp, this.shared, r))
+          const m = own(nearMaterials(sp, this.shared, r, lod))
           const b = new Batch(meshGeometry(treeMesh(sp, lod as TreeLod)), m.mat, CAPS[lod])
           add(b.mesh, m.depth)
           return b
@@ -244,7 +244,8 @@ export class TreeLayer {
     // —— 远景：分块 ——
     const t = data.trees
     const la = lathe(7, [0, 1, 2, 3, 4], 3)
-    const lb = lathe(5, [0, 2, 3, 4], 3)
+    // 750 米外树干不到一个像素：不画
+    const lb = lathe(5, [0, 2, 3, 4], 0)
     const ma = own(farMaterials(this.shared, [lo(D_LOW), hi(D_LOW), lo(D_FAR), hi(D_FAR)]))
     const mb = own(farMaterials(this.shared, [lo(D_FAR), hi(D_FAR), 1e9, 2e9]))
     const pp = t.per * t.per

@@ -460,7 +460,8 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
     const [x, z] = t.p
     if (x < 1 || z < 1 || x > W - 1 || z > D - 1) continue
     const wd = water(x, z)
-    if (wd < 0.8) continue
+    // 树干不站在水边线上（树冠可以探到水面上）
+    if (wd < 0.8 + t.r * 0.15) continue
     const l0 = span(t)
     let born = l0.born
     let died = l0.died
@@ -600,7 +601,7 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
     kept.push({ x, z, r: r * CROWN[v.sp], ctx, life: lf, crowd })
   }
 
-  lowPlants(st, low, { H, water, span, kept, season, seed, temp, bGrid, rGrid })
+  lowPlants(st, low, { H, water, span, kept, season, seed, temp, bGrid, rGrid, wGrid })
   const species: [string, number][] = []
   SPECIES_NAMES.forEach((n, i) => {
     const c = bag.counts[i] + low.counts[i]
@@ -644,11 +645,185 @@ interface LowEnv {
   temp: number
   bGrid: Grid<{ poly: Pt[]; life: Span }>
   rGrid: Grid<{ a: Pt; b: Pt; hw: number; id: number; main: boolean; life: Span }>
+  wGrid: Grid<{ poly: Pt[]; type: string }>
 }
 
-/** 生成器里没有的矮植被（见文件头）。生卒随它所依附的东西：灌木随树，绿篱、藤架随田块与园圃 */
+/** 一条直线（方向 angle，法向坐标 t）穿过多边形的各段：沿方向的 [起, 止] 参数（奇偶规则，凹多边形也对） */
+function scan(poly: Pt[], ux: number, uz: number, t: number): [number, number][] {
+  const vx = -uz
+  const vz = ux
+  const hits: number[] = []
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[j]
+    const b = poly[i]
+    const ta = a[0] * vx + a[1] * vz - t
+    const tb = b[0] * vx + b[1] * vz - t
+    if (ta > 0 === tb > 0) continue
+    const k = ta / (ta - tb)
+    hits.push((a[0] + (b[0] - a[0]) * k) * ux + (a[1] + (b[1] - a[1]) * k) * uz)
+  }
+  hits.sort((p, q) => p - q)
+  const out: [number, number][] = []
+  for (let i = 0; i + 1 < hits.length; i += 2) out.push([hits[i], hits[i + 1]])
+  return out
+}
+
+/**
+ * 生成器里没有的矮植被（见文件头）。生卒随它所依附的东西：灌木随树，绿篱、藤架随田块与园圃，芦苇一直在。
+ * 都要离房子、路面、水留出空隙：房子后来才盖的只截短寿命
+ */
 function lowPlants(st: Settlement, low: Bag, env: LowEnv) {
-  void st
-  void low
-  void env
+  const { H, water, span, season, seed, temp, bGrid, rGrid, wGrid } = env
+  const culture = st.params.culture
+  const W = st.width
+  const D = st.height
+  const colour = (v: Variety, x: number, z: number) => {
+    const pair = (season === 'spring' && v.spring) || (season === 'autumn' && v.autumn) || v.col
+    const a = hexRGB(pair[0])
+    const b = hexRGB(pair[1])
+    const h = hashAt(x, z, 12)
+    const k = 0.9 + 0.2 * hashAt(x, z, 11)
+    return [0, 1, 2].map((c) => Math.round(Math.min(255, (a[c] + (b[c] - a[c]) * h) * k))) as [number, number, number]
+  }
+  /** 这一处放得下半径 rad 的矮植被吗：返回截短后的生卒，放不下为 null */
+  const fit = (x: number, z: number, rad: number, l: Span): Span | null => {
+    if (x < rad || z < rad || x > W - rad || z > D - rad) return null
+    if (water(x, z) < 0.4 + rad * 0.5) return null
+    let died = l.died
+    for (const b of bGrid.at(x, z) ?? []) {
+      if (b.life.born >= died || b.life.died <= l.born) continue
+      if (polyD(x, z, b.poly) < rad + 0.3) {
+        if (b.life.born > l.born) died = Math.min(died, b.life.born)
+        else return null
+      }
+    }
+    for (const r of rGrid.at(x, z) ?? []) {
+      if (r.life.born >= died || r.life.died <= l.born) continue
+      if (segD(x, z, r.a, r.b) - r.hw < rad * 0.8 + 0.2) {
+        if (r.life.born > l.born) died = Math.min(died, r.life.born)
+        else return null
+      }
+    }
+    return died > l.born ? { born: l.born, died } : null
+  }
+  const slope = (x: number, z: number): [number, number] => [(H(x + 2, z) - H(x - 2, z)) / 4, (H(x, z + 2) - H(x, z - 2)) / 4]
+  const put = (x: number, z: number, r: number, l: Span, v: Variety, seedA: number, hs = v.h[0] + (v.h[1] - v.h[0]) * hashAt(x, z, 2)) => {
+    const [sx, sz] = slope(x, z)
+    low.push(x, H(x, z), z, r, l, v.sp, 0, hs, 0, seedA, colour(v, x, z), hashAt(x, z, 4), sx, sz)
+  }
+
+  // —— 灌木：林缘与疏林里、园林与院子的树旁 ——
+  const shrubOf = (ctx: Ctx, h: number): VK => {
+    if (culture === 'islamic') return ctx === 'wild' || ctx === 'upland' || ctx === 'field' ? 'maquis' : h < 0.5 ? 'maquis' : 'shrub'
+    if ((culture === 'wa' || culture === 'eastern') && (ctx === 'park' || ctx === 'sacred' || ctx === 'court')) return h < 0.6 ? 'azalea' : 'shrub'
+    return 'shrub'
+  }
+  for (const t of env.kept) {
+    const forest = t.ctx === 'wild' || t.ctx === 'upland'
+    // 郁闭的林子里林下照不到光，灌木长在林缘与疏林；园林、院子里零星几丛
+    const p = forest ? 0.55 * (1 - t.crowd) + 0.1 : t.ctx === 'park' || t.ctx === 'sacred' || t.ctx === 'court' ? 0.35 : t.ctx === 'water' ? 0.3 : t.ctx === 'yard' ? 0.12 : 0.15
+    const n = hashAt(t.x, t.z, 21) < p ? (hashAt(t.x, t.z, 22) < 0.35 ? 2 : 1) : 0
+    for (let k = 0; k < n; k++) {
+      const a = hashAt(t.x, t.z, 23 + k) * Math.PI * 2
+      const d = t.r * (0.75 + 0.6 * hashAt(t.x, t.z, 25 + k))
+      const x = t.x + Math.cos(a) * d
+      const z = t.z + Math.sin(a) * d
+      const v: Variety = V[shrubOf(t.ctx, hashAt(x, z, 1))]
+      const r = (0.7 + 0.8 * hashAt(x, z, 3)) * (forest ? 1.15 : 0.9)
+      const l = fit(x, z, r, t.life)
+      if (l) put(x, z, r, l, v, hashAt(x, z, 5))
+    }
+  }
+
+  // —— 芦苇：水边一丛丛（城里砌了岸的不长） ——
+  const T = st.terrain
+  const reedV: Variety = V.reed
+  for (let j = 1; j < T.H - 1; j++)
+    for (let i = 1; i < T.W - 1; i++) {
+      const w0 = T.water[j * T.W + i]
+      if (w0 < -T.cell || w0 > T.cell * 1.5) continue
+      // 每格试四处，成丛：低频噪声高处才长
+      for (let s = 0; s < 4; s++) {
+        const x = (i + hashAt(i, j, 31 + s * 2)) * T.cell
+        const z = (j + hashAt(i, j, 32 + s * 2)) * T.cell
+        const wd = water(x, z)
+        if (wd < 0.3 || wd > 2.4) continue
+        if (vnoise(x / 28, z / 28, seed + 71) < 0.42 || hashAt(x, z, 35) < 0.25) continue
+        let urban = false
+        for (const w of wGrid.at(x, z) ?? []) if (w.type !== 'wild' && w.type !== 'farm' && w.type !== 'water' && inPoly(x, z, w.poly)) urban = true
+        if (urban) continue
+        const r = 1.0 + 0.7 * hashAt(x, z, 36)
+        const l = fit(x, z, r * 0.4, ALWAYS)
+        if (l) put(x, z, r, l, reedV, hashAt(x, z, 5))
+      }
+    }
+
+  // —— 沿线排布的：一段的半长为 r（网格沿 x 自 -1 到 1），首尾相接 ——
+  const line = (a: Pt, b: Pt, r: number, l: Span, v: Variety, gap: number) => {
+    const dx = b[0] - a[0]
+    const dz = b[1] - a[1]
+    const len = Math.hypot(dx, dz)
+    const n = Math.floor(len / (2 * r * gap))
+    if (n < 1) return
+    const ang = (((Math.atan2(dz, dx) / (Math.PI * 2)) % 1) + 1) % 1
+    const step = len / n
+    for (let k = 0; k < n; k++) {
+      const t = (k + 0.5) * step
+      const x = a[0] + (dx / len) * t
+      const z = a[1] + (dz / len) * t
+      const s = fit(x, z, 0.5, l)
+      if (s) put(x, z, (step / 2) / gap, s, v, ang)
+    }
+  }
+
+  // 绿篱：西式牧场的树篱（相邻田块共用的边只种一道）、各文明城边菜园的矮篱、园林花坛的镶边
+  const seen = new Set<string>()
+  const key = (a: Pt, b: Pt) => {
+    const p = `${Math.round(a[0])},${Math.round(a[1])}`
+    const q = `${Math.round(b[0])},${Math.round(b[1])}`
+    return p < q ? p + '|' + q : q + '|' + p
+  }
+  st.fields.forEach((f, id) => {
+    const bocage = culture === 'western' && f.kind === 'pasture' && ih(id, seed, 41) < 0.7
+    const kitchen = f.kind === 'garden' && ih(id, seed, 42) < 0.3
+    if (!bocage && !kitchen) return
+    const v: Variety = bocage ? V.hedgerow : V.hedge
+    const r = bocage ? 1.15 : 0.6
+    const l = span(f)
+    for (let i = 0, j = f.poly.length - 1; i < f.poly.length; j = i++) {
+      const k = key(f.poly[j], f.poly[i])
+      if (seen.has(k)) continue
+      seen.add(k)
+      line(f.poly[j], f.poly[i], r, l, v, 0.96)
+    }
+  })
+  for (const p of st.parkParts) {
+    if (p.kind !== 'bed') continue
+    const l = span(p)
+    for (let i = 0, j = p.poly.length - 1; i < p.poly.length; j = i++) line(p.poly[j], p.poly[i], 0.45, l, V.hedge, 0.96)
+  }
+
+  // —— 葡萄园：顺着垄的方向一行行藤架（行距与二维地图的线一致） ——
+  if (temp >= 7)
+    for (const f of st.fields) {
+      if (f.kind !== 'vineyard') continue
+      const ux = Math.cos(f.angle)
+      const uz = Math.sin(f.angle)
+      let t0 = Infinity
+      let t1 = -Infinity
+      for (const p of f.poly) {
+        const t = -p[0] * uz + p[1] * ux
+        t0 = Math.min(t0, t)
+        t1 = Math.max(t1, t)
+      }
+      const l = span(f)
+      const r = 1.05
+      for (let t = t0 + 1.6; t < t1; t += 3.2)
+        for (const [s0, s1] of scan(f.poly, ux, uz, t)) {
+          // 两头各让出一点：藤架不压田边
+          const a: Pt = [(s0 + 1.2) * ux - t * uz, (s0 + 1.2) * uz + t * ux]
+          const b: Pt = [(s1 - 1.2) * ux - t * uz, (s1 - 1.2) * uz + t * ux]
+          line(a, b, r, l, V.vine, 0.98)
+        }
+    }
 }

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { NOISE_GLSL } from '../aerial/glsl'
 import { LIFE_GLSL } from './buildingShader'
-import { HEIGHT_SCALE, SPECIES, SPECIES_COUNT } from './treeSpecies'
+import { HEIGHT_SCALE, SP, SPECIES, SPECIES_COUNT } from './treeSpecies'
 
 /**
  * 树的材质：在 MeshStandardMaterial / MeshDepthMaterial 上补实例的摆放、细节层级的淡入淡出与树冠的着色。
@@ -127,6 +127,8 @@ const LIGHT_FRAG = /* glsl */ `
     float ao = tAo * mix(1.0, 0.3 + 0.7 * smoothstep(0.0, 0.8, vTree.y), vTree.x);
     // 天光不压到全黑：叶层之间总有漫射进来的光。叶是半透的，背阴处靠层层透射与散射比不透明的表面亮
     reflectedLight.indirectDiffuse *= (0.3 + 0.7 * ao) * mix(1.25, 1.8, tLeafM);
+    // 夜里：月光下的树冠主要靠整片夜空透过叶层照亮，半球天光低估了它；不补的话深色的叶在浅色的地面上只剩纯黑的剪影
+    reflectedLight.indirectDiffuse *= 1.0 + 2.0 * uNight * tLeafM;
     reflectedLight.indirectSpecular *= ao;
     reflectedLight.directDiffuse *= mix(1.0, ao, 0.5);
     // 叶面的高光压低：法线错动后掠射角上的高光会成片发白
@@ -189,6 +191,8 @@ const NEAR_PLACE = /* glsl */ `
 
 const FRAG_COMMON = /* glsl */ `
   uniform float uDither;
+  /** 夜（0 ~ 1，与城里的窗灯同一个量） */
+  uniform float uNight;
   varying vec2 vFade;
   varying vec3 vLeaf;
   varying vec3 vTree;
@@ -239,7 +243,11 @@ const NEAR_FRAG_COLOR = /* glsl */ `
       float ndv = abs(dot(normalize(vNormal), normalize(vViewPosition)));
       float edge = 1.0 - smoothstep(0.0, 0.55, ndv);
       float own = step(0.5, vCol.a);
+      #ifdef TREE_HOLES
       float open = gl_FrontFacing ? mix(1.0, 0.52, min(1.0, uHole * 2.0)) * (0.82 + 0.4 * id.y) : 9.0;
+      #else
+      float open = 9.0;
+      #endif
       if (dist > mix(open, rad * (1.2 - 0.62 * uLeaf.z), edge) + own * 9.0) discard;
       vec3 leaf = mix(vLeaf, vCol.rgb, vCol.a);
       // 团块的里侧（从透空处看进去）：暗
@@ -365,7 +373,7 @@ export type LodRange = [number, number, number, number]
 /**
  * 近景材质：一种树形一对（颜色、深度）。shared 为各级共享的 uniform（成长、镜头位置、抖动相位）
  */
-export function nearMaterials(species: number, shared: Uniforms, range: LodRange): TreeMaterials {
+export function nearMaterials(species: number, shared: Uniforms, range: LodRange, lod: number): TreeMaterials {
   const s = SPECIES[species]
   const top = s.profile[4][1]
   const crown = Math.max(...s.profile.map((p) => p[0]))
@@ -376,9 +384,12 @@ export function nearMaterials(species: number, shared: Uniforms, range: LodRange
     uLeaf: { value: new THREE.Vector4(s.leaf.cell, s.leaf.stretch, s.leaf.erode, s.leaf.rough) },
     uHole: { value: s.leaf.hole },
   }
-  // 两面都画：透空处露出团块的里侧，羽状叶与条形叶本来就是薄片
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, side: THREE.DoubleSide })
-  hook(mat, 'town-tree-near', (sh) => {
+  // 近景两面都画：透空处露出团块的里侧。中、低两级不在树冠表面开洞（洞小到只剩几个像素，徒增片元：
+  // 带 discard 的着色器没有提前深度测试，团块层层叠着全要算），只画正面；羽状叶与条形叶本来就是薄片，各级都两面画
+  const sheet = species === SP.palm || species === SP.reed
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, side: lod === 0 || sheet ? THREE.DoubleSide : THREE.FrontSide })
+  if (lod === 0) mat.defines = { TREE_HOLES: '' }
+  hook(mat, `town-tree-near-${lod === 0 ? 'holes' : 'solid'}`, (sh) => {
     Object.assign(sh.uniforms, shared, own)
     sh.vertexShader = sh.vertexShader
       .replace(

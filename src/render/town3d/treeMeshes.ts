@@ -160,6 +160,8 @@ interface LumpOpt {
   /** 下半截向内收（垂柳的枝条：上圆下尖） */
   taper?: number
   col?: RGB
+  /** 卫星小团（低模一级不细分） */
+  minor?: boolean
   /** 法线靠拢用的冠心（缺省为整棵树的） */
   origin?: V3
 }
@@ -203,7 +205,8 @@ class Builder {
     const off = [this.r(0, 50), this.r(0, 50), this.r(0, 50)]
     const tone = o.tone ?? this.rnd()
     if (skip) return
-    const level = Math.max(0, 2 - this.lod + (o.level ?? 0))
+    // 低模一级的大团仍细分一次：不细分的二十面体在 90 ~ 260 米处看得出棱面；小团与本就降过级的（垂柳枝条、竹叶团）不加
+    const level = Math.max(0, 2 - this.lod + (o.level ?? 0) + (this.lod === 2 && !o.minor && !o.level ? 1 : 0))
     const ico = icosphere(level)
     const amp = o.amp ?? 0.22
     const v0 = this.nv
@@ -239,7 +242,7 @@ class Builder {
       const e = this.r(-0.5, 0.9)
       const d = norm([Math.cos(a) * Math.cos(e) + out[0] * 0.8, Math.sin(e) * flat + out[1] * 0.8 + 0.1, Math.sin(a) * Math.cos(e) + out[2] * 0.8])
       const rr = r * this.r(0.48, 0.7)
-      this.lump(add(c, d, r * this.r(0.6, 0.85)), [rr, rr * flat, rr], { ...o, amp: (o.amp ?? 0.22) * 1.15 }, this.lod === 2 && k % 2 === 1)
+      this.lump(add(c, d, r * this.r(0.6, 0.85)), [rr, rr * flat, rr], { ...o, amp: (o.amp ?? 0.22) * 1.15, minor: true }, this.lod === 2 && k % 2 === 1)
     }
   }
 
