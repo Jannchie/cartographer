@@ -17,7 +17,7 @@ import { heightSampler, type TownBuild } from './massing'
 import type { TownChunk } from './mesh'
 import { TownGround, skirtGeometries } from './ground'
 import { WATER_LEVEL } from './relief'
-import { createTreeMesh } from './treeLayer'
+import { TreeLayer } from './treeLayer'
 
 /**
  * 聚落沙盘：成长史中出现过的全部体块与树一次建好（见 massing.ts，在 Worker 里构建），
@@ -106,6 +106,7 @@ export class TownScene {
   private chunks: THREE.Mesh[] = []
   /** 地面：贴图、高清块与每座城的地形、水面网格 */
   private ground: TownGround
+  private trees: TreeLayer | null = null
   private style: SettleStyleId = 'color'
   /** 指针按着（拖动中，即使这一帧没动也不算停下） */
   private held = false
@@ -331,7 +332,8 @@ export class TownScene {
     for (const c of build.chunks) this.chunks.push(this.chunkMesh(c))
     this.city.add(...this.chunks)
     // 树
-    for (const t of build.trees) if (t.count) this.city.add(createTreeMesh(t, this.u))
+    this.trees = new TreeLayer(build.trees, this.u)
+    this.city.add(this.trees.group)
 
     // 地面与水
     this.city.add(...this.ground.build(hist.st, build.terrain, this.u, this.K))
@@ -387,6 +389,11 @@ export class TownScene {
   }
 
   private clearTown() {
+    if (this.trees) {
+      this.city.remove(this.trees.group)
+      this.trees.dispose()
+      this.trees = null
+    }
     for (const c of [...this.city.children]) {
       this.city.remove(c)
       if (c.userData.field) (c.userData.field as THREE.Texture).dispose()
@@ -659,6 +666,7 @@ export class TownScene {
     const aperture = this.opts.dof * 22 * Math.min(1.8, Math.sqrt(60 / this.focusDist))
     const scale = moved ? this.motionScale : 1
     this.lastScale = moved ? scale : 0
+    this.trees?.update(cam)
     this.timer.frameStart()
     this.timer.tag = this.lastScale
     this.post.render(this.renderer, this.scene, cam, this.focusDist, aperture, null, this.timer, scale)

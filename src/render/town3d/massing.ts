@@ -16,7 +16,7 @@ import { crossing, moatBridge } from './bridges'
 import { boat, pier } from './harbor'
 import { fieldProps, landmarkProp, propBuilding, propIndex, rock, wonder } from './props'
 import { heightSampler, hex } from './shared'
-import { treeInstances, type TreeSet } from './vegetation'
+import { treeInstances, type TreeBuild } from './vegetation'
 import { terrainMesh, type TerrainMesh } from './relief'
 
 export { heightSampler }
@@ -24,7 +24,7 @@ export { heightSampler }
 /** Worker 回传的沙盘数据（数组均可转移） */
 export interface TownBuild {
   chunks: TownChunk[]
-  trees: TreeSet[]
+  trees: TreeBuild
   terrain: TerrainMesh
   /** 三角形总数 */
   tris: number
