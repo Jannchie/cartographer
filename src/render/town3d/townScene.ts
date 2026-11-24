@@ -15,7 +15,7 @@ import { daylight, type Daylight } from '../aerial/daylight'
 import { patchBuilding } from './buildingShader'
 import { heightSampler, type TownBuild } from './massing'
 import type { TownChunk } from './mesh'
-import { GroundPainter, createGroundMaterial, createWaterMaterial, skirtGeometries, terrainGeometry, waterTexture } from './ground'
+import { TownGround, skirtGeometries } from './ground'
 import { WATER_LEVEL } from './relief'
 import { createTreeMesh } from './treeLayer'
 
@@ -104,13 +104,9 @@ export class TownScene {
   private H: (x: number, z: number) => number = () => 0
   private hRange: [number, number] = [0, 0]
   private chunks: THREE.Mesh[] = []
-  private groundU: ReturnType<typeof createGroundMaterial>['uniforms'] | null = null
-  private painter: GroundPainter
-  private groundTex: THREE.CanvasTexture
-  private detailTex: THREE.CanvasTexture
+  /** 地面：贴图、高清块与每座城的地形、水面网格 */
+  private ground: TownGround
   private style: SettleStyleId = 'color'
-  /** 高清块：米坐标的中心与边长；dirty 时（地面重画后）需要重新栅格化 */
-  private detail = { x: 0, z: 0, size: 0, dirty: false }
   /** 指针按着（拖动中，即使这一帧没动也不算停下） */
   private held = false
   /** 共享的 uniform：成长与夜里的窗灯 */
@@ -195,16 +191,7 @@ export class TownScene {
     this.env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
     pmrem.dispose()
 
-    const maxTex = this.renderer.capabilities.maxTextureSize
-    this.painter = new GroundPainter(maxTex)
-    this.groundTex = new THREE.CanvasTexture(this.painter.base)
-    this.groundTex.colorSpace = THREE.SRGBColorSpace
-    this.groundTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy())
-    this.detailTex = new THREE.CanvasTexture(this.painter.detail)
-    this.detailTex.colorSpace = THREE.SRGBColorSpace
-    this.detailTex.anisotropy = this.groundTex.anisotropy
-    this.detailTex.generateMipmaps = false
-    this.detailTex.minFilter = THREE.LinearFilter
+    this.ground = new TownGround(this.renderer)
 
     this.bldMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0 })
     patchBuilding(this.bldMat, this.u, false)
@@ -347,23 +334,11 @@ export class TownScene {
     for (const t of build.trees) if (t.count) this.city.add(createTreeMesh(t, this.u))
 
     // 地面与水
-    const gm = createGroundMaterial(this.groundTex, this.detailTex)
-    const ground = new THREE.Mesh(terrainGeometry(build.terrain), gm.mat)
-    ground.receiveShadow = true
-    ground.castShadow = true
-    this.groundU = gm.uniforms
-    this.city.add(ground)
-    const field = waterTexture(hist.st, build.terrain)
-    const wm = createWaterMaterial(field, this.env, { w: W, h: D })
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(W, D).rotateX(-Math.PI / 2).translate(W / 2, WATER_LEVEL, D / 2), wm.mat)
-    water.receiveShadow = true
-    water.renderOrder = 2
-    water.userData.field = field
-    this.city.add(water)
+    this.city.add(...this.ground.build(hist.st, build.terrain, this.u, this.K))
 
     // 剖面与底座：岩层底在最低地表之下约 3 单位
     const base = Math.min(lo * this.K, -0.3) - 3
-    const sk = skirtGeometries(hist.st, this.H, this.K, base)
+    const sk = skirtGeometries(build.terrain.rim, this.K, base)
     const rock = new THREE.Mesh(sk.rock, this.diorama.strata.mat)
     rock.castShadow = rock.receiveShadow = true
     rock.userData.shared = true
@@ -422,11 +397,10 @@ export class TownScene {
       else deep(c)
     }
     this.chunks = []
-    this.groundU = null
+    this.ground.forget()
     this.hist = null
     clearTimeout(this.paint.timer)
     this.paint = { busy: false, next: -1, shown: -1, cost: 0, timer: 0 }
-    this.detail = { x: 0, z: 0, size: 0, dirty: false }
   }
 
   /**
@@ -474,13 +448,8 @@ export class TownScene {
   }
 
   private paintGround(pop: number, st: Settlement) {
-    const t0 = performance.now()
-    const r = this.painter.paintBase(st, this.style)
-    if (r.resized) this.groundTex.dispose()
-    this.groundTex.needsUpdate = true
+    this.paint.cost = this.ground.paint(st, this.style)
     this.paint.shown = pop
-    this.paint.cost = performance.now() - t0
-    this.detail.dirty = true
     this.invalidate()
   }
 
@@ -740,39 +709,14 @@ export class TownScene {
     return true
   }
 
-  /**
-   * 地面高清块：镜头离地近时，以视点为中心把地面层另栅格化一块（2048 见方），
-   * 边长约为观察距离的 2.2 倍；移出一定范围、缩放明显或地面重画后重新栅格化
-   */
+  /** 地面高清块跟着视点（镜头停稳后）：一次画一级，还有没画的再醒一帧接着画 */
   private updateDetail() {
-    const u = this.groundU
-    if (!u || !this.hist) return
-    const W = this.hist.st.width
-    const D = this.hist.st.height
-    const dist = this.camera.position.distanceTo(this.controls.target) / this.K
-    const size = Math.min(1400, Math.max(120, dist * 2.2))
-    // 高清块比整幅贴图清楚不了多少时不用
-    if (size > Math.max(W, D) * 0.45) {
-      if (u.uDetailRect.value.z) {
-        u.uDetailRect.value.set(0, 0, 0, 0)
-        this.detail.size = 0
-        this.invalidate()
-      }
-      return
-    }
-    // 中心取视点：绕视点转动时不必重画
+    if (!this.hist) return
     const t = this.controls.target
-    const cx = (t.x - this.city.position.x) / this.K
-    const cz = (t.z - this.city.position.z) / this.K
-    const d = this.detail
-    if (!d.dirty && d.size && Math.hypot(cx - d.x, cz - d.z) < d.size * 0.18 && Math.abs(Math.log(size / d.size)) < 0.3) return
-    const x0 = cx - size / 2
-    const z0 = cz - size / 2
-    if (!this.painter.paintDetail(x0, z0, size)) return
-    this.detailTex.needsUpdate = true
-    u.uDetailRect.value.set(x0, z0, 1 / size, 1 / size)
-    Object.assign(d, { x: cx, z: cz, size, dirty: false })
-    this.post.reset()
+    const dist = this.camera.position.distanceTo(t) / this.K
+    const r = this.ground.focus((t.x - this.city.position.x) / this.K, (t.z - this.city.position.z) / this.K, dist)
+    if (r.changed) this.post.reset()
+    if (r.pending) this.invalidate(false)
   }
 
   // —— 注记 ——
@@ -1025,10 +969,8 @@ export class TownScene {
     this.diorama.dispose()
     this.bldMat.dispose()
     this.bldDepth.dispose()
-    this.groundTex.dispose()
-    this.detailTex.dispose()
     this.env.dispose()
-    this.painter.dispose()
+    this.ground.dispose()
     this.controls.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()

@@ -82,5 +82,5 @@ export function buildTown(st: Settlement, life: Map<object, Life>): TownBuild {
   }
   const chunks = w.finish()
   const trees = treeInstances(st, life, c.H)
-  return { chunks, trees, terrain: terrainMesh(st), tris: chunks.reduce((s, k) => s + k.ids.length, 0), ms: performance.now() - t0 }
+  return { chunks, trees, terrain: terrainMesh(st, life), tris: chunks.reduce((s, k) => s + k.ids.length, 0), ms: performance.now() - t0 }
 }

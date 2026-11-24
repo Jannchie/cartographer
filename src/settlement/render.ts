@@ -3,7 +3,7 @@ import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
 import { DisplayList, rasterArea, rasterPoly, type BBox, type Fill, type Item, type LabelArea, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
 import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, type P, type Poly } from './geom'
-import { settleTheme, type SettleStyleId, type SettleTheme } from './themes'
+import { dioramaGround, settleTheme, type SettleStyleId, type SettleTheme } from './themes'
 import type { BuildingKind, Field, MapLabel, Road, Settlement, SettlementSize } from './types'
 import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type LandUse } from './landuse'
 import { tr } from '../i18n'
@@ -97,9 +97,11 @@ export function buildSettlementVector(st: Settlement, style: SettleStyleId, opts
   waterLayers(R, st, th)
   wonderGlow(R, st, th)
   roads(R, st, th)
-  // 桥、码头、船在水面之上，3D 沙盘里另建实体
+  // 桥、码头、船在水面之上，3D 沙盘里另建实体；护城河（不带桥）、法阵与灵池画在地面上
   if (opts.ground3d) {
+    moatLayers(R, st, th, false)
     enclosureLayers(R, st, th)
+    wonderLayers(R, st, th, true)
     return list
   }
   crossingLayers(R, st, th)
@@ -599,9 +601,15 @@ function furrows(R: Painter, st: Settlement, th: SettleTheme) {
       DisplayList.item(outline(of('pasture')), { stroke: { color: fc, alpha: fa * 2, width: 0.7, dash: [2.2, 1.6] } }, bb),
     ]
   })
-  const pastures = st.fields.filter((f) => f.kind === 'pasture')
-  const sheep: string[] = []
-  for (const f of pastures) {
+  const sheep = flock(st).map((q) => R.circleD(q, 0.95))
+  if (sheep.length) R.list.path('map', sheep.join(''), { fill: { color: th.paper, alpha: 1 }, stroke: { color: th.ink, alpha: 0.75, width: 0.5 } })
+}
+
+/** 牧场上的羊：每块牧场一两小群，各只的位置 */
+function flock(st: Settlement): P[] {
+  const out: P[] = []
+  for (const f of st.fields) {
+    if (f.kind !== 'pasture') continue
     const a = areaOf(f.poly)
     if (Math.abs(a) < 1500) continue
     // 由田块自身的色调取确定的随机：同一块地总是同样的羊群
@@ -614,11 +622,11 @@ function furrows(R: Painter, st: Settlement, th: SettleTheme) {
       const n = 3 + Math.floor(rnd() * 5)
       for (let k = 0; k < n; k++) {
         const q: P = [fc[0] + (rnd() - 0.5) * 9, fc[1] + (rnd() - 0.5) * 7]
-        if (pointInPoly(q, f.poly)) sheep.push(R.circleD(q, 0.95))
+        if (pointInPoly(q, f.poly)) out.push(q)
       }
     }
   }
-  if (sheep.length) R.list.path('map', sheep.join(''), { fill: { color: th.paper, alpha: 1 }, stroke: { color: th.ink, alpha: 0.75, width: 0.5 } })
+  return out
 }
 
 /** 树冠在图上画多大（相对生成时的半径）：与房子的比例更协调 */
@@ -939,21 +947,27 @@ function areaOf(p: Poly) {
   return a / 2
 }
 
-function wallLayers(R: Painter, st: Settlement, th: SettleTheme) {
+/** 护城河：岸线、水面、一道水线；城门外的桥压在上面（沙盘的地面层不画桥，桥另建实体） */
+function moatLayers(R: Painter, st: Settlement, th: SettleTheme, withBridges: boolean) {
   const S = R.S
-  // 护城河：岸线、水面、一道水线；城门外的桥压在上面
   for (const w of st.walls) {
     if (!w.moat) continue
     const { runs, width, bridges } = w.moat
     R.lines(runs, { color: th.waterEdge ?? th.ink, alpha: 0.75, width: (width + 1.4) * S, cap: 'butt', join: 'round' })
     R.lines(runs, { color: th.water, alpha: 1, width: width * S, cap: 'butt', join: 'round' })
     R.lines(runs, { color: th.waterLine.color, alpha: th.waterLine.alpha[0], width: 0.6, cap: 'butt', join: 'round' })
+    if (!withBridges) continue
     for (const b of bridges) {
       const u: P = [dmath.cos(b.angle), dmath.sin(b.angle)]
       const q = rect(b.p, u, width + 5, 7)
       R.poly(q, { color: th.wall.fill, alpha: 1 }, { color: th.wall.stroke, alpha: 1, width: 0.9 })
     }
   }
+}
+
+function wallLayers(R: Painter, st: Settlement, th: SettleTheme) {
+  const S = R.S
+  moatLayers(R, st, th, true)
   for (const w of st.walls) {
     const n = w.loop.length
     // 实心墙段（城门处断开）
@@ -1028,8 +1042,10 @@ function wonderGlow(R: Painter, st: Settlement, th: SettleTheme) {
   }
 }
 
-function wonderLayers(R: Painter, st: Settlement, th: SettleTheme) {
+/** ground：只画贴在地面上的（法阵、灵池），浮空岛由别处表达 */
+function wonderLayers(R: Painter, st: Settlement, th: SettleTheme, ground = false) {
   for (const w of st.wonders) {
+    if (ground && w.kind === 'isle') continue
     if (w.kind === 'circle') {
       const c = w.p
       R.list.path('map', R.circleD(c, w.r * 1.15), { fill: { color: th.magic, alpha: 0.08 } })
@@ -1086,6 +1102,288 @@ function wonderLayers(R: Painter, st: Settlement, th: SettleTheme) {
       }
       R.list.path('map', trees.join(''), { fill: { color: th.tree.fill, alpha: 1 }, stroke: { color: th.tree.dark, alpha: 0.8, width: 0.6 } })
     }
+  }
+}
+
+// —————————————————————— 沙盘地面 ——————————————————————
+
+/**
+ * 聚落沙盘的地面层。color：地面贴图的显示列表；mask：写实地景（"彩绘"地面）的材质掩膜，
+ * 与 color 同一套路径，各要素平涂成材质编号与方向，地面着色器据此叠加草皮、垄沟、铺石等细节。
+ * 其他风格的地面就是那种风格的地图，没有掩膜
+ */
+export interface GroundVector {
+  color: DisplayList
+  mask: DisplayList | null
+}
+
+/** 掩膜里的材质编号（与 render/town3d/ground.ts 的地面着色器对应），0 留给"认不出" */
+export const GROUND_MAT = {
+  wild: 1,
+  crop: 2,
+  garden: 3,
+  meadow: 4,
+  pasture: 5,
+  orchard: 6,
+  paddy: 7,
+  vineyard: 8,
+  lawn: 9,
+  cemetery: 10,
+  yard: 11,
+  street: 12,
+  road: 13,
+  lane: 14,
+  path: 15,
+  plaza: 16,
+  stair: 17,
+  gravel: 18,
+  bed: 19,
+  pond: 21,
+  moat: 22,
+} as const
+
+/**
+ * 材质在掩膜里的颜色：蓝 = 编号 × 8 + 4；绿是编号换一种排列再存一遍，两者对不上的像素（路径边缘抗锯齿混出来的）
+ * 着色器不认；红是方向（垄向、铺石的走向）：0 为没有，1 ~ 254 对应 0 ~ π
+ */
+function matColor(id: number, angle?: number) {
+  const r = angle === undefined ? 0 : 1 + Math.round(((((angle % Math.PI) + Math.PI) % Math.PI) / Math.PI) * 253)
+  return `rgb(${r},${((id * 13 + 5) % 32) * 8 + 4},${id * 8 + 4})`
+}
+
+type GroundPaint = { fill?: Fill; stroke?: Stroke }
+/** 掩膜里怎么画：填充的材质色，描边的材质色与线宽 */
+type GroundMatPaint = { fill?: string; stroke?: Omit<Stroke, 'alpha'> }
+
+/** 同一条路径在两张表里各一项；掩膜那项借用颜色那项解析好的 Path2D（先画颜色，再画掩膜） */
+function groundItems(d: string, bb: BBox | undefined, paint: GroundPaint | null, mat: GroundMatPaint | null): [PathItem | undefined, PathItem | undefined] {
+  const c = paint ? DisplayList.item(d, paint, bb) : undefined
+  const m = mat ? DisplayList.item(d, { fill: mat.fill ? { color: mat.fill, alpha: 1 } : undefined, stroke: mat.stroke ? { ...mat.stroke, alpha: 1 } : undefined }, bb) : undefined
+  if (c && m) Object.defineProperty(m, 'p2d', { get: () => (c.p2d ??= new Path2D(c.d)), set: () => undefined, configurable: true })
+  return [c, m]
+}
+
+/** 沙盘地面的分块边长（米）与每块留的版本数（见 chunked） */
+const TILE = 300
+const TILE_KEEP = 4
+const tileMemo = new Map<string, { key: string; color: PathItem[][]; mask: PathItem[][] }[]>()
+type TileOut = (layer: number, d: string, paint: GroundPaint | null, mat: GroundMatPaint | null) => void
+
+class GroundPen {
+  readonly R: Painter
+  constructor(
+    readonly color: DisplayList,
+    readonly mask: DisplayList,
+    readonly S: number,
+  ) {
+    this.R = new Painter(color, S, settleTheme('color'))
+  }
+
+  /** 一条路径写进两张表（paint、mat 各自可缺） */
+  put(d: string, paint: GroundPaint | null, mat: GroundMatPaint | null, bb?: BBox) {
+    if (!d) return
+    const [c, m] = groundItems(d, bb, paint, mat)
+    if (c) this.color.segment('map').items.push(c)
+    if (m) this.mask.segment('map').items.push(m)
+  }
+
+  /**
+   * 一类东西按 TILE 米的方格分块画：块里的东西没变就复用上次的绘制项（成长回放逐帧重画时多数块没变，
+   * 解析好的路径也跟着留下），每项带所在块的包围盒，栅格化高清块时画面外的不画。
+   * pts 给出一样东西的各点（第一点定它归哪一块）；make 把一块的路径按层写出，各块的同一层放在一起
+   */
+  tiled<T extends object>(tag: string, things: T[], pts: (t: T) => P[], make: (group: T[], out: TileOut) => void) {
+    const S = this.S
+    const groups = new Map<string, T[]>()
+    for (const t of things) {
+      const p = pts(t)[0]
+      if (!p) continue
+      const k = `${tag}|${Math.floor(p[0] / TILE)},${Math.floor(p[1] / TILE)}`
+      let g = groups.get(k)
+      if (!g) groups.set(k, (g = []))
+      g.push(t)
+    }
+    const cl: PathItem[][] = []
+    const ml: PathItem[][] = []
+    for (const [cell, group] of groups) {
+      let h = 2166136261
+      for (const t of group) {
+        let id = objIds.get(t)
+        if (id === undefined) objIds.set(t, (id = objNext++))
+        h = Math.imul(h ^ id, 16777619)
+      }
+      const key = `${S}|${group.length}|${h >>> 0}`
+      let slots = tileMemo.get(cell)
+      if (!slots) tileMemo.set(cell, (slots = []))
+      let hit = slots.find((x) => x.key === key)
+      if (!hit) {
+        let bb: BBox = [Infinity, Infinity, -Infinity, -Infinity]
+        for (const t of group) for (const [x, y] of pts(t)) bb = [Math.min(bb[0], x), Math.min(bb[1], y), Math.max(bb[2], x), Math.max(bb[3], y)]
+        bb = [bb[0] * S, bb[1] * S, bb[2] * S, bb[3] * S]
+        const made = { key, color: [] as PathItem[][], mask: [] as PathItem[][] }
+        make(group, (layer, d, paint, mat) => {
+          if (!d) return
+          const [c, m] = groundItems(d, bb, paint, mat)
+          if (c) (made.color[layer] ??= []).push(c)
+          if (m) (made.mask[layer] ??= []).push(m)
+        })
+        hit = made
+        slots.unshift(hit)
+        if (slots.length > TILE_KEEP) slots.pop()
+      }
+      hit.color.forEach((items, k) => (cl[k] ??= []).push(...items))
+      hit.mask.forEach((items, k) => (ml[k] ??= []).push(...items))
+    }
+    const cs = this.color.segment('map')
+    const ms = this.mask.segment('map')
+    for (const l of cl) if (l) cs.items.push(...l)
+    for (const l of ml) if (l) ms.items.push(...l)
+  }
+}
+
+export function buildGroundVector(st: Settlement, style: SettleStyleId, measurer: CanvasRenderingContext2D): GroundVector {
+  if (style !== 'color') return { color: buildSettlementVector(st, style, { labels: false, contours: false, ground3d: true }, measurer), mask: null }
+  const S = settlePageScale(st)
+  const M = 44
+  const MW = Math.round(st.width * S)
+  const MH = Math.round(st.height * S)
+  const G = new GroundPen(new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH), new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH), S)
+  dioramaGroundLayers(G, st)
+  return { color: G.color, mask: G.mask }
+}
+
+/**
+ * 写实地景的地面：各要素平涂成材质的固有色，不画墨线与排线（垄沟、铺石、草皮由着色器按掩膜生成）；
+ * 水体不画（河床、岸滩由着色器按地形与水面的高差着色，护城河与池塘例外：它们不在地形的水体里）。
+ * 图层的先后与二维地图一致
+ */
+function dioramaGroundLayers(G: GroundPen, st: Settlement) {
+  const pal = dioramaGround(st.params.culture)
+  const { R, S } = G
+  const tag = `g3|${st.params.culture}`
+  const MAT = GROUND_MAT
+  const solid = (color: string): Fill => ({ color, alpha: 1 })
+  const line = (color: string, width: number, cap: CanvasLineCap = 'butt', alpha = 1): Stroke => ({ color, alpha, width, cap, join: 'round' })
+  const matLine = (id: number, width: number, cap: CanvasLineCap = 'butt'): GroundMatPaint => ({ stroke: { color: matColor(id), width, cap, join: 'round' } })
+  const add = (m: Map<string, string[]>, k: string, d: string) => {
+    const l = m.get(k)
+    if (l) l.push(d)
+    else m.set(k, [d])
+  }
+  const w = G.color.MW
+  const h = G.color.MH
+  G.put(`M-4 -4L${w + 4} -4L${w + 4} ${h + 4}L-4 ${h + 4}Z`, { fill: solid(pal.wild) }, { fill: matColor(MAT.wild) })
+
+  // 田：底色按色调，掩膜按种类与垄向；田埂是田块之间的一条草带，水田是土埂，牧场围着篱笆
+  G.tiled(`${tag}|field`, st.fields, (f) => f.poly, (fs, out) => {
+    const byColor = new Map<string, string[]>()
+    const byMat = new Map<string, string[]>()
+    for (const f of fs) {
+      const d = R.polyD(f.poly)
+      add(byColor, pick(pal.fields[f.kind], f.tone), d)
+      add(byMat, matColor(MAT[f.kind], f.angle), d)
+    }
+    for (const [c, ds] of byColor) out(0, ds.join(''), { fill: solid(c) }, null)
+    for (const [c, ds] of byMat) out(0, ds.join(''), null, { fill: c })
+    const outline = (keep: (f: Field) => boolean) => fs.filter(keep).map((f) => R.polyD(f.poly)).join('')
+    out(1, outline((f) => f.kind !== 'paddy' && f.kind !== 'pasture' && f.kind !== 'meadow'), { stroke: line(pal.balk, 1.1 * S) }, matLine(MAT.wild, 1.1 * S))
+    out(1, outline((f) => f.kind === 'paddy'), { stroke: line(pal.bund, 0.9 * S) }, matLine(MAT.path, 0.9 * S))
+    out(1, outline((f) => f.kind === 'pasture'), { stroke: { color: pal.fence, alpha: 0.85, width: Math.max(0.5, 0.3 * S), dash: [1.4 * S, 0.9 * S] } }, null)
+  })
+  const sheep = flock(st).map((q) => R.circleD(q, 0.8))
+  if (sheep.length) G.put(sheep.join(''), { fill: solid('#ddd8cb'), stroke: { color: '#5a5145', alpha: 0.6, width: 0.3 * S } }, null)
+
+  const greenMat = { park: MAT.lawn, garden: MAT.lawn, cemetery: MAT.cemetery, courtyard: MAT.lawn }
+  const greens = (name: string, gs: Settlement['greens']) =>
+    G.tiled(`${tag}|${name}`, gs, (g) => g.poly, (group, out) => {
+      for (const kind of ['park', 'garden', 'cemetery', 'courtyard'] as const)
+        out(0, group.filter((g) => g.kind === kind).map((g) => R.polyD(g.poly)).join(''), { fill: solid(pal.green[kind]) }, { fill: matColor(greenMat[kind]) })
+    })
+  greens('green', st.greens)
+
+  // 城内：先铺街道，再铺街区的院地，两者之间的缝就是街巷
+  const inner = st.wards.filter((x) => x.inner && !x.rural && x.type !== 'water')
+  G.tiled(`${tag}|ward`, inner, (x) => x.poly, (ws, out) => out(0, ws.map((x) => R.polyD(x.poly)).join(''), { fill: solid(pal.street) }, { fill: matColor(MAT.street) }))
+  G.tiled(`${tag}|block`, st.blocks, (b) => b, (bs, out) => out(0, bs.map((b) => R.polyD(b)).join(''), { fill: solid(pal.yard) }, { fill: matColor(MAT.yard) }))
+  greens('green2', st.greens.filter((g) => g.kind !== 'cemetery'))
+  // 广场各按自己的长轴铺石
+  G.tiled(`${tag}|plaza`, st.plazas, (p) => p, (ps, out) => {
+    for (const p of ps) {
+      const o = obb(p)
+      out(0, R.polyD(p), { fill: solid(pal.plaza), stroke: line(pal.curb, Math.max(0.5, 0.45 * S)) }, { fill: matColor(MAT.plaza, Math.atan2(o.axis[1], o.axis[0])) })
+    }
+  })
+  G.tiled(`${tag}|park`, (st.parkParts ?? []).filter((q) => q.kind !== 'rock'), (q) => q.poly, (qs, out) => {
+    const d = (k: string) => qs.filter((q) => q.kind === k).map((q) => R.polyD(q.poly)).join('')
+    out(0, d('bed'), { fill: solid(pal.bed), stroke: line(pal.hedge, Math.max(0.8, 0.5 * S)) }, { fill: matColor(MAT.bed) })
+    for (const q of qs) if (q.kind === 'gravel') out(1, R.polyD(q.poly), { fill: solid(pal.gravel) }, { fill: matColor(MAT.gravel, q.angle ?? 0) })
+    out(2, d('pond'), { fill: solid(pal.pond) }, { fill: matColor(MAT.pond) })
+    out(3, d('isle'), { fill: solid(pal.green.park) }, { fill: matColor(MAT.lawn) })
+  })
+  wonderGlow(R, st, R.th)
+
+  // 路：官道有路肩、车辙与路中的一条；街道有路缘；巷子、小径是土路。巷子在下，街道压在路口上
+  G.tiled(`${tag}|road`, st.roads, (r) => r.line, (rs, out) => {
+    const byWidth = (kinds: Road['kind'][]) => {
+      const g = new Map<number, string[]>()
+      for (const r of rs) {
+        if (!kinds.includes(r.kind)) continue
+        const l = g.get(r.width)
+        if (l) l.push(R.lineD(r.line))
+        else g.set(r.width, [R.lineD(r.line)])
+      }
+      return [...g].sort((a, b) => b[0] - a[0]).map(([wd, ds]) => [wd, ds.join('')] as const)
+    }
+    for (const [wd, d] of byWidth(['highway'])) {
+      out(0, d, { stroke: line(pal.verge, (wd + 1.4) * S, 'square') }, matLine(MAT.wild, (wd + 1.4) * S, 'square'))
+      out(1, d, { stroke: line(pal.road, wd * S, 'square') }, matLine(MAT.road, wd * S, 'square'))
+      if (wd >= 3) {
+        out(2, d, { stroke: line(pal.rut, wd * 0.64 * S, 'square') }, null)
+        out(3, d, { stroke: line(pal.crown, wd * 0.26 * S, 'square') }, null)
+      }
+    }
+    for (const [wd, d] of byWidth(['lane'])) {
+      out(4, d, { stroke: line(pal.lane, wd * S, 'square') }, matLine(MAT.lane, wd * S, 'square'))
+      if (wd >= 3) out(5, d, { stroke: line(pal.rut, wd * 0.45 * S, 'square', 0.5) }, null)
+    }
+    for (const [wd, d] of byWidth(['main', 'street'])) {
+      out(6, d, { stroke: line(pal.gutter, (wd + 0.8) * S, 'square') }, matLine(MAT.street, (wd + 0.8) * S, 'square'))
+      out(7, d, { stroke: line(pal.street, wd * S, 'square') }, null)
+    }
+    for (const [wd, d] of byWidth(['path'])) out(8, d, { stroke: line(pal.path, Math.max(1, wd * S), 'square') }, matLine(MAT.path, Math.max(1, wd * S), 'square'))
+    for (const r of rs) {
+      if (r.kind !== 'stair') continue
+      const d = R.lineD(r.line)
+      out(9, d, { stroke: line(pal.curb, (r.width + 1) * S, 'round') }, matLine(MAT.stair, (r.width + 1) * S, 'round'))
+      out(10, d, { stroke: line(pal.stair, r.width * S, 'round') }, null)
+      // 台阶横纹
+      const L = polylineLength(r.line)
+      const ticks: P[][] = []
+      for (let s = 2; s < L; s += 3) {
+        const { p, angle } = pointAt(r.line, s)
+        const n: P = [-dmath.sin(angle) * r.width * 0.5, dmath.cos(angle) * r.width * 0.5]
+        ticks.push([[p[0] - n[0], p[1] - n[1]], [p[0] + n[0], p[1] + n[1]]])
+      }
+      out(11, ticks.map((l) => R.lineD(l)).join(''), { stroke: { color: pal.curb, alpha: 0.9, width: Math.max(0.4, 0.3 * S) } }, null)
+    }
+  })
+
+  // 护城河：河底与两岸（水面由沙盘另建，地形在这里刻下去）
+  for (const x of st.walls) {
+    if (!x.moat) continue
+    const d = x.moat.runs.map((l) => R.lineD(l)).join('')
+    G.put(d, { stroke: line(pal.moatBank, (x.moat.width + 1.6) * S) }, matLine(MAT.moat, (x.moat.width + 1.6) * S))
+    G.put(d, { stroke: line(pal.moat, x.moat.width * S) }, null)
+  }
+  // 院子：比四周的地面略深
+  G.tiled(`${tag}|yard`, st.enclosures, (e) => e, (es, out) => out(0, es.map((e) => R.polyD(e)).join(''), { fill: { color: '#3b3833', alpha: 0.09 } }, null))
+  // 法阵与灵池：灵池是一汪水
+  wonderLayers(R, { ...st, wonders: st.wonders.filter((x) => x.kind !== 'spring') }, R.th, true)
+  for (const x of st.wonders) {
+    if (x.kind !== 'spring') continue
+    G.put(R.circleD(x.p, x.r * 1.8), { fill: { color: R.th.magic, alpha: 0.12 } }, null)
+    G.put(R.circleD(x.p, x.r), { fill: solid(pal.pond), stroke: line(pal.curb, Math.max(0.6, 0.4 * S)) }, { fill: matColor(MAT.pond) })
+    G.put(R.circleD(x.p, x.r * 1.35) + R.circleD(x.p, x.r * 1.6), { stroke: { color: R.th.magic, alpha: 0.5, width: 0.6, dash: [2, 2] } }, null)
   }
 }
 

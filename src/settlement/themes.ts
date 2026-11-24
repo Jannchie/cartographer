@@ -528,3 +528,103 @@ export const SETTLE_THEMES: SettleTheme[] = [
 export function settleTheme(id: string): SettleTheme {
   return SETTLE_THEMES.find((t) => t.id === id) ?? SETTLE_THEMES[0]
 }
+
+/**
+ * 聚落沙盘地面（写实地景）的底色。沙盘以"彩绘"作地面时不用图上的浅色，改用草、土、石本来的颜色，
+ * 地面着色器再按材质叠上草皮、垄沟、铺石等细节（见 render/town3d/ground.ts）。
+ * 颜色是材质的固有色，明暗交给光照。
+ */
+export interface DioramaGround {
+  /** 野地的草 */
+  wild: string
+  /** 田埂（田块之间的一条草带）、水田的土埂、牧场的篱笆 */
+  balk: string
+  bund: string
+  fence: string
+  fields: Record<Field['kind'], string[]>
+  green: { park: string; garden: string; cemetery: string; courtyard: string }
+  /** 花坛与镶边的绿篱、耙纹白砂、池水（没有下刻的由着色器画成水面） */
+  bed: string
+  hedge: string
+  gravel: string
+  pond: string
+  /** 城内街道（铺石或夯土）与路缘、街区里的院地、广场与边石 */
+  street: string
+  gutter: string
+  yard: string
+  plaza: string
+  curb: string
+  /** 官道：路肩、路面、车辙、路中 */
+  verge: string
+  road: string
+  rut: string
+  crown: string
+  /** 巷子与小径（土路）、台阶 */
+  lane: string
+  path: string
+  stair: string
+  /** 护城河的河底与岸 */
+  moat: string
+  moatBank: string
+  /** 城内街道铺石（否则是夯土） */
+  paved: boolean
+}
+
+export function dioramaGround(culture: Culture): DioramaGround {
+  const base: DioramaGround = {
+    wild: '#84925a',
+    balk: '#7b8a4c',
+    bund: '#9a8a66',
+    fence: '#6e5d45',
+    fields: {
+      // 麦田：将熟的金黄、青苗、收过的茬地、翻耕过的土
+      crop: shades('#c4ad68', '#a3ad5e', '#b9a877', '#8fa256', '#9a7f5c', '#b5b068'),
+      pasture: shades('#8ca05a', '#93a45e'),
+      orchard: shades('#84985a'),
+      paddy: shades('#74896c', '#7c9070'),
+      vineyard: shades('#a49370'),
+      garden: shades('#8c7a5c', '#94805e', '#86765a'),
+      meadow: shades('#9aaa64', '#a2ae6a'),
+    },
+    green: { park: '#7a9358', garden: '#82985e', cemetery: '#879465', courtyard: '#8d9a68' },
+    bed: '#6f8a4e',
+    hedge: '#4f6a3a',
+    gravel: '#cfc8b6',
+    pond: '#4a6462',
+    street: '#a59d8f',
+    gutter: '#857e72',
+    yard: '#9b946f',
+    plaza: '#b3aa98',
+    curb: '#8f887a',
+    verge: '#8e8a5e',
+    road: '#b7a584',
+    rut: '#a3906f',
+    crown: '#b1a57c',
+    lane: '#b09e7e',
+    path: '#ad9c7a',
+    stair: '#a8a295',
+    moat: '#5e5a48',
+    moatBank: '#7d7458',
+    paved: true,
+  }
+  if (culture === 'eastern') return { ...base, street: '#a39e94', gutter: '#847f76', plaza: '#a9a59c', yard: '#a89f7c', lane: '#b3a283' }
+  if (culture === 'wa') return { ...base, street: '#b3a487', gutter: '#96886c', plaza: '#bdb096', yard: '#a8a07a', gravel: '#d6d1c2', paved: false }
+  if (culture === 'islamic')
+    return {
+      ...base,
+      wild: '#a39b62',
+      balk: '#8f8a54',
+      street: '#c2ae8a',
+      gutter: '#a5916f',
+      plaza: '#c9b896',
+      yard: '#b8a67c',
+      road: '#c4b08a',
+      rut: '#af9a74',
+      crown: '#bdab82',
+      lane: '#bfaa84',
+      path: '#b9a47e',
+      verge: '#a09660',
+      paved: false,
+    }
+  return base
+}
