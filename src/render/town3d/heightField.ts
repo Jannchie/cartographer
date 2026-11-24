@@ -46,6 +46,11 @@ export interface HeightFieldSpec {
   inner: { x0: number; z0: number; x1: number; z1: number; level: number }
   /** 格距的目标（世界单位） */
   cell: number
+  /**
+   * 渲染之外补盖的实体：put(x, z, 半径, 顶高)（世界单位）把圆盘内的表面抬到顶高。
+   * 树按镜头距离分级、交界抖动淡入淡出，从正上方渲染时会漏掉一部分，按实例数据补上
+   */
+  stamp?: (put: (x: number, z: number, r: number, top: number) => void) => void
 }
 
 export class HeightField {
@@ -174,6 +179,22 @@ export class HeightField {
         raw[j * nx + i] = y
       }
     }
+    spec.stamp?.((x, z, r, top) => {
+      const i0 = Math.max(0, Math.floor((x - r - spec.x0) / cx))
+      const i1 = Math.min(nx - 1, Math.floor((x + r - spec.x0) / cx))
+      const j0 = Math.max(0, Math.floor((z - r - spec.z0) / cz))
+      const j1 = Math.min(nz - 1, Math.floor((z + r - spec.z0) / cz))
+      const r2 = (r + 0.5 * Math.max(cx, cz)) ** 2
+      for (let j = j0; j <= j1; j++) {
+        const dz = spec.z0 + (j + 0.5) * cz - z
+        for (let i = i0; i <= i1; i++) {
+          const dx = spec.x0 + (i + 0.5) * cx - x
+          if (dx * dx + dz * dz > r2) continue
+          const k = j * nx + i
+          if (raw[k] < top) raw[k] = top
+        }
+      }
+    })
     // 锥形包络：正反各扫一遍（倒角距离变换的做法），每格取自己与已扫过的邻格降一格坡度后的较大者
     const env = raw.slice()
     const sx = SLOPE * cx

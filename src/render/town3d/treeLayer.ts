@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { treeMesh, type TreeLod, type TreeMeshData } from './treeMeshes'
 import { contactMaterial, farMaterials, nearMaterials, type LodRange, type TreeMaterials } from './treeShader'
-import { SP, SPECIES_COUNT } from './treeSpecies'
+import { HEIGHT_SCALE, SP, SPECIES, SPECIES_COUNT } from './treeSpecies'
 import { INST_B, INST_F, type TreeBuild, type TreeSet } from './vegetation'
 
 /**
@@ -281,6 +281,26 @@ export class TreeLayer {
         return mesh
       }
       this.chunks.push({ box, a: make(la, ma), b: make(lb, mb) })
+    }
+  }
+
+  /**
+   * 按实例数据把这一刻活着的乔木的树冠盖进高度场（见 HeightField 的 stamp）：圆盘半径取轮廓最宽处，顶高取轮廓顶点。
+   * K、origin：城市组的缩放与平移（米 → 世界）；pop：时间轴上的人口
+   */
+  stamp(put: (x: number, z: number, r: number, top: number) => void, K: number, origin: THREE.Vector3, pop: number) {
+    const t = this.sets[0]
+    const [h0, h1] = HEIGHT_SCALE
+    for (let i = 0; i < t.count; i++) {
+      const f = i * INST_F
+      if (pop < t.inst[f + 4] || pop >= t.inst[f + 5]) continue
+      const b = i * INST_B
+      const sp = SPECIES[t.attr[b] & 15]
+      const r = t.inst[f + 3]
+      let w = 0
+      for (const q of sp.profile) w = Math.max(w, q[0])
+      const top = t.inst[f + 1] + sp.profile[sp.profile.length - 1][1] * r * (h0 + (t.attr[b + 1] / 255) * (h1 - h0))
+      put(origin.x + t.inst[f] * K, origin.z + t.inst[f + 2] * K, w * r * (1 + sp.lump) * K, origin.y + top * K)
     }
   }
 

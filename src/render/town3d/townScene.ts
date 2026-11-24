@@ -565,6 +565,7 @@ export class TownScene {
           top: (this.hRange[1] + 100) * this.K + 1,
           inner: { x0: -hx, z0: -hz, x1: hx, z1: hz, level: WATER_LEVEL * this.K },
           cell: 1.5 * this.K,
+          stamp: (put) => this.trees?.stamp(put, this.K, this.city.position, this.u.uPop.value),
         })
         .then(() => {
           if (this.hist !== hist) return

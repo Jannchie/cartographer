@@ -47,6 +47,8 @@ const MAX_DIST = 240
 /** 俯角下限对应的极角：接近平视，实际的下限由避障的离地余量决定 */
 const MAX_POLAR = Math.PI * 0.492
 const MIN_POLAR = 0.02
+/** 镜头前方这段距离（米）内的视线不得被挡 */
+const BLOCK_NEAR = 30
 
 const NAV_KEYS: Record<string, string> = {
   ArrowUp: 'forward',
@@ -295,12 +297,22 @@ export class CameraRig {
     // 避障：低于包络加余量时，绕视点抬高俯角；连视点正上方都被挡（视点在高塔脚下）就再拉远
     const clear = this.clearance
     const need = (x: number, z: number) => Math.max(w.field.ceiling(x, z), w.ground(x, z)) + clear
+    // 镜头前方近处被挡（贴着一棵树冠、一堵墙）：画面被糊满，也算没让开。远处的遮挡是正常的透视，不管
+    const los = this.v.c
+    const blocked = (q: THREE.Vector3) => {
+      los.copy(t).sub(q)
+      const L = los.length()
+      if (L < 1e-6) return false
+      los.divideScalar(L)
+      return w.field.raycast(q, los, Math.min(L * 0.3, BLOCK_NEAR * w.K), 2) > 0
+    }
     const p = cam.position
-    if (p.y < need(p.x, p.z)) {
+    if (p.y < need(p.x, p.z) || blocked(p)) {
       sph.setFromVector3(tmp.copy(p).sub(t))
       const at = (phi: number) => {
         tmp.setFromSphericalCoords(sph.radius, phi, sph.theta).add(t)
-        return tmp.y - need(tmp.x, tmp.z)
+        const h = tmp.y - need(tmp.x, tmp.z)
+        return h >= 0 && blocked(tmp) ? -1e-3 : h
       }
       let hi = sph.phi
       let lo = hi
