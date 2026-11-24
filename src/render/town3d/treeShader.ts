@@ -149,6 +149,9 @@ const LIGHT_FRAG = /* glsl */ `
       float scatter = (saturate((nl + 0.7) / 1.7) - saturate(nl)) * 0.3;
       float t = (back * (0.18 + 0.82 * rim) * 0.75 + scatter) * (0.35 + 0.65 * tTip) * (0.4 + 0.6 * ao) * tLeafM;
       reflectedLight.directDiffuse += directionalLights[ 0 ].color * lit * diffuseColor.rgb * vec3(1.35, 1.25, 0.45) * (t * RECIPROCAL_PI);
+      // 叶层里的多次透射与散射：整棵树晒得到太阳时，背阴、落在别的团块影子里的叶也被透过来的光照着，
+      // 不是死黑（深色的叶在浅色的地面旁，只靠天光会被后期压成纯黑）
+      reflectedLight.indirectDiffuse += directionalLights[ 0 ].color * lit * diffuseColor.rgb * (0.12 * (0.2 + 0.8 * saturate(-nl * 1.5 + 0.3)) * (0.4 + 0.6 * ao) * tLeafM);
       // 地面的反光：晒着的地面把光反上来，照亮树干与冠底（场景里没有全局光照，树下不该是死黑）
       vec3 up = normalize(viewMatrix[1].xyz);
       float bounce = saturate(dot(sl, up)) * 0.3 * (0.5 - 0.5 * dot(geometryNormal, up)) * (1.0 - 0.6 * vTree.x);
