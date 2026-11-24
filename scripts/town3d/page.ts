@@ -94,6 +94,9 @@ try {
   town.setActive(true)
   await town.setTown(hist, build, st, pop, (q.get('ground') ?? 'color') as SettleStyleId, { name: st.nameZh, sub: `${(st.width / 1000).toFixed(1)} 公里 · 种子 ${params.seed}` })
   const t3 = performance.now()
+  // 建筑的细节着色器在后台编译，换上之后再截图
+  while (!town.detailed) await new Promise((r) => setTimeout(r, 50))
+  const t4 = performance.now()
   // 成长回放时的地面重画：换几个相邻的快照各重画一次，取耗时（首次含显示列表的构建，另记）
   const tp = town as unknown as { paintGround(pop: number, st: unknown): void; paint: { cost: number } }
   const paint: number[] = [tp.paint.cost]
@@ -117,7 +120,7 @@ try {
       height: st.height,
       pop,
       until: hist.until,
-      ms: { history: t1 - t0, build: t2 - t1, scene: t3 - t2, paint },
+      ms: { history: t1 - t0, build: t2 - t1, scene: t3 - t2, detail: t4 - t2, paint },
       tris: build.tris,
       trees: build.trees.species,
       buildings: st.buildings.length,

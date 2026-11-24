@@ -39,7 +39,8 @@ const FRAG_HEAD = /* glsl */ `
   uniform float uNight;
   uniform float uStorey;
   uniform float uMeter;
-  uniform float uCulture;
+  // 文明是编译期常量（见 patchBuilding）：其余文明的分支在编译时整段折叠，着色器编译快几倍
+  const float uCulture = BLD_CULTURE;
   ${NOISE_GLSL}
 
   // 片元的公共量：像素足迹（米）、三档细节的淡出、洞口的视差（每米进深在墙面上的平移）
@@ -165,6 +166,15 @@ const FRAG_BODY = /* glsl */ `
     float coarse = gCoarse;
     float n1 = vnoise(vLocal.xz * 0.35 + vLocal.y * 0.2 + vSeed * 17.0);
     bool pitched = m == 1.0 || m == 2.0 || m == 9.0 || m == 14.0 || m == 25.0 || m == 24.0;
+    // 屋面的顺坡、横坡坐标与它们的像素足迹：在分支外求（分支里的屏幕导数会让 D3D 的编译器把整段分支展平，编译慢上数倍）
+    vec2 rDh = N.xz;
+    float rSl = length(rDh);
+    vec2 rD = rSl > 1e-3 ? rDh / rSl : vec2(0.0, 1.0);
+    // 旋转体的屋面（圆锥、半锥）：横坡坐标用顶点给的方位角 × 半径；按坐标的像素足迹淡出（近顶处瓦列收拢）
+    bool rRot = vUv.y < -0.5;
+    float rAlong = rRot ? vUv.x : dot(vLocal.xz, vec2(-rD.y, rD.x));
+    float rDown = rRot ? -vLocal.y / max(rSl, 0.3) : dot(vLocal.xz, rD) / max(abs(N.y), 0.3);
+    float rAA = max(fwidth(rAlong), fwidth(rDown)) * 0.7;
 
     // —— 构筑物材质（MAT 16 ~ 23：石铺面、木铺板、禾秆、帆布、岩石、灵光、灯火、静水），不分墙面与屋面 ——
     if (m >= 15.5 && m < 23.5) {
@@ -224,15 +234,9 @@ const FRAG_BODY = /* glsl */ `
       diffuseColor.rgb = col;
     } else if (pitched) {
       // —— 屋面：顺坡坐标（米，沿坡面量）与横坡坐标 ——
-      vec2 dh = N.xz;
-      float sl = length(dh);
-      vec2 d = sl > 1e-3 ? dh / sl : vec2(0.0, 1.0);
-      vec2 tr = vec2(-d.y, d.x);
-      // 旋转体的屋面（圆锥、半锥）：横坡坐标用顶点给的方位角 × 半径；按坐标的像素足迹淡出（近顶处瓦列收拢）
-      bool rot = vUv.y < -0.5;
-      float along = rot ? vUv.x : dot(vLocal.xz, tr);
-      float down = rot ? -vLocal.y / max(sl, 0.3) : dot(vLocal.xz, d) / max(abs(N.y), 0.3);
-      gAA = max(gAA, max(fwidth(along), fwidth(down)) * 0.7);
+      float along = rAlong;
+      float down = rDown;
+      gAA = max(gAA, rAA);
       float age = vnoise(vLocal.xz * 0.45 + vSeed * 5.0);
       float streak = vnoise(vec2(along * 1.7 + vSeed * 3.0, down * 0.22));
       if (m == 1.0) {
@@ -975,12 +979,34 @@ export function patchBuilding(mat: THREE.Material, u: Uniforms, depth: boolean) 
       // 顶点指向镜头的方向（模型空间，只用方向）：洞口的视差按它算
       .replace('#include <project_vertex>', '#include <project_vertex>\nvCam = -(transpose(mat3(modelViewMatrix)) * mvPosition.xyz);')
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>\n${FRAG_HEAD}`)
+      .replace('#include <common>', `#include <common>\n#define BLD_CULTURE ${Number(u.uCulture.value).toFixed(1)}\n${FRAG_HEAD}`)
       .replace('#include <color_fragment>', `#include <color_fragment>\n${FRAG_BODY}`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nif (gRough >= 0.0) roughnessFactor = gRough;\nroughnessFactor = mix(roughnessFactor, 0.18, gGlass);')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = max(metalnessFactor, gMetal);')
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = bumpNormal(-vViewPosition, normal, gBump * uMeter);')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(1.0, 0.62, 0.28) * gLit * uNight * 2.4;')
   }
-  mat.customProgramCacheKey = () => (depth ? 'town-bld-depth-3' : 'town-bld-3')
+  // 换了文明要重新编译（TownScene.setTown 换城时置 needsUpdate）
+  mat.customProgramCacheKey = () => (depth ? 'town-bld-depth-3' : `town-bld-3-c${u.uCulture.value}`)
+}
+
+/**
+ * 建筑的简化材质：只有成长升降与顶点色（墙面、屋面的细部全无）。细节着色器体积大，首次编译要数秒，
+ * 沙盘先用它显示出来，细节着色器在后台编译好后再换上（见 TownScene.setTown）
+ */
+export function patchBuildingLite(mat: THREE.Material, u: Uniforms) {
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u)
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>\n${LIFE_GLSL}\nattribute vec3 aLife;`)
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        float lk = lifeK(aLife.xy);
+        if (lk <= 0.0) transformed = vec3(0.0);
+        else transformed.y = aLife.z + (transformed.y - aLife.z) * lk;`,
+      )
+      .replace('#include <color_vertex>', '#include <color_vertex>\nvColor.rgb = pow(vColor.rgb, vec3(2.2));')
+  }
+  mat.customProgramCacheKey = () => 'town-bld-lite'
 }

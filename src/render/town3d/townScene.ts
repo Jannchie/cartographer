@@ -12,7 +12,7 @@ import { Diorama } from '../aerial/diorama'
 import { daylight, type Daylight } from '../aerial/daylight'
 import { FocusProbe } from '../aerial/focusProbe'
 import { CameraTour, type TourPoi } from '../aerial/tour'
-import { patchBuilding } from './buildingShader'
+import { patchBuilding, patchBuildingLite } from './buildingShader'
 import { heightSampler, type TownBuild } from './massing'
 import type { TownChunk } from './mesh'
 import { TownGround, skirtGeometries } from './ground'
@@ -130,6 +130,9 @@ export class TownScene {
   }
   private bldMat: THREE.MeshStandardMaterial
   private bldDepth: THREE.MeshDepthMaterial
+  /** 细节着色器编译好之前用的简化材质；bldFor 为细节着色器已按哪种文明编译好（-1 为还没有） */
+  private bldLite: THREE.MeshStandardMaterial
+  private bldFor = -1
   /** 成长过渡：开始时刻（performance.now），0 表示没有在过渡 */
   private riseAt = 0
   private riseDur = RISE
@@ -199,6 +202,8 @@ export class TownScene {
     patchBuilding(this.bldMat, this.u, false)
     this.bldDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
     patchBuilding(this.bldDepth, this.u, true)
+    this.bldLite = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0 })
+    patchBuildingLite(this.bldLite, this.u)
 
     this.labels = new TownLabels(container)
     this.tourFade = document.createElement('div')
@@ -342,7 +347,13 @@ export class TownScene {
     this.hRange = [lo, hi]
     const culture = hist.st.params.culture
     this.u.uStorey.value = culture === 'western' || culture === 'islamic' ? 3.1 : 3.4
-    this.u.uCulture.value = ['western', 'eastern', 'wa', 'islamic'].indexOf(culture)
+    const cult = ['western', 'eastern', 'wa', 'islamic'].indexOf(culture)
+    // 建筑着色器按文明编译（见 buildingShader.ts）：换了文明要重新编译
+    if (cult !== this.u.uCulture.value) {
+      this.bldMat.needsUpdate = true
+      this.bldFor = -1
+    }
+    this.u.uCulture.value = cult
     this.u.uMeter.value = this.K
     this.u.uPop.value = this.u.uPrev.value = pop
     this.u.uT.value = 1
@@ -399,6 +410,21 @@ export class TownScene {
     this.shadows.invalidate()
     // 着色器在后台并行编译（KHR_parallel_shader_compile），首帧不因同步编译卡住主线程
     this.ready = false
+    // 建筑的细节着色器（按文明编译，首次要数秒）没编译好时先用简化材质显示，后台编译好再换上
+    const detailed = this.bldFor === cult
+    for (const m of this.chunks) m.material = detailed ? this.bldMat : this.bldLite
+    if (!detailed && this.chunks.length) {
+      const probe = new THREE.Mesh(this.chunks[0].geometry, this.bldMat)
+      void this.renderer
+        .compileAsync(probe, this.camera, this.scene)
+        .catch(() => undefined)
+        .then(() => {
+          if (this.hist !== hist) return
+          this.bldFor = cult
+          for (const m of this.chunks) m.material = this.bldMat
+          this.invalidate()
+        })
+    }
     await this.renderer.compileAsync(this.scene, this.camera).catch(() => undefined)
     if (this.hist !== hist) return
     this.ready = true
@@ -406,6 +432,11 @@ export class TownScene {
     this.setLabels(st.labels)
     this.setPois(st)
     this.scheduleBake(0)
+  }
+
+  /** 建筑的细节着色器已经换上（还在用简化材质时为假） */
+  get detailed() {
+    return this.bldFor === this.u.uCulture.value
   }
 
   private chunkMesh(c: TownChunk) {
@@ -425,6 +456,7 @@ export class TownScene {
     m.castShadow = m.receiveShadow = true
     m.userData.ids = c.ids
     m.userData.life = c.life
+    m.userData.chunk = true
     return m
   }
 
@@ -440,7 +472,7 @@ export class TownScene {
       if (c.userData.depth) (c.userData.depth as THREE.Material).dispose()
       const m = c as THREE.Mesh
       if (c.userData.shared) m.geometry.dispose()
-      else if (m.material === this.bldMat) m.geometry.dispose()
+      else if (c.userData.chunk) m.geometry.dispose()
       else deep(c)
     }
     this.stopTour()
@@ -1032,6 +1064,7 @@ export class TownScene {
     this.diorama.dispose()
     this.bldMat.dispose()
     this.bldDepth.dispose()
+    this.bldLite.dispose()
     this.env.dispose()
     this.ground.dispose()
     this.rig.dispose()
