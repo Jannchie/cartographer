@@ -39,7 +39,8 @@ export function building(c: Ctx, b: Building, fac: Facade, st?: Settlement) {
     fac,
     f: frameOf(poly, b.ridge),
     g0,
-    g1,
+    // 墙顶、屋面也按色调错开几厘米：平地上相邻的同层房子屋面同高，出挑的山面伸进邻屋的屋面里会共面闪烁
+    g1: g1 + (tone - 0.5) * 0.08,
     base,
     tone,
     t2: frac(tone * 7.31 + 0.17),
