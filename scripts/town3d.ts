@@ -80,6 +80,11 @@ try {
     wall: () => ({ x: first(info.gates, mid)[0], z: first(info.gates, mid)[1], dist: 220, azimuth: 110, pitch: 28 }),
     edge: () => ({ x: W * 0.06, z: D * 0.9, dist: 260, azimuth: 315, pitch: 12 }),
     trees: () => ({ x: W * 0.2, z: D * 0.25, dist: 90, azimuth: 70, pitch: 20 }),
+    // 贴近单栋民居、街面平视、底座一角（镜头、景深、阴影与展厅背景的检查机位）
+    house: () => ({ x: of('house')[0], z: of('house')[1], dist: 26, azimuth: 215, pitch: 24 }),
+    eye: () => ({ x: core[0], z: core[1], dist: 30, azimuth: 250, pitch: 5 }),
+    low: () => ({ x: core[0], z: core[1], dist: 140, azimuth: 310, pitch: 8 }),
+    plinth: () => ({ x: W * 0.97, z: D * 0.97, dist: 420, azimuth: 35, pitch: 9 }),
     water: () => ({ x: first(info.piers, first(info.bridges, mid))[0], z: first(info.piers, first(info.bridges, mid))[1], dist: 110, azimuth: 150, pitch: 20 }),
   }
   const wanted = flags.filter((a) => a.startsWith('--view=')).map((a) => a.slice(7))
@@ -93,19 +98,31 @@ try {
   })
   mkdirSync(OUT, { recursive: true })
   const tag = `${query.get('culture') ?? 'western'}-${query.get('seed')}`
-  for (const v of views) {
-    await page.evaluate((v) => (window as any).__shot.town.setView(v), v)
-    // 停稳后才栅格化地面高清块（见 TownScene 的 DETAIL_IDLE），再等时间累积收敛
-    await new Promise((r) => setTimeout(r, 900))
-    const data = (await page.evaluate('window.__shot.town.snapshot()')) as string
-    const file = `${OUT}/${tag}-${v.name}.png`
-    writeFileSync(file, Buffer.from(data.slice(data.indexOf(',') + 1), 'base64'))
-    let perf = ''
-    if (flags.includes('--perf')) {
-      const m = (await page.evaluate('window.__shot.town.measure(40)')) as { ms: number; calls: number; triangles: number }
-      perf = ` · 移动中每帧 ${m.ms.toFixed(2)} ms · 绘制 ${m.calls} 次 · ${(m.triangles / 1000).toFixed(0)}k 三角形`
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  // --times=7,18.5,21：同一座城换几个时刻各截一轮（文件名加 -t<时刻>）；不给时只截地址参数里的时刻
+  const times = (flag('times') ?? '').split(',').filter(Boolean).map(Number)
+  for (const time of times.length ? times : [NaN]) {
+    if (Number.isFinite(time)) await page.evaluate((t) => (window as any).__shot.town.setOptions({ timeOfDay: t }), time)
+    for (const v of views) {
+      await page.evaluate((v) => (window as any).__shot.town.setView(v), v)
+      // 停稳后才栅格化地面高清块（见 TownScene 的 DETAIL_IDLE），再等时间累积收敛
+      await sleep(900)
+      const data = (await page.evaluate('window.__shot.town.snapshot()')) as string
+      const file = `${OUT}/${tag}-${v.name}${Number.isFinite(time) ? `-t${time}` : ''}.png`
+      writeFileSync(file, Buffer.from(data.slice(data.indexOf(',') + 1), 'base64'))
+      let perf = ''
+      if (flags.includes('--perf')) {
+        // 逐项耗时：打开 GPU 计时的分项，测完等查询结果回来再读（计时器按名字做滑动平均）
+        await page.evaluate('(() => { const t = window.__shot.town.timer; t.detail = true; t.ms.clear() })()')
+        const m = (await page.evaluate('window.__shot.town.measure(60)')) as { ms: number; calls: number; triangles: number }
+        await sleep(250)
+        const passes = (await page.evaluate('(() => { const t = window.__shot.town.timer; t.detail = false; return [...t.ms] })()')) as [string, number][]
+        perf = ` · 移动中每帧 ${m.ms.toFixed(2)} ms · 绘制 ${m.calls} 次 · ${(m.triangles / 1000).toFixed(0)}k 三角形\n    ${passes.map(([k, x]) => `${k} ${x.toFixed(2)}`).join(' · ')}`
+      }
+      const s = (await page.evaluate('window.__shot.town.stats?.() ?? null')) as Record<string, number> | null
+      const cam = s ? ` · 实际距 ${s.orbit.toFixed(0)} 高 ${s.height.toFixed(1)} 对焦 ${s.focus.toFixed(1)} 米` : ''
+      console.log(`${file} · (${v.x.toFixed(0)}, ${v.z.toFixed(0)}) 距 ${v.dist.toFixed(0)} 米 方位 ${v.azimuth} 俯 ${v.pitch}${cam}${perf}`)
     }
-    console.log(`${file} · (${v.x.toFixed(0)}, ${v.z.toFixed(0)}) 距 ${v.dist.toFixed(0)} 米 方位 ${v.azimuth} 俯 ${v.pitch}${perf}`)
   }
 } catch (e) {
   console.error(e)
