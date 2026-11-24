@@ -5,9 +5,10 @@
  * 纯函数，在 Worker 中运行。
  */
 import { centroid } from '../../settlement/geom'
-import { DOOR, MAT, STYLE, WIN, annulus, block, cap, circle, crenels, gable, hip, irimoya, parapet, prism, rectOf, ridgeBar, shade, skirt, sub, taper, tent, tube, walls, type Frame, type RGB, type WallFac } from './mesh'
+import { DOOR, MAT, STYLE, WIN, annulus, block, cap, circle, crenels, gable, hip, irimoya, parapet, prism, rectOf, ridgeBar, shade, skirt, sub, taper, tent, tube, turned, walls, type Frame, type RGB, type WallFac } from './mesh'
 import { finial, hashOf, peristyle, terrace, type Site } from './kit'
 import type { Group } from './groups'
+import { edgeFacing } from './western'
 import { GILT, GREY_BRICK, LACQUER, MARBLE, PALACE_RED, ROOF, STONE_EAST, WHITEWASH, hex, pick, type Ctx } from './shared'
 
 const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x))
@@ -179,6 +180,8 @@ function house(c: Ctx, s: Site) {
   w.gableFace = wm
   w.soffit = MAT.rafter
   const top = g1 + floors * storey * (large ? 1 : 0.9)
+  // 进深、面宽都在十三米以上的宅地（邸店、大宅）：一栋大屋顶会高出十多米，改成四面围合的合院
+  if (floors === 1 && f.b >= 6.5 && b.poly.length <= 6) return courtyard(c, s, wallCol, wm, roofCol, top)
   // 正面（开门的一面）是木装修：平房是通间的槅扇，楼房底层是铺面
   const front = (i: number) => (i === fac.door ? (floors > 1 ? { face: wm | WIN | DOOR, style: STYLE.shop } : { face: MAT.hall | WIN, style: STYLE.lattice, c: WOOD }) : null)
   w.c = wallCol
@@ -191,6 +194,61 @@ function house(c: Ctx, s: Site) {
   }
   // 硬山：两山出际很小
   gable(w, f, top, 0.58 + t2 * 0.08, large ? 0.85 : 0.65, roofCol, wallCol, 'curved', 0.3)
+}
+
+/**
+ * 合院：后面的正房最高最深，两侧厢房次之，临街的倒座最矮；各自硬山两坡，围出当中的院子。
+ * 临街的墙只在倒座当中开门，朝院子的一面开窗与槅扇
+ */
+function courtyard(c: Ctx, s: Site, wallCol: RGB, wm: number, roofCol: RGB, top: number) {
+  const { w } = c
+  const { b, f, fac, base, t2 } = s
+  // 正面朝向：开门那面墙（没有门时取 −v）
+  let n: [number, number] = [-f.v[0], -f.v[1]]
+  if (fac.door >= 0) {
+    const p = b.poly[fac.door]
+    const q = b.poly[(fac.door + 1) % b.poly.length]
+    n = [(p[0] + q[0]) / 2 - f.c[0], (p[1] + q[1]) / 2 - f.c[1]]
+  }
+  const alongV = Math.abs(n[0] * f.v[0] + n[1] * f.v[1]) >= Math.abs(n[0] * f.u[0] + n[1] * f.u[1])
+  // F：u 横向，v 指向正面（保持左右手系：转 90° 或 180°）
+  let F: Frame = alongV ? f : turned(f)
+  if (n[0] * F.v[0] + n[1] * F.v[1] < 0) F = { ...F, u: [-F.u[0], -F.u[1]], v: [-F.v[0], -F.v[1]] }
+  const A = F.a
+  const B = F.b
+  const d = clamp(Math.min(A, B) * 0.34, 4.2, 7.5)
+  const k = 0.58 + t2 * 0.06
+  w.roofFace = MAT.tileEast
+  w.gableFace = wm
+  w.soffit = MAT.rafter
+  /** 一栋房：r 为房的框（u 沿屋脊），朝院子开窗槅扇，临街的一面按 door 开门 */
+  const range = (r: Frame, y: number, street: boolean) => {
+    const ring = rectOf(r)
+    const inner = edgeFacing(ring, [F.c[0] - r.c[0], F.c[1] - r.c[1]])
+    const outer = (inner + 2) % 4
+    w.c = wallCol
+    w.face = wm | WIN
+    walls(w, ring, base, y, {
+      win: ring.map((_, i) => i === inner),
+      door: street ? outer : -1,
+      alt: (i) => (i === inner ? { face: MAT.hall | WIN, style: STYLE.lattice, c: WOOD } : null),
+    })
+    w.roofTh = 0.28
+    const g = gable(w, r, y, k, 0.6, roofCol, wallCol, 'curved', 0.3)
+    ridgeBar(w, r, r.a + 0.1, g.yr, 0.26, shade(roofCol, 0.8))
+  }
+  // 正房（后）、倒座（前）：屋脊沿 u
+  range(sub(F, 0, -(B - d / 2), A, d / 2), top + 0.6, false)
+  const df = d * 0.8
+  range(sub(F, 0, B - df / 2, A, df / 2), top - 0.3, true)
+  // 厢房：屋脊沿 v，夹在正房与倒座之间
+  const ds = d * 0.82
+  const len = (2 * B - d - df) / 2
+  if (len > 1.5)
+    for (const sd of [-1, 1]) {
+      const sf = sub(F, sd * (A - ds / 2), (B - df - (B - d)) / 2, ds / 2, len)
+      range(turned(sf), top, false)
+    }
 }
 
 // —————————————————————— 寺观的殿、祠庙 ——————————————————————

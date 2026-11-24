@@ -632,7 +632,26 @@ const FRAG_BODY = /* glsl */ `
         }
       } else if (sty == 5.0) {
         // 正立面：居中的大门洞（层层收进的尖拱门）与其上的玫瑰窗
-        if (hasL && H > 4.0) {
+        if (hasL && H > 4.0 && uCulture > 0.5 && uCulture < 2.5) {
+          // 东亚的城台、门台：居中一个半圆券的门洞（券洞深，里面是暗的门道），券脸一道砖券，没有玫瑰窗
+          float cx = x - L * 0.5;
+          float dw = min(L * 0.16, 2.6);
+          float dhh = min(dw * 2.1, H * 0.62);
+          vec2 q = vec2(cx, y - 0.05);
+          vec2 qi;
+          vec3 hh = hole(q, dw, dhh, 2.0, 2.6, qi);
+          float dO = holeD(q, dw, dhh, 2.0);
+          // 门道深处的一对朱漆门扇（半开，只露出两侧）与地面受光的一截
+          float leaf = step(dw * 0.55, abs(qi.x)) * step(qi.y, dhh - dw * 0.4);
+          vec3 inC = mix(vec3(0.045, 0.04, 0.035), vec3(0.28, 0.07, 0.04) * (0.8 + 0.3 * n1), leaf * 0.8);
+          inC = mix(inC, col * 0.45, smoothstep(0.8, 0.0, qi.y) * 0.5);
+          col = mix(col, mix(col * 0.68 * hh.z, inC, hh.y), hh.x * coarse);
+          // 券脸：洞口外一圈立砌的砖券，起券处一道线
+          float ring = edgeMask(abs(dO - 0.28), 0.22, aa) * (1.0 - hh.x) * step(dhh - dw, q.y);
+          col *= 1.0 + 0.1 * ring * mid;
+          gBump += ring * 0.03 * mid;
+          lit = hh.y * 0.1 * coarse;
+        } else if (hasL && H > 4.0) {
           float cx = x - L * 0.5;
           float dw = min(L * 0.17, 2.4);
           float dhh = min(dw * 2.5, H * 0.5);
