@@ -882,7 +882,8 @@ function palaceBlock(c: Ctx, s: Site, p: string) {
   w.c = shade(stone, 1.06)
   w.face = MAT.plain
   block(w, grow(b.poly, 0.25), top - 0.4, top)
-  const k = p === 'pavilion' ? 1.5 : 1.05
+  // 进深二三十米的翼楼按常坡会起十几米高的金字塔屋顶：屋面升高限在 6 米（亭阁 9 米）内，进深大的坡度放缓
+  const k = Math.min(p === 'pavilion' ? 1.5 : 1.05, (p === 'pavilion' ? 9 : 6) / Math.max(f.b, 1))
   hip(w, f, top, k, 0.2, roof)
   w.face = MAT.stone
   if (f.b > 3.5) for (const sg of [-1, 1]) for (let x = -f.a + 2.5; x <= f.a - 2.5; x += 4.5) dormer(w, f, x, sg, top, k, stone, roof)
