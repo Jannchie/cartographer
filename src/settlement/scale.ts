@@ -107,8 +107,8 @@ export const perHousehold = (culture: Culture) => CULTURE_INFO[culture].perHouse
  * - trade：商贸城的系数（宽街、仓栈只在西式的街坊里明显压低密度）
  */
 const HOUSING: Record<Culture, { farm: number; street: number; town: number; regular: number; trade: number }> = {
-  western: { farm: 4.5, street: 38, town: 38, regular: 0, trade: 0.85 },
-  eastern: { farm: 8.5, street: 33, town: 33, regular: 0.1, trade: 1 },
+  western: { farm: 8.5, street: 38, town: 38, regular: 0, trade: 0.85 },
+  eastern: { farm: 12, street: 33, town: 33, regular: 0.1, trade: 1 },
   wa: { farm: 8.5, street: 33, town: 36, regular: 0.1, trade: 1 },
   islamic: { farm: 4.5, street: 38, town: 38, regular: 0, trade: 0.85 },
 }
@@ -124,43 +124,46 @@ export function housesPerHa(p: Pick<SettlementParams, 'population' | 'culture' |
 export const farmPerHa = (culture: Culture) => HOUSING[culture].farm
 
 /**
- * 片区盖满时每公顷（片区全面积）的住户数，按功能与密度档实测（scripts 里全部占用率为 1 时统计）。
+ * 片区盖满时每公顷（片区全面积）的住户数，按功能与密度档实测（成长史里各形态都是按盖满盖的：统计各形态的户数 ÷ 片区陆地面积）。
+ * 盖法（地块尺寸、街距、宅地形态）改过以后要重测：城区长到多大、城墙圈多大都按它估，估高了城墙会圈不下该住在墙里的人。
  * 城区生长用的 housesPerHa 是全城平均（含广场、寺庙这些不住人的片区），占用率估算要的是单块片区盖满能住多少。
  */
 const FULL: Record<Culture, Partial<Record<WardType, Record<Density, number>>>> = {
+  // 疏档是贴着街、屋后带长院子的一排屋子，中档、密档是共用山墙的连排
   western: {
-    common: { low: 10, mid: 62, high: 154 },
-    merchant: { low: 9, mid: 40, high: 92 },
+    common: { low: 14, mid: 44, high: 118 },
+    merchant: { low: 9, mid: 34, high: 70 },
     market: { low: 53, mid: 53, high: 102 },
-    craft: { low: 7, mid: 39, high: 88 },
-    slum: { low: 107, mid: 107, high: 107 },
+    craft: { low: 5, mid: 31, high: 72 },
+    slum: { low: 80, mid: 80, high: 80 },
     noble: { low: 6.5, mid: 6.5, high: 6.5 },
   },
+  // 院落：疏档的大宅是一家人住好几座屋
   eastern: {
-    common: { low: 11.5, mid: 29.5, high: 58 },
-    merchant: { low: 11, mid: 37, high: 70 },
+    common: { low: 7.5, mid: 20, high: 44 },
+    merchant: { low: 11, mid: 30, high: 60 },
     market: { low: 41, mid: 41, high: 75 },
-    craft: { low: 3, mid: 30, high: 75 },
-    slum: { low: 109, mid: 109, high: 109 },
-    noble: { low: 11, mid: 11, high: 11 },
+    craft: { low: 3.5, mid: 26, high: 68 },
+    slum: { low: 80, mid: 80, high: 80 },
+    noble: { low: 20, mid: 20, high: 20 },
   },
-  // 町家：面宽窄、进深长的连排，比四合院密；武家屋敷大而疏
+  // 町家：面宽窄、进深长的连排；武家屋敷大而疏
   wa: {
-    common: { low: 25, mid: 42, high: 90 },
-    merchant: { low: 11, mid: 28, high: 74 },
+    common: { low: 14, mid: 18, high: 36 },
+    merchant: { low: 8, mid: 10, high: 25 },
     market: { low: 25, mid: 25, high: 60 },
-    craft: { low: 15, mid: 33, high: 65 },
-    slum: { low: 95, mid: 95, high: 95 },
+    craft: { low: 14, mid: 18, high: 32 },
+    slum: { low: 26, mid: 26, high: 26 },
     noble: { low: 8, mid: 8, high: 8 },
   },
   // 内院住宅挤满街坊，只留尽端巷
   islamic: {
-    common: { low: 13, mid: 57, high: 112 },
-    merchant: { low: 10, mid: 42, high: 87 },
+    common: { low: 16, mid: 51, high: 100 },
+    merchant: { low: 10, mid: 32, high: 80 },
     // 集市是摊位与商队客栈，住户很少
     market: { low: 22, mid: 22, high: 22 },
-    craft: { low: 12, mid: 43, high: 81 },
-    slum: { low: 110, mid: 110, high: 110 },
+    craft: { low: 15, mid: 49, high: 85 },
+    slum: { low: 104, mid: 104, high: 104 },
     noble: { low: 11, mid: 11, high: 11 },
   },
 }
