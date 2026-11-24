@@ -25,6 +25,11 @@ export interface TourHost {
   /** 地表高度（世界单位；海面以下为负） */
   heightAt(x: number, z: number): number
   pois: TourPoi[]
+  /**
+   * 镜头尺度的倍数（缺省 1）：环绕半径、飞越高度、离地余量这些按 100 单位宽的世界沙盘调好的距离统一乘它。
+   * 聚落沙盘的一个单位只有十几到几十米，地标比世界沙盘上的小，镜头要贴得更近
+   */
+  scale?: number
 }
 
 interface Pose {
@@ -77,6 +82,10 @@ export class CameraTour {
   private pose: Pose = { pos: new THREE.Vector3(), target: new THREE.Vector3() }
   private lift = 0
   private rng = Math.random
+  /** 镜头尺度（见 TourHost.scale） */
+  private get k() {
+    return this.host.scale ?? 1
+  }
 
   constructor(private host: TourHost) {}
 
@@ -160,8 +169,8 @@ export class CameraTour {
   private clearTerrain(P: Pose, dt: number) {
     const h = this.host
     let g = -Infinity
-    for (const [dx, dz] of CLEAR_PROBES) g = Math.max(g, h.heightAt(P.pos.x + dx, P.pos.z + dz))
-    const need = Math.max(0, g) + 1.6 - P.pos.y
+    for (const [dx, dz] of CLEAR_PROBES) g = Math.max(g, h.heightAt(P.pos.x + dx * this.k, P.pos.z + dz * this.k))
+    const need = Math.max(0, g) + 1.6 * this.k - P.pos.y
     const want = Math.max(0, need)
     this.lift += (want - this.lift) * Math.min(1, dt * (want > this.lift ? 6 : 1.5))
     P.pos.y += this.lift
@@ -192,7 +201,7 @@ export class CameraTour {
       shot,
       dur: Math.min(9, Math.max(3.5, d / 9)),
       t: 0,
-      arc: Math.min(14, d * 0.12),
+      arc: Math.min(14 * this.k, d * 0.12),
     }
   }
 
@@ -229,7 +238,7 @@ export class CameraTour {
       for (const s of [0, sweep * 0.5, sweep]) {
         const x = p.x + Math.cos(az + s) * reach
         const z = p.z + Math.sin(az + s) * reach
-        if (Math.abs(x) > SX / 2 - 1.5 || Math.abs(z) > SZ / 2 - 1.5) return false
+        if (Math.abs(x) > SX / 2 - 1.5 * this.k || Math.abs(z) > SZ / 2 - 1.5 * this.k) return false
       }
       return true
     }
@@ -246,24 +255,25 @@ export class CameraTour {
 
   private shotFor(p: TourPoi): Shot {
     const r = this.rng
+    const k = this.k
     switch (p.kind) {
       case 'range':
         return r() < 0.6 ? this.flyover(p) : this.reveal(p)
       case 'peak': {
         // 险峻山地：低空贴近，升镜揭示或近距离环绕
-        const k = r()
-        return k < 0.4 ? this.reveal(p) : k < 0.75 ? this.orbit(p, 5 + r() * 3, 0.42 + r() * 0.15) : this.flyover(p)
+        const q = r()
+        return q < 0.4 ? this.reveal(p) : q < 0.75 ? this.orbit(p, (5 + r() * 3) * k, 0.42 + r() * 0.15) : this.flyover(p)
       }
       case 'coast':
-        return r() < 0.6 ? this.orbit(p, 6 + r() * 4, 0.45 + r() * 0.15) : this.pushIn(p)
+        return r() < 0.6 ? this.orbit(p, (6 + r() * 4) * k, 0.45 + r() * 0.15) : this.pushIn(p)
       case 'capital':
       case 'city':
-        return r() < 0.55 ? this.orbit(p, 5 + r() * 4, 0.45 + r() * 0.2) : this.pushIn(p)
+        return r() < 0.55 ? this.orbit(p, (5 + r() * 4) * k, 0.45 + r() * 0.2) : this.pushIn(p)
       case 'lake':
       case 'island':
-        return this.orbit(p, 8 + r() * 5, 0.5 + r() * 0.2)
+        return this.orbit(p, (8 + r() * 5) * k, 0.5 + r() * 0.2)
       default:
-        return r() < 0.5 ? this.orbit(p, 13 + r() * 6, 0.6) : this.reveal(p)
+        return r() < 0.5 ? this.orbit(p, (13 + r() * 6) * k, 0.6) : this.reveal(p)
     }
   }
 
@@ -320,21 +330,22 @@ export class CameraTour {
     // 朝沙盘内部飞：前方始终是地图
     if (dir.x * -p.x + dir.z * -p.z < 0) dir.negate()
     // 与走向稍微错开，从山脉一侧掠过
-    const side = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(4 + this.rng() * 3)
-    const L = 22
-    const alt = 3.6 + this.rng() * 2.4
+    const k = this.k
+    const side = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar((4 + this.rng() * 3) * k)
+    const L = 22 * k
+    const alt = (3.6 + this.rng() * 2.4) * k
     const c = new THREE.Vector3(p.x, this.ground(p.x, p.z), p.z)
     return {
       dur: 17,
       subject: c,
       at: (u, o) => {
         const s = (u - 0.5) * L
-        o.pos.copy(c).addScaledVector(dir, s - 9).add(side)
+        o.pos.copy(c).addScaledVector(dir, s - 9 * k).add(side)
         // 不飞出沙盘
-        o.pos.x = Math.max(-this.host.SX / 2 + 1.5, Math.min(this.host.SX / 2 - 1.5, o.pos.x))
-        o.pos.z = Math.max(-this.host.SZ / 2 + 1.5, Math.min(this.host.SZ / 2 - 1.5, o.pos.z))
+        o.pos.x = Math.max(-this.host.SX / 2 + 1.5 * k, Math.min(this.host.SX / 2 - 1.5 * k, o.pos.x))
+        o.pos.z = Math.max(-this.host.SZ / 2 + 1.5 * k, Math.min(this.host.SZ / 2 - 1.5 * k, o.pos.z))
         o.pos.y = this.ground(o.pos.x, o.pos.z) * 0.6 + c.y * 0.4 + alt
-        o.target.copy(c).addScaledVector(dir, s + 6)
+        o.target.copy(c).addScaledVector(dir, s + 6 * k)
         o.target.y = this.ground(o.target.x, o.target.z) * 0.5
       },
     }
@@ -344,16 +355,17 @@ export class CameraTour {
   private reveal(p: TourPoi): Shot {
     const y = this.ground(p.x, p.z)
     const subject = new THREE.Vector3(p.x, y, p.z)
-    const az = this.outward(p, 0.9, 17.5)
+    const k = this.k
+    const az = this.outward(p, 0.9, 17.5 * k)
     const d = new THREE.Vector3(Math.cos(az), 0, Math.sin(az))
     const side = this.rng() < 0.5 ? -1 : 1
     return {
       dur: 15,
       subject,
       at: (u, o) => {
-        const r = 3.5 + 13 * u
+        const r = (3.5 + 13 * u) * k
         o.pos.copy(subject).addScaledVector(d, r)
-        o.pos.y = y + 1.6 + 10 * u * u
+        o.pos.y = y + (1.6 + 10 * u * u) * k
         this.thirds(o.pos, subject, side * u, o.target)
       },
     }
@@ -363,16 +375,17 @@ export class CameraTour {
   private pushIn(p: TourPoi): Shot {
     const y = this.ground(p.x, p.z)
     const subject = new THREE.Vector3(p.x, y, p.z)
-    const az = this.outward(p, 0.9, 16)
+    const k = this.k
+    const az = this.outward(p, 0.9, 16 * k)
     const d = new THREE.Vector3(Math.cos(az), 0, Math.sin(az))
     const lat = new THREE.Vector3(-d.z, 0, d.x)
-    const drift = (this.rng() - 0.5) * 10
+    const drift = (this.rng() - 0.5) * 10 * k
     const side = this.rng() < 0.5 ? -1 : 1
     return {
       dur: 14,
       subject,
       at: (u, o) => {
-        const r = 16 - 10 * u
+        const r = (16 - 10 * u) * k
         o.pos.copy(subject).addScaledVector(d, r).addScaledVector(lat, drift * (1 - u))
         o.pos.y = y + r * 0.62
         this.thirds(o.pos, subject, side * 0.8, o.target)

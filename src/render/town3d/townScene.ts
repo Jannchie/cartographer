@@ -1,23 +1,28 @@
 import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import type { P } from '../../settlement/geom'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import type { SettleStyleId } from '../../settlement/themes'
 import type { MapLabel, Settlement } from '../../settlement/types'
-import { lang } from '../../i18n'
 import { isTypingTarget } from '../../ui/keys'
 import { PostPipeline } from '../aerial/post'
 import { GpuTimer } from '../aerial/gpuTimer'
 import { QUALITIES, type Look, type QualityId } from '../aerial/looks'
 import { Diorama } from '../aerial/diorama'
 import { daylight, type Daylight } from '../aerial/daylight'
+import { FocusProbe } from '../aerial/focusProbe'
+import { CameraTour, type TourPoi } from '../aerial/tour'
 import { patchBuilding } from './buildingShader'
 import { heightSampler, type TownBuild } from './massing'
 import type { TownChunk } from './mesh'
 import { TownGround, skirtGeometries } from './ground'
 import { WATER_LEVEL } from './relief'
 import { TreeLayer } from './treeLayer'
+import { CameraRig } from './cameraRig'
+import { HeightField } from './heightField'
+import { SunShadows } from './sunShadows'
+import { TownLabels } from './labels'
+import { createTownLights } from './townLights'
 
 /**
  * 聚落沙盘：成长史中出现过的全部体块与树一次建好（见 massing.ts，在 Worker 里构建），
@@ -26,9 +31,18 @@ import { TreeLayer } from './treeLayer'
  * 成长：每个顶点（树为每个实例）带生卒，着色器按人口 uPop 收起尚未建成或已拆除的体块；
  * 人口从 uPrev 变到 uPop 时，新建的从地基升起、拆除的沉下（uT 0 → 1），地面贴图按节流重画。
  *
- * 按需渲染：镜头移动、阻尼、按键导航、成长过渡与静止后的时间累积期间逐帧渲染，
+ * 舞台（与场景里具体有哪些网格无关的部分）各在一个模块里：
+ * - 镜头（cameraRig.ts）：缩放到光标、视点落地、避障、边界、键盘；
+ * - 表面高度场（heightField.ts）：自上而下画一遍读回，供镜头避障、缩放锚点与注记遮挡；
+ * - 主光与三级阴影（sunShadows.ts）；
+ * - 注记（labels.ts）、夜里的灯火（townLights.ts）；
+ * - 自动运镜（aerial/tour.ts，与世界沙盘共用）：题材取自地标，镜头高度以表面高度场的包络为底；
+ * - 后期（aerial/post.ts，与世界沙盘共用）：环境光遮蔽、空气透视、景深、时间累积、泛光、调色；
+ *   对焦距离取自场景深度（aerial/focusProbe.ts）：对在画面上指针所指（没有指针时为画面中心）看到的表面上。
+ *
+ * 按需渲染：镜头移动、阻尼、按键导航、成长过渡、对焦缓动与静止后的时间累积期间逐帧渲染，
  * 累积收敛后停止请求动画帧，静止时不占用 GPU。
- * 坐标：聚落米坐标（x 东、z 南）整体缩放到 100 单位宽、居中，世界沙盘按这个尺度调好的常数（底座、霾、阴影）直接可用。
+ * 坐标：聚落米坐标（x 东、z 南）整体缩放到 100 单位宽、居中，世界沙盘按这个尺度调好的常数（底座、霾）直接可用。
  */
 
 export interface Town3DOptions {
@@ -54,26 +68,12 @@ const SX = 100
 const RISE = 0.45
 /** 镜头停稳多久（毫秒）后才重画地面高清块：栅格化与上传要上百毫秒，转动、缩放中的短暂停顿不能触发 */
 const DETAIL_IDLE = 350
-
-const NAV_KEYS: Record<string, string> = {
-  ArrowUp: 'forward',
-  w: 'forward',
-  ArrowDown: 'back',
-  s: 'back',
-  ArrowLeft: 'left',
-  a: 'left',
-  ArrowRight: 'right',
-  d: 'right',
-  q: 'turnLeft',
-  e: 'turnRight',
-  PageUp: 'tiltUp',
-  PageDown: 'tiltDown',
-  '+': 'zoomIn',
-  '=': 'zoomIn',
-  '-': 'zoomOut',
-  _: 'zoomOut',
-}
-const navKey = (e: KeyboardEvent): string | undefined => NAV_KEYS[e.key.length === 1 ? e.key.toLowerCase() : e.key]
+/** 对焦缓动的时间常数（秒） */
+const FOCUS_TAU = 0.12
+/** 被主光照亮的地面的平均反照率（线性色）：算地面反弹光用，不必跟地面贴图逐像素一致 */
+const GROUND_BOUNCE = new THREE.Color().setRGB(0.3, 0.27, 0.19)
+/** 展厅背景墙亮带向上衰减的尺度（仰角的正弦） */
+const COVE_FALL = 0.17
 
 const deep = (o: THREE.Object3D) =>
   o.traverse((c) => {
@@ -88,10 +88,13 @@ export class TownScene {
   readonly renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
   private camera = new THREE.PerspectiveCamera(40, 1, 0.05, 3000)
-  private controls: OrbitControls
-  private sun = new THREE.DirectionalLight(0xfff1dc, 3.1)
+  private rig: CameraRig
+  private shadows: SunShadows
   private hemi = new THREE.HemisphereLight(0xc4d7ea, 0x5b4a3a, 0.9)
+  /** 环境光的水平分量（一阶球谐）：朝太阳一侧的墙比背着太阳的墙亮、暖，背光的几面墙不再是同一个亮度 */
+  private fill = new THREE.LightProbe()
   private post = new PostPipeline()
+  private probe: FocusProbe | null = null
   private diorama: Diorama
   private timer: GpuTimer
   private env: THREE.Texture
@@ -103,6 +106,7 @@ export class TownScene {
   private hist: SettlementHistory | null = null
   private H: (x: number, z: number) => number = () => 0
   private hRange: [number, number] = [0, 0]
+  private field = new HeightField()
   private chunks: THREE.Mesh[] = []
   /** 地面：贴图、高清块与每座城的地形、水面网格 */
   private ground: TownGround
@@ -121,6 +125,8 @@ export class TownScene {
     uMeter: { value: 1 },
     /** 窗与门的样式：0 西式、1 东方、2 和式、3 伊斯兰 */
     uCulture: { value: 0 },
+    /** 灯火的光点最小的尺寸：两个像素在裁剪空间里的高度（随画布） */
+    uMinNdc: { value: 0.004 },
   }
   private bldMat: THREE.MeshStandardMaterial
   private bldDepth: THREE.MeshDepthMaterial
@@ -134,25 +140,27 @@ export class TownScene {
   private active = false
   /** 换城时等着色器编译完再渲染 */
   private ready = true
-  private labelLayer: HTMLDivElement
-  private labelEls: { el: HTMLDivElement; pos: THREE.Vector3; w: number; h: number; weight: number }[] = []
-  private labelsDirty = true
+  private labels: TownLabels
+  private lights: THREE.Group | null = null
+  private tour: CameraTour
+  private tourFade: HTMLDivElement
+  private pois: TourPoi[] = []
+  /** 自动运镜开始 / 结束时通知界面 */
+  onTourChange: ((on: boolean) => void) | null = null
   private perf: { el: HTMLDivElement; frames: number; t0: number } | null = null
-  private navHeld = new Set<string>()
-  private navFast = false
   private lastFrame = 0
   private lastMove = 0
   private detailTimer = 0
+  private bakeTimer = 0
   private motionScale = 1
   private lastScale = 0
-  /** 阴影相机的覆盖范围（沙盘单位）：随镜头收缩，近景时阴影更细 */
-  private shadowBox = { x: 0, z: 0, r: 0 }
-  private pointer: { x: number; y: number; dirty: boolean } | null = null
-  private focusPoint: THREE.Vector3 | null = null
-  private focusDist = 0
+  /** 指针在画面上的位置（鼠标悬停、拖动时）：对焦在它所指的表面上；没有时对在画面中心 */
+  private pointer: { x: number; y: number } | null = null
+  /** 对焦：当前距离、是否要重新测距、下一帧是否直接到位（换机位、换城） */
+  private focus = { dist: 0, dirty: true, snap: true }
   private ray = new THREE.Raycaster()
   private ndc = new THREE.Vector2()
-  private tmp = new THREE.Vector3()
+  private tmpColor = new THREE.Color()
   private disposers: (() => void)[] = []
   /** 地面贴图重画后（新的人口快照）通知界面：统计与悬停探针用这个快照 */
   onSnapshot: ((s: Settlement) => void) | null = null
@@ -174,23 +182,16 @@ export class TownScene {
     container.appendChild(this.renderer.domElement)
 
     this.camera.position.set(0, 58, 84)
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement)
-    this.controls.enableDamping = true
-    this.controls.dampingFactor = 0.08
-    this.controls.maxPolarAngle = Math.PI * 0.47
-    this.controls.maxDistance = 240
-    this.controls.screenSpacePanning = false
-    this.controls.zoomToCursor = true
-
-    this.sun.castShadow = true
-    this.sun.shadow.camera.near = 1
-    this.sun.shadow.camera.far = 400
-    this.scene.add(this.sun, this.sun.target, this.hemi, this.city)
+    this.rig = new CameraRig(this.camera, this.renderer.domElement, () => this.invalidate(false))
+    this.shadows = new SunShadows(this.scene)
+    this.scene.add(this.hemi, this.fill, this.city)
     this.diorama = new Diorama(this.renderer)
     this.scene.add(this.diorama.group)
     const pmrem = new THREE.PMREMGenerator(this.renderer)
     this.env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
     pmrem.dispose()
+    // 读回浮点像素要这个扩展；没有时对焦退回到轨道中心
+    if (this.renderer.extensions.has('EXT_color_buffer_float')) this.probe = new FocusProbe(this.post.sceneRT.depthTexture!)
 
     this.ground = new TownGround(this.renderer)
 
@@ -199,9 +200,28 @@ export class TownScene {
     this.bldDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
     patchBuilding(this.bldDepth, this.u, true)
 
-    this.labelLayer = document.createElement('div')
-    this.labelLayer.className = 'labels3d'
-    container.appendChild(this.labelLayer)
+    this.labels = new TownLabels(container)
+    this.tourFade = document.createElement('div')
+    this.tourFade.className = 'tour-fade'
+    container.appendChild(this.tourFade)
+    const self = this
+    this.tour = new CameraTour({
+      SX,
+      get SZ() {
+        return self.SZ
+      },
+      // 镜头的高度以包络为底：贴近地标时越过屋顶、树冠，而不只是地形
+      heightAt: (x, z) => Math.max(self.field.ceiling(x, z), 0),
+      get pois() {
+        return self.pois
+      },
+      // 世界沙盘的镜头距离按 100 单位宽调的：换算到环绕半径约百米
+      get scale() {
+        return Math.min(1, Math.max(0.3, 18 * self.K))
+      },
+    })
+    // 用户一动镜头，运镜就让出
+    this.rig.onUserInput = () => this.stopTour()
 
     new ResizeObserver(() => this.resize()).observe(container)
     this.applyQuality()
@@ -210,7 +230,6 @@ export class TownScene {
 
     const el = this.renderer.domElement
     const kick = () => this.invalidate(false)
-    this.controls.addEventListener('change', kick)
     el.addEventListener('pointerdown', () => {
       this.lastMove = performance.now()
       this.held = true
@@ -228,15 +247,16 @@ export class TownScene {
       window.removeEventListener('pointerup', release)
       window.removeEventListener('pointercancel', release)
     })
-    el.addEventListener('wheel', kick, { passive: true })
     el.addEventListener('pointermove', (e) => {
-      if (e.buttons) return
-      this.pointer = { x: e.clientX, y: e.clientY, dirty: true }
+      // 触摸没有"悬停"：手指离开后对焦回到画面中心
+      if (e.pointerType !== 'mouse') return
+      this.pointer = { x: e.clientX, y: e.clientY }
+      this.focus.dirty = true
       kick()
     })
     el.addEventListener('pointerleave', () => {
       this.pointer = null
-      this.focusPoint = null
+      this.focus.dirty = true
       kick()
     })
     // 动态分辨率：移动中的帧按实测 GPU 耗时调节缩放
@@ -244,38 +264,33 @@ export class TownScene {
       if (scale > 0) this.adaptScale(ms, scale)
     }
     const onKey = (e: KeyboardEvent) => {
-      this.navFast = e.shiftKey
       if (!this.active || e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e)) return
-      if (e.key === 'p' || e.key === 'P') return this.togglePerf()
-      const k = navKey(e)
-      if (!k) return
-      e.preventDefault()
-      this.navHeld.add(k)
-      kick()
+      if (e.key === 'p' || e.key === 'P') this.togglePerf()
+      else if (e.key === 't' || e.key === 'T') this.toggleTour()
+      else if (this.tour.active && (e.key === 'n' || e.key === 'N')) this.tour.next()
+      else if (this.tour.active && e.key === 'Escape') this.stopTour()
     }
-    const onKeyUp = (e: KeyboardEvent) => {
-      this.navFast = e.shiftKey
-      const k = navKey(e)
-      if (k) this.navHeld.delete(k)
-    }
-    const onBlur = () => this.navHeld.clear()
     // 页面卸下（刷新、离开）时主动交还 WebGL 上下文，免得浏览器累积到上限后丢失别的上下文；从往返缓存回来时恢复
     const onHide = () => this.renderer.forceContextLoss()
     const onShow = (e: PageTransitionEvent) => {
-      if (!e.persisted) return
-      this.renderer.forceContextRestore()
-      this.renderer.shadowMap.needsUpdate = true
+      if (e.persisted) this.renderer.forceContextRestore()
+    }
+    // 上下文丢失（显卡驱动重置、标签页太多被回收）：拦下默认行为才会有恢复事件；恢复后贴图与缓冲由 three.js 重新上传，
+    // 这里把阴影贴图、表面高度场这些"画出来的"重画一遍
+    const onLost = (e: Event) => e.preventDefault()
+    const onRestored = () => {
+      this.shadows.invalidate()
+      this.post.reset()
+      this.scheduleBake(0)
       this.invalidate()
     }
+    el.addEventListener('webglcontextlost', onLost)
+    el.addEventListener('webglcontextrestored', onRestored)
     window.addEventListener('keydown', onKey)
-    window.addEventListener('keyup', onKeyUp)
-    window.addEventListener('blur', onBlur)
     window.addEventListener('pagehide', onHide)
     window.addEventListener('pageshow', onShow)
     this.disposers.push(() => {
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('blur', onBlur)
       window.removeEventListener('pagehide', onHide)
       window.removeEventListener('pageshow', onShow)
     })
@@ -285,8 +300,12 @@ export class TownScene {
   setActive(on: boolean) {
     if (this.active === on) return
     this.active = on
+    this.rig.enabled = on
     if (on) this.invalidate()
-    else this.navHeld.clear()
+    else {
+      this.rig.clearKeys()
+      this.stopTour()
+    }
   }
 
   /** 请求重画；reset 时丢掉累积的历史（场景本身变了） */
@@ -334,6 +353,10 @@ export class TownScene {
     // 树
     this.trees = new TreeLayer(build.trees, this.u)
     this.city.add(this.trees.group)
+    // 灯火（街灯、城门的火把；夜里才画）
+    this.lights = createTownLights(hist.st, hist.life, this.H, this.u)
+    this.lights.visible = this.u.uNight.value > 0
+    this.city.add(this.lights)
 
     // 地面与水
     this.city.add(...this.ground.build(hist.st, build.terrain, this.u, this.K))
@@ -354,11 +377,26 @@ export class TownScene {
     this.diorama.build({ SX, SZ: this.SZ, title: title.name, subtitle: title.sub })
     this.diorama.setBase(base)
     this.post.comp.uniforms.uBox.value.set(-SX / 2, -this.SZ / 2, SX / 2, this.SZ / 2)
-    // 镜头：最近到单栋房子（约 12 米）
-    this.controls.minDistance = Math.max(0.12, 12 * this.K)
 
-    this.shadowBox.r = 0
-    this.renderer.shadowMap.needsUpdate = true
+    // 舞台按这座城的尺度：镜头的活动范围、阴影的范围与半影、遮蔽的取样半径
+    const floor = this.diorama.tableY
+    const hx = SX / 2
+    const hz = this.SZ / 2
+    this.rig.setWorld({
+      ground: (x, z) => (Math.abs(x) <= hx && Math.abs(z) <= hz ? Math.max(WATER_LEVEL, this.H((x + hx) / this.K, (z + hz) / this.K)) * this.K : floor),
+      field: this.field,
+      hx,
+      hz,
+      floor,
+      K: this.K,
+    })
+    // 高处留出最高的塔、阁（约 90 米）
+    this.shadows.setExtent(hx, hz, floor, (hi + 90) * this.K, this.K)
+    this.applyShadowSoft()
+    this.post.setAO({ radius: 3.2 * this.K, intensity: 1, amount: 0.85 })
+    this.focus.snap = true
+
+    this.shadows.invalidate()
     // 着色器在后台并行编译（KHR_parallel_shader_compile），首帧不因同步编译卡住主线程
     this.ready = false
     await this.renderer.compileAsync(this.scene, this.camera).catch(() => undefined)
@@ -366,6 +404,8 @@ export class TownScene {
     this.ready = true
     this.paintGround(pop, st)
     this.setLabels(st.labels)
+    this.setPois(st)
+    this.scheduleBake(0)
   }
 
   private chunkMesh(c: TownChunk) {
@@ -403,10 +443,17 @@ export class TownScene {
       else if (m.material === this.bldMat) m.geometry.dispose()
       else deep(c)
     }
+    this.stopTour()
     this.chunks = []
     this.ground.forget()
+    this.lights = null
+    this.pois = []
     this.hist = null
+    this.field.clear()
+    this.rig.setWorld(null)
     clearTimeout(this.paint.timer)
+    clearTimeout(this.bakeTimer)
+    this.bakeTimer = 0
     this.paint = { busy: false, next: -1, shown: -1, cost: 0, timer: 0 }
   }
 
@@ -421,7 +468,7 @@ export class TownScene {
     this.u.uT.value = 0
     this.riseAt = performance.now()
     this.riseDur = Math.max(0.05, dur)
-    this.renderer.shadowMap.needsUpdate = true
+    this.shadows.invalidate()
     this.invalidate()
     this.requestPaint(pop)
   }
@@ -449,6 +496,7 @@ export class TownScene {
       this.paintGround(p, st)
       this.paint.busy = false
       this.setLabels(st.labels)
+      this.setPois(st)
       this.onSnapshot?.(st)
       if (this.paint.next !== this.paint.shown) this.requestPaint(this.paint.next)
     }, wait)
@@ -460,26 +508,46 @@ export class TownScene {
     this.invalidate()
   }
 
+  /**
+   * 表面高度场重新烘焙（镜头避障、缩放锚点、注记遮挡用）：换城后立即，人口变化后等成长过渡走完、
+   * 时间轴停下一会儿再做（回放、拖动期间每帧都在变，沿用旧的）
+   */
+  private scheduleBake(delay: number) {
+    clearTimeout(this.bakeTimer)
+    this.bakeTimer = window.setTimeout(() => {
+      this.bakeTimer = 0
+      const hist = this.hist
+      if (!hist || !this.ready) return
+      if (this.u.uT.value < 1) return this.scheduleBake(200)
+      const m = 8
+      const hx = SX / 2
+      const hz = this.SZ / 2
+      const floor = this.diorama.tableY
+      void this.field
+        .bake(this.renderer, [this.city], {
+          x0: -hx - m,
+          z0: -hz - m,
+          x1: hx + m,
+          z1: hz + m,
+          floor,
+          top: (this.hRange[1] + 100) * this.K + 1,
+          inner: { x0: -hx, z0: -hz, x1: hx, z1: hz, level: WATER_LEVEL * this.K },
+          cell: 1.5 * this.K,
+        })
+        .then(() => {
+          if (this.hist !== hist) return
+          this.labels.anchor(this.field, this.K)
+          this.focus.dirty = true
+          this.invalidate(false)
+        })
+    }, delay)
+  }
+
   /** 注记：片区名与大地标（随人口：那时还没有的不标） */
   setLabels(labels: MapLabel[]) {
-    this.labelLayer.innerHTML = ''
-    this.labelEls = []
-    const keep = labels.filter((l) => l.kind === 'district' || l.kind === 'landmark').sort((a, b) => b.weight - a.weight)
-    for (const l of keep.slice(0, 80)) {
-      const el = document.createElement('div')
-      el.className = `l3 l3-${l.kind}`
-      el.textContent = l.text[lang]
-      const y = this.H(l.p[0], l.p[1]) + (l.kind === 'landmark' ? 18 : 6)
-      const pos = new THREE.Vector3(l.p[0], y, l.p[1]).multiplyScalar(this.K).add(this.city.position)
-      this.labelLayer.appendChild(el)
-      this.labelEls.push({ el, pos, w: 0, h: 0, weight: l.weight })
-    }
-    for (const l of this.labelEls) {
-      l.w = l.el.offsetWidth
-      l.h = l.el.offsetHeight
-    }
-    this.labelLayer.style.display = this.opts.labels ? '' : 'none'
-    this.labelsDirty = true
+    this.labels.set(labels, (x, z) => ({ x: x * this.K + this.city.position.x, y: Math.max(WATER_LEVEL, this.H(x, z)) * this.K, z: z * this.K + this.city.position.z }))
+    this.labels.anchor(this.field, this.K)
+    this.labels.setVisible(this.opts.labels)
     this.invalidate(false)
   }
 
@@ -487,6 +555,7 @@ export class TownScene {
   setTitle(title: { name: string; sub: string }) {
     if (!this.hist) return
     this.diorama.build({ SX, SZ: this.SZ, title: title.name, subtitle: title.sub })
+    this.shadows.invalidate()
     this.invalidate()
   }
 
@@ -499,12 +568,10 @@ export class TownScene {
       this.post.setLook(this.opts.look)
       this.invalidate(false)
     }
-    if (o.labels !== undefined) {
-      this.labelLayer.style.display = this.opts.labels ? '' : 'none'
-      this.labelsDirty = true
-    }
+    if (o.labels !== undefined) this.labels.setVisible(this.opts.labels)
     if (o.shadowSoftness !== undefined) this.applyShadowSoft()
     if (o.stage !== undefined) this.diorama.stage.visible = this.opts.stage
+    if (o.dof !== undefined) this.focus.dirty = true
     if (o.timeOfDay !== undefined || o.sunAzimuth !== undefined || o.sunElevation !== undefined || o.haze !== undefined) this.applyDaylight()
     this.invalidate(!o.look)
   }
@@ -518,36 +585,51 @@ export class TownScene {
     const cap = this.renderer.capabilities
     this.renderer.setPixelRatio(Math.min(q.pixelRatio, window.devicePixelRatio))
     this.post.setQuality(q, cap.maxSamples)
-    const size = Math.min(q.shadowMap, cap.maxTextureSize)
-    const sh = this.sun.shadow
-    if (sh.mapSize.x !== size) {
-      sh.mapSize.set(size, size)
-      sh.map?.dispose()
-      sh.map = null
-      this.shadowBox.r = 0
-      this.renderer.shadowMap.needsUpdate = true
-    }
+    this.shadows.setSize(Math.min(q.shadowMap, cap.maxTextureSize))
     this.applyShadowSoft()
     this.resize()
   }
 
-  /** 阴影软硬：PCF 半径以纹素计（按 4096 贴图归一，换画质时软硬不变） */
+  /** 阴影软硬：半影宽度按实地尺寸（滑杆每一档约 0.1 米；月光更柔） */
   private applyShadowSoft() {
-    this.sun.shadow.radius = Math.max(1, (this.opts.shadowSoftness * this.dl.shadowSoft * this.sun.shadow.mapSize.x) / 4096)
+    this.shadows.setPenumbra(this.opts.shadowSoftness * this.dl.shadowSoft * 0.1 * this.K)
     this.post.reset()
   }
 
-  /** 按时刻铺开光照：主光（日 / 月）、天光、展厅背景、霾、曝光、窗灯 */
+  /** 按时刻铺开光照：主光（日 / 月）、天光与地面反弹、展厅背景、霾、曝光、窗灯 */
   private applyDaylight() {
     const dl = daylight(this.opts.timeOfDay, this.opts.sunAzimuth, this.opts.sunElevation)
     this.dl = dl
-    this.sun.color.copy(dl.keyColor)
-    this.sun.intensity = dl.keyIntensity
+    const sun = this.shadows.sun
+    sun.color.copy(dl.keyColor)
+    sun.intensity = dl.keyIntensity
+    this.shadows.setDirection(dl.keyDir)
+    // 天光：半球光的"地面"一侧补上被主光照亮的地面的反弹（屋檐底下、墙的暗面主要靠它照亮，带地面的暖色）
+    const up = Math.max(0, dl.keyDir.y)
+    const bounce = this.tmpColor.copy(dl.keyColor).multiply(GROUND_BOUNCE).multiplyScalar((dl.keyIntensity * up * 0.55) / Math.max(dl.hemiIntensity, 1e-3))
     this.hemi.color.copy(dl.hemiSky)
-    this.hemi.groundColor.copy(dl.hemiGround)
+    this.hemi.groundColor.copy(dl.hemiGround).add(bounce)
     this.hemi.intensity = dl.hemiIntensity
+    // 环境光的水平梯度：朝主光方位的一侧多一点暖光，背面少一点（变冷、变暗）
+    const hz = Math.hypot(dl.keyDir.x, dl.keyDir.z) || 1
+    const amp = dl.keyIntensity * 0.045 * (0.4 + 0.6 * up)
+    const sh = this.fill.sh.coefficients
+    for (const c of sh) c.set(0, 0, 0)
+    // 一阶球谐的三个系数依次对应法线的 y、z、x（见 three.js 的 shGetIrradianceAt），系数 1.0233 倍即辐照度
+    sh[2].set(dl.keyColor.r, dl.keyColor.g * 0.86, dl.keyColor.b * 0.62).multiplyScalar((amp * dl.keyDir.z) / hz / 1.023328)
+    sh[3].set(dl.keyColor.r, dl.keyColor.g * 0.86, dl.keyColor.b * 0.62).multiplyScalar((amp * dl.keyDir.x) / hz / 1.023328)
     this.diorama.setLight(dl.light, new THREE.Color().copy(dl.keyColor).multiplyScalar(dl.moonKey ? 0.25 * dl.moonUp : dl.sunFade))
     this.diorama.setSky(dl.night, dl.stars, dl.moonDir, dl.moonUp, dl.twilight)
+    // 展厅背景墙：亮带取天色（去掉大半饱和度、压暗），顶上是暗灰（夜里是深藏青的星空）；日出日落时太阳方位上一团暖光
+    const hc = new THREE.Color().copy(dl.skyHorizon)
+    const l = 0.2126 * hc.r + 0.7152 * hc.g + 0.0722 * hc.b
+    hc.lerp(this.tmpColor.setRGB(l, l, l), 0.6).multiplyScalar(0.26)
+    hc.r = Math.max(hc.r, 0.0032)
+    hc.g = Math.max(hc.g, 0.0042)
+    hc.b = Math.max(hc.b, 0.0095)
+    const top = new THREE.Color().setRGB(0.011, 0.011, 0.0125).lerp(this.tmpColor.setRGB(0.0016, 0.0024, 0.0065), dl.night)
+    const glow = new THREE.Color().copy(dl.keyColor).multiplyScalar(dl.moonKey ? 0 : dl.sunFade * (1 - Math.min(1, Math.max(0, dl.sunEl / 20))) * 0.22)
+    this.diorama.setCove(hc, top, COVE_FALL, dl.sunDir, glow)
     const c = this.post.comp.uniforms
     c.uSun.value.copy(dl.keyDir)
     c.uSunColor.value.copy(dl.hazeSun)
@@ -558,47 +640,9 @@ export class TownScene {
     c.uFogDensity.value = this.opts.haze ? 0.02 : 0
     this.post.setExposureComp(dl.exposure, dl.night)
     this.u.uNight.value = dl.cityLights
+    if (this.lights) this.lights.visible = dl.cityLights > 0
     this.applyShadowSoft()
-    this.placeSun()
-    this.renderer.shadowMap.needsUpdate = true
-  }
-
-  /** 主光与阴影相机：以阴影范围的中心为靶，覆盖半径 r */
-  private placeSun() {
-    const b = this.shadowBox
-    const r = b.r || 70
-    this.sun.target.position.set(b.x, 0, b.z)
-    this.sun.position.copy(this.dl.keyDir).multiplyScalar(150).add(this.sun.target.position)
-    const sc = this.sun.shadow.camera
-    sc.left = sc.bottom = -r
-    sc.right = sc.top = r
-    sc.updateProjectionMatrix()
-    // 法线偏移随纹素大小：近景细阴影不浮，远景不漏光
-    const texel = (2 * r) / this.sun.shadow.mapSize.x
-    this.sun.shadow.normalBias = texel * 1.2
-    this.sun.shadow.bias = -0.00015
-    this.sun.target.updateMatrixWorld()
-  }
-
-  /** 阴影范围随镜头：拉近时只覆盖视点附近（贴图纹素随之变细），整城可见时覆盖全城 */
-  private fitShadow() {
-    const t = this.controls.target
-    const dist = this.camera.position.distanceTo(t)
-    const full = Math.hypot(SX, this.SZ) / 2 + 2
-    let r = Math.min(full, Math.max(2.5, dist * 1.4))
-    let x = t.x
-    let z = t.z
-    if (r > full * 0.7) {
-      r = full
-      x = 0
-      z = 0
-    }
-    const b = this.shadowBox
-    if (b.r && Math.abs(Math.log(r / b.r)) < 0.25 && Math.hypot(x - b.x, z - b.z) < b.r * 0.25) return
-    Object.assign(b, { x, z, r })
-    this.placeSun()
-    this.renderer.shadowMap.needsUpdate = true
-    this.post.reset()
+    this.shadows.invalidate()
   }
 
   // —— 帧循环 ——
@@ -607,70 +651,102 @@ export class TownScene {
     if (!this.active || !this.ready) return
     const dt = this.lastFrame ? Math.min(0.1, (now - this.lastFrame) / 1000) : 0
     this.lastFrame = now
-    let busy = this.keyNav(Math.min(dt, 0.05))
-    if (this.controls.update()) busy = true
+    let busy: boolean
+    if (this.tour.active) {
+      // 运镜接管镜头；约束照常（视点落地、近平面、不进建筑）
+      this.tour.update(dt, this.camera, this.rig.target)
+      this.rig.constrain(dt)
+      this.tourFade.style.opacity = String(this.tour.fade)
+      busy = true
+    } else busy = this.rig.update(Math.min(dt, 0.05))
     // 成长过渡
     if (this.u.uT.value < 1) {
       const k = Math.min(1, (performance.now() - this.riseAt) / 1000 / this.riseDur)
       this.u.uT.value = k * k * (3 - 2 * k)
-      this.renderer.shadowMap.needsUpdate = true
+      this.shadows.invalidate()
       this.post.reset()
+      this.focus.dirty = true
       busy = true
+      // 过渡走完后表面高度场要重新烘焙（等时间轴停稳）
+      if (k >= 1) this.scheduleBake(400)
     }
     const moved = this.post.cameraChanged(this.camera)
     if (moved) {
       this.lastMove = performance.now()
+      this.focus.dirty = true
       // 停稳后再醒一次，栅格化地面高清块
       clearTimeout(this.detailTimer)
       this.detailTimer = window.setTimeout(() => this.invalidate(false), DETAIL_IDLE + 50)
     }
-    this.fitShadow()
-    this.updateNear()
+    this.shadows.fit(this.rig.target, this.rig.distance)
     // 停稳后才栅格化视点附近的地面高清块
     if (!moved && !busy && !this.held && performance.now() - this.lastMove > DETAIL_IDLE) this.updateDetail()
-    this.renderFrame(moved)
-    this.updateLabels()
+    const focusing = this.renderFrame(moved, dt)
+    this.labels.update(this.camera, this.rig.distance, this.field, this.K)
     if (this.perf) this.perfTick()
     // 累积收敛后停下（静止时不占用 GPU）
     const settling = this.post.samples < this.quality.accumulate
-    const pendingFocus = !!this.pointer?.dirty
-    // 这一帧里可能已经有人 invalidate 过（对焦收敛、高清块）：只排一个，否则每帧多一条循环，越积越多
-    if (busy || moved || settling || pendingFocus || this.navHeld.size) {
+    // 这一帧里可能已经有人 invalidate 过（测距回来、高清块）：只排一个，否则每帧多一条循环，越积越多
+    if (busy || moved || settling || focusing || this.rig.moving) {
       if (!this.raf) this.raf = requestAnimationFrame(this.loop)
     } else if (!this.raf) this.lastFrame = 0
   }
 
-  /** 近平面随镜头距离：拉近到单栋房子时不被裁掉，远看时深度精度够用 */
-  private updateNear() {
-    const d = this.camera.position.distanceTo(this.controls.target)
-    const near = Math.min(1, Math.max(0.004, d * 0.02))
-    if (Math.abs(near - this.camera.near) > this.camera.near * 0.1) {
-      this.camera.near = near
-      this.camera.updateProjectionMatrix()
-    }
+  /** 测距的位置（画面坐标 0~1，原点在左下）：指针所指，没有指针时为画面中心 */
+  private focusUv(): [number, number] {
+    if (!this.pointer) return [0.5, 0.5]
+    const r = this.renderer.domElement.getBoundingClientRect()
+    return [Math.min(1, Math.max(0, (this.pointer.x - r.left) / r.width)), Math.min(1, Math.max(0, 1 - (this.pointer.y - r.top) / r.height))]
   }
 
-  private renderFrame(moved: boolean) {
+  /** 这一刻该对在多远：测距读数；那里没有表面（背景）或还没有读数时取轨道中心 */
+  private focusWant() {
+    const v = this.probe?.value ?? 0
+    return Math.max(this.camera.near * 2, v > 0 ? v : this.rig.distance)
+  }
+
+  /**
+   * 渲染一帧。对焦距离向测距读数缓动（按屈光度，远近变化的观感均匀），返回对焦是否还没到位（需要下一帧）。
+   * still：导出时用，不缓动也不再测距
+   */
+  private renderFrame(moved: boolean, dt: number, still = false): boolean {
     const cam = this.camera
-    if (this.pointer && moved) this.pointer.dirty = true
-    if (this.pointer?.dirty && !moved) {
-      this.focusPoint = this.pickPoint(this.pointer.x, this.pointer.y)
-      this.pointer.dirty = false
+    const f = this.focus
+    const dof = this.opts.dof > 0
+    const want = this.focusWant()
+    if (!still) {
+      if (!this.probe) f.dirty = false
+      if (f.snap || !(f.dist > 0)) {
+        // 直接到位：等这次测距的读数回来为止
+        f.dist = want
+        if (!f.dirty && !this.probe?.pending) f.snap = false
+      } else {
+        const k = 1 - Math.exp(-Math.max(dt, 1 / 120) / FOCUS_TAU)
+        f.dist = 1 / (1 / f.dist + (1 / want - 1 / f.dist) * k)
+        if (Math.abs(f.dist - want) < want * 0.0015) f.dist = want
+      }
     }
-    const fp = this.focusPoint ?? this.controls.target
-    const dir = cam.getWorldDirection(this.tmp.set(0, 0, 0)).clone()
-    const want = Math.max(cam.near * 4, fp.clone().sub(cam.position).dot(dir))
-    const prev = this.focusDist
-    this.focusDist = prev > 0 && !moved ? prev + (want - prev) * 0.25 : want
-    if (Math.abs(this.focusDist - want) > want * 0.002 && this.opts.dof > 0) this.invalidate(false)
-    const aperture = this.opts.dof * 22 * Math.min(1.8, Math.sqrt(60 / this.focusDist))
+    // 光圈：远看时随对焦距离收小（整城的移轴微缩感，弥散圆不至于铺满画面）；
+    // 贴近到百米以内再收一些——眼前就是主体，前后景的虚化要克制
+    const meters = f.dist / this.K
+    const aperture = this.opts.dof * 22 * Math.min(1.8, Math.sqrt(60 / f.dist)) * (0.5 + 0.5 * Math.min(1, meters / 160))
     const scale = moved ? this.motionScale : 1
     this.lastScale = moved ? scale : 0
     this.trees?.update(cam)
+    this.shadows.setFrame(moved ? 0 : this.post.samples)
+    if (this.shadows.flush(this.renderer)) this.post.reset()
     this.timer.frameStart()
     this.timer.tag = this.lastScale
-    this.post.render(this.renderer, this.scene, cam, this.focusDist, aperture, null, this.timer, scale)
+    this.post.render(this.renderer, this.scene, cam, f.dist, aperture, null, this.timer, scale)
     this.timer.frameEnd()
+    if (still) return false
+    // 场景深度是这一帧的：指针、镜头、内容变了就再测一次，结果异步回来时唤醒循环
+    if (dof && this.probe && f.dirty) {
+      const [u, v] = this.focusUv()
+      if (this.probe.request(this.renderer, cam, u, v, this.post.sub, 0.022, () => this.invalidate(false))) f.dirty = false
+    }
+    // 读数还没回来、或还没缓动到位：继续出帧
+    return dof && (f.dirty || f.snap || f.dist !== want || !!this.probe?.pending)
   }
 
   /** 按一帧移动中的实测耗时调节缩放（同世界沙盘，目标 60 fps） */
@@ -680,96 +756,49 @@ export class TownScene {
     this.motionScale = Math.min(1, Math.max(this.quality.minScale, this.motionScale + (want - this.motionScale) * k))
   }
 
-  private navTmp = { offset: new THREE.Vector3(), fwd: new THREE.Vector3(), right: new THREE.Vector3(), move: new THREE.Vector3(), sph: new THREE.Spherical() }
-  /** 键盘导航（同世界沙盘）：返回这一帧是否动了 */
-  private keyNav(dt: number) {
-    const held = this.navHeld
-    if (!held.size || !dt) return held.size > 0
-    const cam = this.camera
-    const target = this.controls.target
-    const { offset, fwd, right, move, sph } = this.navTmp
-    offset.copy(cam.position).sub(target)
-    const dist = offset.length()
-    const fast = this.navFast ? 3 : 1
-    fwd.set(-offset.x, 0, -offset.z).normalize()
-    right.set(-fwd.z, 0, fwd.x)
-    move.set(0, 0, 0)
-    if (held.has('forward')) move.add(fwd)
-    if (held.has('back')) move.sub(fwd)
-    if (held.has('right')) move.add(right)
-    if (held.has('left')) move.sub(right)
-    if (move.lengthSq()) {
-      move.normalize().multiplyScalar(dist * 0.9 * fast * dt)
-      target.add(move)
-      cam.position.add(move)
-    }
-    sph.setFromVector3(offset)
-    const turn = (+held.has('turnLeft') - +held.has('turnRight')) * 1.2 * fast * dt
-    const tilt = (+held.has('tiltDown') - +held.has('tiltUp')) * 0.8 * fast * dt
-    const zoom = +held.has('zoomOut') - +held.has('zoomIn')
-    if (turn || tilt || zoom) {
-      sph.theta += turn
-      sph.phi = Math.min(this.controls.maxPolarAngle, Math.max(0.05, sph.phi + tilt))
-      sph.radius = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, sph.radius * Math.exp(zoom * 1.4 * fast * dt)))
-      cam.position.copy(target).add(move.setFromSpherical(sph))
-    }
-    cam.lookAt(target)
-    return true
-  }
-
   /** 地面高清块跟着视点（镜头停稳后）：一次画一级，还有没画的再醒一帧接着画 */
   private updateDetail() {
     if (!this.hist) return
-    const t = this.controls.target
-    const dist = this.camera.position.distanceTo(t) / this.K
+    const t = this.rig.target
+    const dist = this.rig.distance / this.K
     const r = this.ground.focus((t.x - this.city.position.x) / this.K, (t.z - this.city.position.z) / this.K, dist)
     if (r.changed) this.post.reset()
     if (r.pending) this.invalidate(false)
   }
 
-  // —— 注记 ——
-  private labelView = new THREE.Matrix4()
-  private labelBoxes: number[] = []
-  private updateLabels() {
-    if (!this.opts.labels || !this.labelEls.length) return
-    const cam = this.camera
-    if (!this.labelsDirty && this.labelView.equals(cam.matrixWorld)) return
-    this.labelsDirty = false
-    this.labelView.copy(cam.matrixWorld)
-    const wpx = this.container.clientWidth
-    const hpx = this.container.clientHeight
-    const boxes = this.labelBoxes
-    boxes.length = 0
-    const dist = cam.position.distanceTo(this.controls.target)
-    for (const l of this.labelEls) {
-      this.tmp.copy(l.pos).project(cam)
-      // 远看只标片区，拉近再标地标
-      const vis = this.tmp.z < 1 && Math.abs(this.tmp.x) < 1.05 && Math.abs(this.tmp.y) < 1.05 && (l.el.classList.contains('l3-district') || dist < 45)
-      if (!vis) {
-        l.el.style.opacity = '0'
-        continue
-      }
-      const x = (this.tmp.x * 0.5 + 0.5) * wpx
-      const y = (-this.tmp.y * 0.5 + 0.5) * hpx
-      const b0 = x - l.w / 2 - 4
-      const b1 = y - l.h - 2
-      const b2 = x + l.w / 2 + 4
-      const b3 = y + 2
-      let hit = false
-      for (let q = 0; q < boxes.length; q += 4) {
-        if (b0 < boxes[q + 2] && b2 > boxes[q] && b1 < boxes[q + 3] && b3 > boxes[q + 1]) {
-          hit = true
-          break
-        }
-      }
-      if (hit) {
-        l.el.style.opacity = '0'
-        continue
-      }
-      boxes.push(b0, b1, b2, b3)
-      l.el.style.opacity = '1'
-      l.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`
+  // —— 自动运镜 ——
+  /** 运镜的题材：这一刻的地标（城堡、寺观、市场、港口、城门），换算到世界坐标 */
+  private setPois(st: Settlement) {
+    const KIND: Record<string, [string, number]> = { castle: ['capital', 2.4], temple: ['city', 2], market: ['city', 1.8], harbor: ['coast', 1.6], magic: ['city', 1.4], gate: ['peak', 0.9] }
+    const out: TourPoi[] = []
+    for (const l of st.landmarks) {
+      const k = KIND[l.kind]
+      if (!k) continue
+      out.push({ x: l.p[0] * this.K + this.city.position.x, z: l.p[1] * this.K + this.city.position.z, kind: k[0], weight: k[1] * (l.major ? 1.6 : 1) })
     }
+    this.pois = out.length ? out : [{ x: 0, z: 0, kind: 'city', weight: 1 }]
+  }
+
+  startTour() {
+    if (!this.hist || !this.ready || this.tour.active) return
+    this.pointer = null
+    this.focus.dirty = true
+    this.tour.start(this.camera, this.rig.target)
+    this.onTourChange?.(true)
+    this.invalidate(false)
+  }
+
+  stopTour() {
+    if (!this.tour.active) return
+    this.tour.stop()
+    this.tourFade.style.opacity = '0'
+    this.onTourChange?.(false)
+    this.invalidate(false)
+  }
+
+  toggleTour() {
+    if (this.tour.active) this.stopTour()
+    else this.startTour()
   }
 
   // —— 拾取 ——
@@ -838,13 +867,6 @@ export class TownScene {
     return null
   }
 
-  /** 对焦点：指针下的地面（世界坐标） */
-  private pickPoint(clientX: number, clientY: number): THREE.Vector3 | null {
-    const p = this.pick(clientX, clientY)
-    if (!p) return null
-    return new THREE.Vector3(p.q[0], this.H(p.q[0], p.q[1]), p.q[1]).applyMatrix4(this.city.matrixWorld)
-  }
-
   // —— 其他 ——
   private togglePerf() {
     if (this.perf) {
@@ -893,39 +915,46 @@ export class TownScene {
     this.renderer.domElement.style.height = h + 'px'
     this.camera.aspect = w / Math.max(1, h)
     this.camera.updateProjectionMatrix()
-    this.labelsDirty = true
+    this.u.uMinNdc.value = 4 / Math.max(1, Math.round(h * pr))
+    this.labels.invalidate()
+    this.focus.dirty = true
     this.invalidate()
   }
 
   resetCamera() {
-    this.camera.position.set(0, 58, 84)
-    this.controls.target.set(0, 0, 0)
-    this.controls.update()
+    this.stopTour()
+    this.rig.reset()
+    this.focus.snap = true
     this.invalidate()
   }
 
   /**
    * 摆好镜头：视点 (x, z) 为聚落米坐标（落在地表上），dist 为镜头到视点的距离（米），
-   * azimuth 为方位角（度，0 为镜头在视点正南、向北看，90 为在正东），pitch 为俯角（度，90 为正俯视）
+   * azimuth 为方位角（度，0 为镜头在视点正南、向北看，90 为在正东），pitch 为俯角（度，90 为正俯视）。
+   * 镜头的约束照常生效：给的机位在建筑里、贴着地面时，实际的机位会被抬高
    */
   setView(v: { x: number; z: number; dist: number; azimuth: number; pitch: number }) {
-    const t = this.controls.target
-    t.set(v.x, Math.max(WATER_LEVEL, this.H(v.x, v.z)), v.z).multiplyScalar(this.K).add(this.city.position)
-    const phi = Math.min(this.controls.maxPolarAngle, Math.max(0.01, ((90 - v.pitch) * Math.PI) / 180))
-    const r = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, v.dist * this.K))
-    this.camera.position.setFromSphericalCoords(r, phi, (v.azimuth * Math.PI) / 180).add(t)
-    this.controls.update()
+    this.stopTour()
+    this.rig.setView({
+      x: v.x * this.K + this.city.position.x,
+      z: v.z * this.K + this.city.position.z,
+      dist: v.dist * this.K,
+      azimuth: (v.azimuth * Math.PI) / 180,
+      pitch: (v.pitch * Math.PI) / 180,
+    })
+    this.focus.snap = true
     this.lastMove = 0
     this.invalidate()
   }
 
   /**
    * 实测移动中一帧的耗时（毫秒，含阴影重画与后期，每帧等 GPU 画完）：镜头绕视点小幅转动 frames 帧取平均。
+   * 每帧强制重新拟合并重画近、中两级阴影（平移、缩放时的最坏情况）；all 时连全城一级也重画（成长过渡期间）。
    * 调试与性能对比用（scripts/town3d.ts）
    */
-  measure(frames = 40): { ms: number; calls: number; triangles: number } {
+  measure(frames = 40, all = false): { ms: number; calls: number; triangles: number } {
     const gl = this.renderer.getContext()
-    const t = this.controls.target
+    const t = this.rig.target
     const off = this.camera.position.clone().sub(t)
     const axis = new THREE.Vector3(0, 1, 0)
     let calls = 0
@@ -939,10 +968,10 @@ export class TownScene {
         this.camera.position.copy(off).applyAxisAngle(axis, Math.sin((i / n) * Math.PI * 2) * 0.05).add(t)
         this.camera.lookAt(t)
         this.camera.updateMatrixWorld()
-        this.fitShadow()
-        this.renderer.shadowMap.needsUpdate = true
+        this.shadows.fit(t, off.length(), true)
+        if (all) this.shadows.invalidate()
         info.reset()
-        this.renderFrame(true)
+        this.renderFrame(true, 1 / 60)
         calls = info.render.calls
         triangles = info.render.triangles
         // 读回一个像素：等 GPU 把这一帧画完（finish 在 ANGLE 上不阻塞）
@@ -961,10 +990,33 @@ export class TownScene {
     return { ms, calls, triangles }
   }
 
-  /** 导出：当前画面（等累积收敛后的那一帧） */
+  /** 镜头与对焦的现状（米）：调试与截图脚本用 */
+  stats() {
+    const p = this.camera.position
+    return {
+      focus: this.focus.dist / this.K,
+      probe: (this.probe?.value ?? 0) / this.K,
+      orbit: this.rig.distance / this.K,
+      height: (p.y - this.rig.target.y) / this.K,
+      near: this.camera.near / this.K,
+      field: this.field.ready,
+    }
+  }
+
+  /** 导出：当前画面（等累积收敛后的那一帧）。对焦先同步测一次，不依赖帧循环已经跑到位 */
   snapshot(): string {
     const q = this.quality.accumulate
-    for (let i = this.post.samples; i < q; i++) this.renderFrame(false)
+    if (this.probe && this.opts.dof > 0) {
+      this.camera.updateMatrixWorld()
+      this.post.cameraChanged(this.camera)
+      this.renderFrame(false, 0, true)
+      const [u, v] = this.focusUv()
+      const d = this.probe.read(this.renderer, this.camera, u, v, this.post.sub, 0.022)
+      this.focus.dist = Math.max(this.camera.near * 2, d > 0 ? d : this.rig.distance)
+      this.focus.dirty = this.focus.snap = false
+      this.post.reset()
+    }
+    for (let i = this.post.samples; i < q; i++) this.renderFrame(false, 0, true)
     return this.renderer.domElement.toDataURL('image/png')
   }
 
@@ -974,14 +1026,18 @@ export class TownScene {
     this.clearTown()
     for (const d of this.disposers) d()
     this.post.dispose()
+    this.probe?.dispose()
+    this.field.dispose()
+    this.shadows.dispose()
     this.diorama.dispose()
     this.bldMat.dispose()
     this.bldDepth.dispose()
     this.env.dispose()
     this.ground.dispose()
-    this.controls.dispose()
+    this.rig.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
-    this.labelLayer.remove()
+    this.labels.dispose()
+    this.tourFade.remove()
   }
 }

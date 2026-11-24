@@ -4,6 +4,9 @@ import * as THREE from 'three'
  * 天空穹顶：地平线的乳白雾霭 → 天顶的蔚蓝，太阳方向有光晕。
  * 夜里（uStars > 0）叠上程序化的星空（两层星点 + 一道淡淡的银河，微微闪烁），
  * uMoonK > 0 时在 uMoon 方向画出月轮与月晕。
+ *
+ * uCove > 0 时是展厅的弧形背景墙（聚落沙盘用）：贴着地平线最亮，向上按指数衰减到 uTop；
+ * 地平线以下是无限延伸的地面对背景墙的掠射反光（与 diorama.ts 的桌面材质同一个式子，桌面边缘处两者相接）。
  */
 export function createSky() {
   const mat = new THREE.ShaderMaterial({
@@ -18,6 +21,8 @@ export function createSky() {
       uMoon: { value: new THREE.Vector3(0, 1, 0) },
       uMoonK: { value: 0 },
       uTime: { value: 0 },
+      /** 弧形背景墙：0 关；大于 0 时为亮带向上衰减的尺度（视线仰角的正弦） */
+      uCove: { value: 0 },
     },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
@@ -37,6 +42,7 @@ export function createSky() {
       uniform vec3 uMoon;
       uniform float uMoonK;
       uniform float uTime;
+      uniform float uCove;
       varying vec3 vDir;
       float hash13(vec3 p) {
         p = fract(p * 0.1031);
@@ -65,7 +71,17 @@ export function createSky() {
         // 地平线以下：海天之间的雾
         col = mix(col, uHorizon * 0.92, smoothstep(0.0, -0.08, d.y));
         float s = max(dot(d, normalize(uSun)), 0.0);
-        col += uSunColor * (pow(s, 900.0) * 6.0 + pow(s, 12.0) * 0.18 + pow(s, 3.0) * 0.06);
+        if (uCove > 0.0) {
+          float e = abs(d.y);
+          col = mix(uTop, uHorizon, exp(-e / uCove));
+          // 背景墙上没有日轮：太阳的方位上一片贴地的暖光
+          float az = max(dot(normalize(d.xz + 1e-5), normalize(uSun.xz + 1e-5)), 0.0);
+          col += uSunColor * az * az * az * exp(-e / (uCove * 1.4));
+          // 地平线以下：地面的菲涅耳反光（掠射时趋于背景墙本身的亮度，往下很快暗下去）
+          if (d.y < 0.0) col *= 0.04 + 0.96 * pow(1.0 - e, 5.0);
+        } else {
+          col += uSunColor * (pow(s, 900.0) * 6.0 + pow(s, 12.0) * 0.18 + pow(s, 3.0) * 0.06);
+        }
         if (uStars > 0.0) {
           // 近地平线的星被大气吃掉
           float up = smoothstep(-0.02, 0.25, d.y);
