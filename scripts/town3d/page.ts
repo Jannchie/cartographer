@@ -72,6 +72,22 @@ try {
       gates: st.walls.flatMap((w) => w.gates.map((g) => g.p)),
       bridges: st.crossings.filter((c) => c.kind === 'bridge').map((c) => [(c.a[0] + c.b[0]) / 2, (c.a[1] + c.b[1]) / 2]),
       piers: st.piers.map((p) => p[0]),
+      /** 构筑物与小品的位置（城门连同朝向与墙的种类、各类过水处、墓地、奇观、园林小品、船） */
+      works: {
+        gates: st.walls.flatMap((w) => {
+          const cx = w.loop.reduce((s, q) => s + q[0], 0) / w.loop.length
+          const cz = w.loop.reduce((s, q) => s + q[1], 0) / w.loop.length
+          // out：自墙圈中心指向城门的方位角（度，镜头转到这个方位就是从城外看门）
+          return w.gates.map((g) => ({ p: g.p, out: (Math.atan2(g.p[0] - cx, g.p[1] - cz) * 180) / Math.PI, kind: w.kind, thickness: w.thickness }))
+        }),
+        towers: st.walls.flatMap((w) => w.towers.slice(0, 3)),
+        crossings: st.crossings.map((c) => ({ a: c.a, b: c.b, kind: c.kind, sacred: !!c.sacred })),
+        moatBridges: st.walls.flatMap((w) => w.moat?.bridges.map((b) => b.p) ?? []),
+        cemeteries: st.greens.filter((g) => g.kind === 'cemetery').map((g) => g.poly[0]),
+        wonders: st.wonders.map((w) => ({ p: w.p, kind: w.kind })),
+        rocks: st.parkParts.filter((q) => q.kind === 'rock').slice(0, 6).map((q) => q.poly[0]),
+        boats: st.boats.map((b) => ({ p: b.p, len: b.len })),
+      },
       /** 各类建筑里最大的几栋（中心与面积） */
       big: Object.fromEntries(
         ['temple', 'keep', 'tower', 'pagoda', 'hall', 'civic', 'large', 'torii', 'house'].map((k) => [

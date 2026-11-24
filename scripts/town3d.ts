@@ -82,10 +82,49 @@ try {
     trees: () => ({ x: W * 0.2, z: D * 0.25, dist: 90, azimuth: 70, pitch: 20 }),
     water: () => ({ x: first(info.piers, first(info.bridges, mid))[0], z: first(info.piers, first(info.bridges, mid))[1], dist: 110, azimuth: 150, pitch: 20 }),
   }
+  // --info：打印构筑物与小品的位置（挑机位用）
+  if (flags.includes('--info')) console.log(JSON.stringify({ works: info.works, landmarks: info.landmarks }, (_, v) => (typeof v === 'number' ? Math.round(v * 10) / 10 : v)))
+  // 城门的机位：gateout#i 从城外正对第 i 座城门，gatein#i 从城里看，gatelow#i 贴近地面穿门洞看
+  const gateView = (i: number, turn: number, dist: number, pitch: number) => {
+    const g = info.works.gates[i] ?? { p: mid, out: 0 }
+    return { x: g.p[0], z: g.p[1], dist, azimuth: g.out + turn, pitch }
+  }
+  const INDEXED: Record<string, (i: number) => Omit<View, 'name'>> = {
+    gateout: (i) => gateView(i, 25, 62, 13),
+    gatein: (i) => gateView(i, 205, 62, 16),
+    gatelow: (i) => gateView(i, 4, 30, 4),
+    gatetop: (i) => gateView(i, 40, 80, 50),
+    cross: (i) => {
+      const c = info.works.crossings[i]
+      if (!c) return PRESET.bridge()
+      const az = (Math.atan2(c.b[0] - c.a[0], c.b[1] - c.a[1]) * 180) / Math.PI
+      return { x: (c.a[0] + c.b[0]) / 2, z: (c.a[1] + c.b[1]) / 2, dist: 28 + Math.hypot(c.b[0] - c.a[0], c.b[1] - c.a[1]) * 1.1, azimuth: az + 62, pitch: 12 }
+    },
+    crosslow: (i) => {
+      const c = info.works.crossings[i]
+      if (!c) return PRESET.bridge()
+      const az = (Math.atan2(c.b[0] - c.a[0], c.b[1] - c.a[1]) * 180) / Math.PI
+      return { x: (c.a[0] + c.b[0]) / 2, z: (c.a[1] + c.b[1]) / 2, dist: 16 + Math.hypot(c.b[0] - c.a[0], c.b[1] - c.a[1]) * 0.8, azimuth: az + 88, pitch: 3 }
+    },
+    boat: (i) => {
+      const b = info.works.boats[i]
+      return b ? { x: b.p[0], z: b.p[1], dist: 14 + b.len * 1.8, azimuth: 40 + i * 70, pitch: 16 } : PRESET.water()
+    },
+  }
   const wanted = flags.filter((a) => a.startsWith('--view=')).map((a) => a.slice(7))
   const names = wanted.length ? wanted : ['overview', 'north', 'east', 'south', 'west', 'top', 'roofs', 'street', 'landmark', 'gate', 'bridge', 'edge']
   const views: View[] = names.map((s, i) => {
     if (PRESET[s]) return { name: s, ...PRESET[s]() }
+    const [head, far] = s.split('@')
+    const [key, idx] = head.split('#')
+    if (INDEXED[key]) return { name: `${key}${idx ?? 0}`, ...INDEXED[key](Number(idx ?? 0)) }
+    // lm.<地标种类>#i、pt.<works 里的点列>#i：近景看第 i 个；后面可接 @距离
+    const [group, what] = key.split('.')
+    if (group === 'lm' || group === 'pt') {
+      const list = group === 'lm' ? info.landmarks.filter((l) => l.kind === what).map((l) => l.p) : ((info.works as unknown as Record<string, unknown[]>)[what] ?? []).map((q) => (Array.isArray(q) ? q : (q as { p: number[] }).p) as number[])
+      const q = list[Number(idx ?? 0)] ?? mid
+      return { name: `${what}${idx ?? 0}`, x: q[0], z: q[1], dist: Number(far ?? 30), azimuth: 35 + Number(idx ?? 0) * 50, pitch: 16 }
+    }
     const [nums, name] = s.split(':')
     const [x, z, dist, azimuth, pitch] = nums.split(',').map(Number)
     if (![x, z, dist, azimuth, pitch].every(Number.isFinite)) throw new Error(`机位不对：${s}`)
@@ -132,4 +171,9 @@ interface Info {
   bridges: number[][]
   piers: number[][]
   big: Record<string, { p: number[]; area: number }[]>
+  works: {
+    gates: { p: [number, number]; out: number; kind: string; thickness: number }[]
+    crossings: { a: [number, number]; b: [number, number]; kind: string; sacred: boolean }[]
+    boats: { p: [number, number]; len: number }[]
+  }
 }
