@@ -57,6 +57,23 @@ export const MAT = {
   slate: 9,
   /** 木板（船、码头、棚屋） */
   board: 10,
+  // —— 构筑物材质（16 ~ 23，着色器分支见 buildingShader.ts 的"构筑物材质"一段） ——
+  /** 石铺面：水平面上的石板（墙顶步道、桥面、码头、台面） */
+  paving: 16,
+  /** 木铺板：立面坐标的第一项为横穿板缝方向的米数（栈桥、木桥面、甲板） */
+  plank: 17,
+  /** 茅草、禾秆（草垛、摊棚与渡船的草顶） */
+  thatch: 18,
+  /** 帆布（帆、摊棚的篷布）：立面坐标第二项大于 0 时为条纹宽度（米），第一项为横穿条纹方向的米数 */
+  cloth: 19,
+  /** 天然岩石（置石、假山、浮空岛的岩体） */
+  rock: 20,
+  /** 灵光：昼夜都自发光（法阵、灵泉、灵脉） */
+  glow: 21,
+  /** 灯火：夜里自发光（灯笼、火把、灯塔、窑口） */
+  lamp: 22,
+  /** 静水：水池、井口、水槽的水面 */
+  pool: 23,
 } as const
 /** 材质字节里的开窗标记：墙面按层高、开间排窗，底层居中开门 */
 export const WIN = 128
@@ -236,6 +253,62 @@ export class Writer {
   /** 板的一条边：边 ab 与压低 th 后的边围成的竖条，朝向 out */
   edgeStrip(a: V3, b: V3, th: number, out: V3) {
     this.quadOut(a, b, [b[0], b[1] - th, b[2]], [a[0], a[1] - th, a[2]], out)
+  }
+
+  /**
+   * 带逐顶点法线的三角形（圆塔、拱券、原木这类曲面平滑着色）。法线为单位向量；绕向按法线自动决定
+   */
+  triN(a: V3, b: V3, c: V3, na: V3, nb: V3, nc: V3) {
+    const fx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
+    const fy = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2])
+    const fz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    if (Math.hypot(fx, fy, fz) < 1e-9) return
+    const flip = fx * (na[0] + nb[0] + nc[0]) + fy * (na[1] + nb[1] + nc[1]) + fz * (na[2] + nb[2] + nc[2]) < 0
+    const ps = flip ? [a, c, b] : [a, b, c]
+    const ns = flip ? [na, nc, nb] : [na, nb, nc]
+    const B = this.cur
+    B.pos.reserve(9)
+    B.nrm.reserve(9)
+    B.col.reserve(12)
+    B.life.reserve(9)
+    B.uv.reserve(9)
+    B.ids.reserve(1)
+    const box = B.box
+    for (let i = 0; i < 3; i++) {
+      const p = ps[i]
+      const n = ns[i]
+      const k = B.pos.n
+      B.pos.a[k] = p[0]
+      B.pos.a[k + 1] = p[1]
+      B.pos.a[k + 2] = p[2]
+      B.pos.n += 3
+      B.nrm.a[k] = Math.round(n[0] * 127)
+      B.nrm.a[k + 1] = Math.round(n[1] * 127)
+      B.nrm.a[k + 2] = Math.round(n[2] * 127)
+      B.nrm.n += 3
+      B.life.a[k] = this.born
+      B.life.a[k + 1] = this.died
+      B.life.a[k + 2] = this.base
+      B.life.n += 3
+      const q = B.col.n
+      B.col.a[q] = this.c[0]
+      B.col.a[q + 1] = this.c[1]
+      B.col.a[q + 2] = this.c[2]
+      B.col.a[q + 3] = this.face
+      B.col.n += 4
+      const uv = this.uvOf ? this.uvOf(p) : ZERO2
+      B.uv.a[B.uv.n] = uv[0]
+      B.uv.a[B.uv.n + 1] = uv[1]
+      B.uv.a[B.uv.n + 2] = uv[2]
+      B.uv.n += 3
+      if (p[0] < box[0]) box[0] = p[0]
+      if (p[1] < box[1]) box[1] = p[1]
+      if (p[2] < box[2]) box[2] = p[2]
+      if (p[0] > box[3]) box[3] = p[0]
+      if (p[1] > box[4]) box[4] = p[1]
+      if (p[2] > box[5]) box[5] = p[2]
+    }
+    B.ids.a[B.ids.n++] = this.id
   }
 
   finish(): TownChunk[] {

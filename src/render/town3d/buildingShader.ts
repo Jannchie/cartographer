@@ -101,6 +101,63 @@ const FRAG_BODY = /* glsl */ `
     float coarse = 1.0 - smoothstep(0.18, 0.55, aa);
     float n1 = vnoise(vLocal.xz * 0.35 + vLocal.y * 0.2 + vSeed * 17.0);
 
+    // —— 构筑物材质（MAT 16 ~ 23：石铺面、木铺板、茅草、帆布、岩石、灵光、灯火、静水），不分墙面与屋面 ——
+    if (m >= 15.5) {
+      if (m == 16.0) {
+        // 石铺面：水平面按平面坐标铺错缝的石板，立面（台沿、踏步）按沿面坐标
+        vec2 q = abs(N.y) > 0.5 ? vLocal.xz : vec2(dot(vLocal.xz, normalize(vec2(-N.z, N.x) + 1e-5)), vLocal.y);
+        vec3 ms = masonry(q, 0.62, 0.95, 0.03, aa);
+        col = mix(col * mix(1.0, ms.x, mid), col * 0.7, ms.y * mid);
+        bumpH += ms.z * 0.006 * mid;
+        col *= 0.92 + 0.14 * n1;
+      } else if (m == 17.0) {
+        // 木铺板：立面坐标第一项是横穿板缝方向的米数，每块板明暗不一
+        float pw = 0.24;
+        float xb = vUv.x / pw;
+        float e = min(fract(xb), 1.0 - fract(xb)) * pw;
+        float j = edgeMask(e, 0.012, aa) * mid;
+        col *= mix(1.0, 0.8 + 0.34 * hash12(vec2(floor(xb), vSeed * 13.0)), mid) * (1.0 - 0.5 * j);
+        bumpH -= j * 0.01;
+        col *= 0.9 + 0.16 * n1;
+      } else if (m == 18.0) {
+        // 茅草：顺坡的草秆与一层层的草把
+        vec2 dh = N.xz;
+        float sl = length(dh);
+        vec2 d = sl > 1e-3 ? dh / sl : vec2(0.0, 1.0);
+        float along = dot(vLocal.xz, vec2(-d.y, d.x));
+        float down = dot(vLocal.xz, d) / max(abs(N.y), 0.3) - vLocal.y;
+        float st = vnoise(vec2(along * 9.0, down * 1.3) + vSeed * 7.0);
+        float layer = fract(down / 0.55);
+        col *= mix(1.0, (0.78 + 0.4 * st) * (0.8 + 0.2 * smoothstep(0.0, 0.25, layer)), mid);
+        bumpH += (st * 0.02 + layer * 0.03) * mid;
+        col *= 0.88 + 0.2 * n1;
+      } else if (m == 19.0) {
+        // 帆布：可带条纹（隔一条换成本白），细看有织纹
+        float stripe = vUv.y > 0.0 ? step(0.5, fract(vUv.x / (2.0 * vUv.y))) : 0.0;
+        col = mix(col, vec3(0.56, 0.5, 0.38), stripe * 0.9);
+        col *= 0.9 + 0.12 * n1 + 0.06 * vnoise(vLocal.xz * 14.0 + vLocal.y * 9.0) * fine;
+      } else if (m == 20.0) {
+        // 岩石：近水平的层理与裂隙，朝上的面生苔
+        float strata = vnoise(vec2(vLocal.y * 2.2 + n1 * 1.5, dot(vLocal.xz, vec2(0.13, 0.09)) + vSeed * 9.0));
+        float cr = vnoise(vLocal.xz * 1.7 + vLocal.y * 1.3 + vSeed * 3.0);
+        col *= 0.72 + 0.3 * strata + 0.22 * cr;
+        col = mix(col, col * vec3(0.78, 0.95, 0.66), smoothstep(0.55, 0.9, N.y) * 0.5 * smoothstep(0.35, 0.7, n1));
+        bumpH += (strata * 0.05 + cr * 0.04) * mid;
+      } else if (m == 21.0) {
+        // 灵光：昼夜都亮，夜里更亮
+        float pulse = 0.75 + 0.25 * vnoise(vLocal.xz * 0.9 + vLocal.y * 0.7);
+        totalEmissiveRadiance += col * pulse * (1.2 + 3.0 * uNight);
+        col *= 0.6;
+      } else if (m == 22.0) {
+        // 灯火：白天是灯罩本色，夜里发暖光
+        totalEmissiveRadiance += vec3(1.0, 0.6, 0.25) * uNight * 5.0;
+      } else {
+        // 静水：深色的水面，光滑反光
+        col *= 0.85 + 0.2 * vnoise(vLocal.xz * 1.3 + vSeed * 5.0);
+        glass = 1.0;
+      }
+      diffuseColor.rgb = col;
+    } else
     if (abs(N.y) < 0.35) {
       // —— 墙面：沿墙坐标 x（米）、离地高度 y ——
       vec2 tg = normalize(vec2(-N.z, N.x));
