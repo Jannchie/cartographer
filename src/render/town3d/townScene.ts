@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { P } from '../../settlement/geom'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import type { SettleStyleId } from '../../settlement/themes'
@@ -13,13 +12,12 @@ import { GpuTimer } from '../aerial/gpuTimer'
 import { QUALITIES, type Look, type QualityId } from '../aerial/looks'
 import { Diorama } from '../aerial/diorama'
 import { daylight, type Daylight } from '../aerial/daylight'
-import { NOISE_GLSL } from '../aerial/glsl'
-import { LIFE_GLSL, patchBuilding } from './buildingShader'
+import { patchBuilding } from './buildingShader'
 import { heightSampler, type TownBuild } from './massing'
 import type { TownChunk } from './mesh'
 import { GroundPainter, createGroundMaterial, createWaterMaterial, skirtGeometries, terrainGeometry, waterTexture } from './ground'
 import { WATER_LEVEL } from './relief'
-import type { TreeKind, TreeSet } from './vegetation'
+import { createTreeMesh } from './treeLayer'
 
 /**
  * 聚落沙盘：成长史中出现过的全部体块与树一次建好（见 massing.ts，在 Worker 里构建），
@@ -76,42 +74,6 @@ const NAV_KEYS: Record<string, string> = {
   _: 'zoomOut',
 }
 const navKey = (e: KeyboardEvent): string | undefined => NAV_KEYS[e.key.length === 1 ? e.key.toLowerCase() : e.key]
-
-type Uniforms = Record<string, THREE.IUniform>
-
-/** 树：实例属性 aTree (x, 地面高, z, 冠径)、aTreeLife；uShape (横向, 竖向, 抬高) 按冠径缩放，颜色按位置哈希 */
-function patchTree(mat: THREE.Material, u: Uniforms, shape: THREE.Vector3, tint: THREE.Color, depth: boolean) {
-  mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u, { uShape: { value: shape }, uTint: { value: tint } })
-    sh.vertexShader = sh.vertexShader
-      .replace(
-        '#include <common>',
-        `#include <common>\n${LIFE_GLSL}\n${NOISE_GLSL}\nattribute vec4 aTree;\nattribute vec2 aTreeLife;\nuniform vec3 uShape;\nuniform vec3 uTint;\nvarying vec3 vTint;`,
-      )
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-        float lk = lifeK(aTreeLife);
-        float h = hash12(aTree.xz);
-        float r = aTree.w * lk * (0.9 + 0.2 * h);
-        transformed = vec3(position.x * uShape.x, position.y * uShape.y + uShape.z, position.z * uShape.x) * r + aTree.xyz;
-        if (lk <= 0.0) transformed = vec3(0.0);
-        vTint = uTint * (0.75 + 0.5 * hash12(aTree.zx + 3.7));`,
-      )
-    if (depth) return
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vTint;')
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb = vTint;')
-  }
-  mat.customProgramCacheKey = () => `town-tree-${depth ? 'd' : 'c'}`
-}
-
-/** 各树形的树冠几何与比例（冠径为 1 时）：横向半径、竖向半径、中心离地 */
-const TREE_SHAPE: Record<TreeKind, { geo: () => THREE.BufferGeometry; shape: [number, number, number]; tint: string }> = {
-  broadleaf: { geo: () => new THREE.IcosahedronGeometry(1, 0), shape: [0.85, 0.8, 0.85], tint: '#4d6b24' },
-  conifer: { geo: () => new THREE.ConeGeometry(1, 1, 7, 1, true), shape: [0.7, 2.4, 1.2], tint: '#2f4d26' },
-  columnar: { geo: () => new THREE.OctahedronGeometry(1, 0), shape: [0.42, 1.25, 1.25], tint: '#35522a' },
-}
 
 const deep = (o: THREE.Object3D) =>
   o.traverse((c) => {
@@ -382,7 +344,7 @@ export class TownScene {
     for (const c of build.chunks) this.chunks.push(this.chunkMesh(c))
     this.city.add(...this.chunks)
     // 树
-    for (const t of build.trees) if (t.count) this.city.add(this.treeMesh(t))
+    for (const t of build.trees) if (t.count) this.city.add(createTreeMesh(t, this.u))
 
     // 地面与水
     const gm = createGroundMaterial(this.groundTex, this.detailTex)
@@ -446,36 +408,6 @@ export class TownScene {
     m.castShadow = m.receiveShadow = true
     m.userData.ids = c.ids
     m.userData.life = c.life
-    return m
-  }
-
-  private treeMesh(t: TreeSet) {
-    const s = TREE_SHAPE[t.kind]
-    // 只留位置并合并共用顶点：平面着色的法线在片元里由导数求出，顶点着色器的调用数降到约五分之一
-    const raw = s.geo()
-    raw.deleteAttribute('normal')
-    raw.deleteAttribute('uv')
-    const src = mergeVertices(raw)
-    raw.dispose()
-    const g = new THREE.InstancedBufferGeometry()
-    g.setAttribute('position', src.getAttribute('position'))
-    g.setIndex(src.index)
-    const ib = new THREE.InstancedInterleavedBuffer(t.data, 6)
-    g.setAttribute('aTree', new THREE.InterleavedBufferAttribute(ib, 4, 0))
-    g.setAttribute('aTreeLife', new THREE.InterleavedBufferAttribute(ib, 2, 4))
-    g.instanceCount = t.count
-    const shape = new THREE.Vector3(...s.shape)
-    const tint = new THREE.Color(s.tint)
-    const mat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, flatShading: true })
-    patchTree(mat, this.u, shape, tint, false)
-    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
-    patchTree(depth, this.u, shape, tint, true)
-    const m = new THREE.Mesh(g, mat)
-    m.customDepthMaterial = depth
-    m.castShadow = m.receiveShadow = true
-    // 位置在着色器里由实例属性给出：包围球按不到，不做视锥裁剪
-    m.frustumCulled = false
-    m.userData.depth = depth
     return m
   }
 
@@ -1018,6 +950,63 @@ export class TownScene {
     this.controls.target.set(0, 0, 0)
     this.controls.update()
     this.invalidate()
+  }
+
+  /**
+   * 摆好镜头：视点 (x, z) 为聚落米坐标（落在地表上），dist 为镜头到视点的距离（米），
+   * azimuth 为方位角（度，0 为镜头在视点正南、向北看，90 为在正东），pitch 为俯角（度，90 为正俯视）
+   */
+  setView(v: { x: number; z: number; dist: number; azimuth: number; pitch: number }) {
+    const t = this.controls.target
+    t.set(v.x, Math.max(WATER_LEVEL, this.H(v.x, v.z)), v.z).multiplyScalar(this.K).add(this.city.position)
+    const phi = Math.min(this.controls.maxPolarAngle, Math.max(0.01, ((90 - v.pitch) * Math.PI) / 180))
+    const r = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, v.dist * this.K))
+    this.camera.position.setFromSphericalCoords(r, phi, (v.azimuth * Math.PI) / 180).add(t)
+    this.controls.update()
+    this.lastMove = 0
+    this.invalidate()
+  }
+
+  /**
+   * 实测移动中一帧的耗时（毫秒，含阴影重画与后期，每帧等 GPU 画完）：镜头绕视点小幅转动 frames 帧取平均。
+   * 调试与性能对比用（scripts/town3d.ts）
+   */
+  measure(frames = 40): { ms: number; calls: number; triangles: number } {
+    const gl = this.renderer.getContext()
+    const t = this.controls.target
+    const off = this.camera.position.clone().sub(t)
+    const axis = new THREE.Vector3(0, 1, 0)
+    let calls = 0
+    let triangles = 0
+    const px = new Uint8Array(4)
+    const info = this.renderer.info
+    // 一帧里有阴影、场景与后期的多次绘制：统计整帧的绘制次数与三角形数
+    info.autoReset = false
+    const run = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        this.camera.position.copy(off).applyAxisAngle(axis, Math.sin((i / n) * Math.PI * 2) * 0.05).add(t)
+        this.camera.lookAt(t)
+        this.camera.updateMatrixWorld()
+        this.fitShadow()
+        this.renderer.shadowMap.needsUpdate = true
+        info.reset()
+        this.renderFrame(true)
+        calls = info.render.calls
+        triangles = info.render.triangles
+        // 读回一个像素：等 GPU 把这一帧画完（finish 在 ANGLE 上不阻塞）
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px)
+      }
+    }
+    run(6)
+    const t0 = performance.now()
+    run(frames)
+    const ms = (performance.now() - t0) / frames
+    info.autoReset = true
+    this.camera.position.copy(off).add(t)
+    this.camera.lookAt(t)
+    this.invalidate()
+    return { ms, calls, triangles }
   }
 
   /** 导出：当前画面（等累积收敛后的那一帧） */

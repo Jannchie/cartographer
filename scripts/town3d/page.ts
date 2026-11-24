@@ -1,0 +1,106 @@
+/**
+ * 沙盘检查页（scripts/town3d.ts 用无头浏览器打开）：不经界面，直接由地址里的聚落参数推演成长史、搭沙盘。
+ * 地址参数同聚落模块（seed、population、culture、capital=1 …，见 ui/settlement/route.ts），另有
+ * time（时刻）、quality、dof、haze、stage、labels、ground（地面风格）、pop（时间轴上的人口，缺省为终态）。
+ * 截图脚本经 window.__shot 摆镜头、取画面、测帧耗时。
+ */
+import '../../src/style.css'
+import { generateHistory } from '../../src/settlement/generate'
+import { snapshot } from '../../src/settlement/history'
+import { scaleOf } from '../../src/settlement/scale'
+import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../src/settlement/types'
+import type { SettleStyleId } from '../../src/settlement/themes'
+import { decodeSettlement } from '../../src/ui/settlement/route'
+import { buildTown } from '../../src/render/town3d/massing'
+import { TownScene } from '../../src/render/town3d/townScene'
+import { LOOKS, type QualityId } from '../../src/render/aerial/looks'
+
+const q = new URLSearchParams(location.search)
+const num = (k: string, d: number) => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d)
+const flag = (k: string, d: boolean) => (q.has(k) ? q.get(k) !== '0' : d)
+
+const api: Record<string, unknown> = { ready: false, error: '' }
+;(window as unknown as { __shot: typeof api }).__shot = api
+
+try {
+  const params: SettlementParams = { ...DEFAULT_SETTLEMENT, ...decodeSettlement(q).params }
+  params.size = scaleOf(params.population).size
+  const t0 = performance.now()
+  const hist = generateHistory(params)
+  const t1 = performance.now()
+  const build = buildTown(hist.st, hist.life)
+  const t2 = performance.now()
+  const pop = num('pop', hist.until)
+  const st = snapshot(hist, pop)
+  const town = new TownScene(document.getElementById('stage')!, {
+    timeOfDay: num('time', 14.5),
+    sunAzimuth: num('sunAzimuth', 225),
+    sunElevation: num('sunElevation', 42),
+    haze: flag('haze', true),
+    dof: num('dof', 0.2),
+    stage: flag('stage', true),
+    labels: flag('labels', false),
+    quality: (q.get('quality') ?? 'high') as QualityId,
+    shadowSoftness: num('shadowSoftness', 2),
+    look: (LOOKS.find((l) => l.id === q.get('look')) ?? LOOKS[0]).look,
+  })
+  town.setActive(true)
+  await town.setTown(hist, build, st, pop, (q.get('ground') ?? 'color') as SettleStyleId, { name: st.nameZh, sub: `${(st.width / 1000).toFixed(1)} 公里 · 种子 ${params.seed}` })
+  const t3 = performance.now()
+  const H = (x: number, z: number) => {
+    const T = hist.st.terrain
+    const i = Math.min(T.W - 1, Math.max(0, Math.round(x / T.cell)))
+    const j = Math.min(T.H - 1, Math.max(0, Math.round(z / T.cell)))
+    return T.height[j * T.W + i]
+  }
+  Object.assign(api, {
+    town,
+    hist,
+    /** 概况：画幅（米）、各类要素的数量与位置（供脚本挑机位） */
+    info: {
+      name: st.nameZh,
+      width: st.width,
+      height: st.height,
+      pop,
+      until: hist.until,
+      ms: { history: t1 - t0, build: t2 - t1, scene: t3 - t2 },
+      tris: build.tris,
+      trees: build.trees.map((t) => [t.kind, t.count]),
+      buildings: st.buildings.length,
+      kinds: st.buildings.reduce((m: Record<string, number>, b) => ((m[b.kind] = (m[b.kind] ?? 0) + 1), m), {}),
+      landmarks: st.landmarks.map((l) => ({ kind: l.kind, p: l.p, major: !!l.major })),
+      gates: st.walls.flatMap((w) => w.gates.map((g) => g.p)),
+      bridges: st.crossings.filter((c) => c.kind === 'bridge').map((c) => [(c.a[0] + c.b[0]) / 2, (c.a[1] + c.b[1]) / 2]),
+      piers: st.piers.map((p) => p[0]),
+      /** 各类建筑里最大的几栋（中心与面积） */
+      big: Object.fromEntries(
+        ['temple', 'keep', 'tower', 'pagoda', 'hall', 'civic', 'large', 'torii', 'house'].map((k) => [
+          k,
+          st.buildings
+            .filter((b) => b.kind === k)
+            .map((b) => {
+              let x = 0
+              let z = 0
+              let a = 0
+              b.poly.forEach((p, i) => {
+                const n = b.poly[(i + 1) % b.poly.length]
+                x += p[0]
+                z += p[1]
+                a += p[0] * n[1] - n[0] * p[1]
+              })
+              return { p: [x / b.poly.length, z / b.poly.length], area: Math.abs(a) / 2 }
+            })
+            .sort((a, b) => b.area - a.area)
+            .slice(0, 4),
+        ]),
+      ),
+      center: st.center,
+      heightAt: null,
+    },
+    heightAt: H,
+    ready: true,
+  })
+} catch (err) {
+  console.error(err)
+  api.error = err instanceof Error ? `${err.message}\n${err.stack}` : String(err)
+}
