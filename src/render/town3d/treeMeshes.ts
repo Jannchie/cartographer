@@ -617,15 +617,15 @@ const willow: Make = (b, bark) => {
     b.branch([0, 0.95 + i * 0.05, 0], polar(0.45, a, 1.5), 0.07, 0.03, bark, 0.55, b.lod === 2 && i % 2 === 1)
   }
   // 枝条：竖长、下端收尖；外圈垂得低，内圈短
-  const n = 20
+  const n = 26
   for (let i = 0; i < n; i++) {
     const outer = i % 2 === 0
     const a = a0 + (i / n) * Math.PI * 2 + b.r(-0.14, 0.14)
     const d = outer ? b.r(0.84, 0.98) : b.r(0.52, 0.7)
     const len = outer ? b.r(0.5, 0.74) : b.r(0.36, 0.5)
     const top = outer ? 1.52 : 1.3
-    const w = b.r(0.15, 0.21)
-    b.lump(polar(d, a, top - len * 0.8), [w, len, w], { amp: 0.2, round: 0.3, taper: 0.7, level: -1 }, b.lod === 2 && !outer)
+    const w = b.r(0.12, 0.18)
+    b.lump(polar(d, a, top - len * 0.8), [w, len, w * 0.85], { amp: 0.22, round: 0.3, taper: 0.75, level: -1 }, b.lod === 2 && !outer)
   }
 }
 
@@ -687,28 +687,32 @@ const ornamental: Make = (b, bark) => {
   b.cluster(polar(0.28, a0 + 1.0, 1.4), 0.34, 2, o)
 }
 
-/** 竹丛：一丛细秆向外散开，上半截挂着叶团，秆梢弯垂 */
+/** 竹丛：一丛细秆向外散开，上半截一路挂着小叶团，秆梢弯垂 */
 const bamboo: Make = (b) => {
   b.centre = [0, 2.4, 0]
-  const n = 12
+  const n = 13
   const a0 = b.r(0, 6.28)
   const culm: RGB = [150, 168, 96]
   for (let i = 0; i < n; i++) {
     const a = a0 + i * 2.399963
-    const d = 0.06 + 0.3 * Math.sqrt((i + 0.5) / n)
-    const h = b.r(3.0, 4.0)
-    const lean = b.r(0.1, 0.24)
+    const d = 0.05 + 0.3 * Math.sqrt((i + 0.5) / n)
+    const h = b.r(2.9, 4.0)
+    const lean = b.r(0.08, 0.2)
     const skip = b.lod === 2 && i % 2 === 1
     const base = polar(d, a, -0.3)
-    const mid = polar(d + lean * h * 0.45, a, h * 0.55)
-    const tip = polar(d + lean * h * 1.25, a + b.r(-0.3, 0.3), h * 0.97)
-    const c = b.curve([base, mid, tip], [0.034, 0.028, 0.008], b.by(4, 2, 1))
+    const mid = polar(d + lean * h * 0.4, a, h * 0.58)
+    // 秆梢弯下来
+    const tip = polar(d + lean * h * 1.5, a + b.r(-0.3, 0.3), h * 0.94)
+    const c = b.curve([base, mid, tip], [0.032, 0.026, 0.006], b.by(4, 2, 1))
     if (!skip) b.tube(c.path, c.radii, b.by(5, 4, 3), culm, { ao: (t) => 0.6 + 0.4 * t })
-    for (let k = 0; k < 5; k++) {
-      const t = 0.4 + (0.6 * (k + 0.5)) / 5
-      const p = t < 0.55 ? lerp3(base, mid, t / 0.55) : lerp3(mid, tip, (t - 0.55) / 0.45)
-      const r = b.r(0.2, 0.3)
-      b.lump(add(p, [b.r(-0.1, 0.1), b.r(-0.05, 0.05), b.r(-0.1, 0.1)]), [r, r * 0.55, r], { amp: 0.3, round: 0.2, up: 0.3, level: -1 }, skip || (b.lod > 0 && k % 2 === 1))
+    const tufts = 7
+    for (let k = 0; k < tufts; k++) {
+      const t = 0.36 + (0.64 * (k + 0.6)) / tufts
+      const p = t < 0.58 ? lerp3(base, mid, t / 0.58) : lerp3(mid, tip, (t - 0.58) / 0.42)
+      // 叶团挂在秆的一侧，越往梢越小
+      const r = b.r(0.15, 0.22) * (1.15 - 0.4 * t)
+      const sa = a + b.r(-1.6, 1.6)
+      b.lump(add(p, [Math.cos(sa) * r * 0.7, b.r(-0.08, 0.02), Math.sin(sa) * r * 0.7]), [r * 1.25, r * 0.6, r * 1.25], { amp: 0.32, round: 0.15, up: 0.3, level: -1 }, skip || (b.lod > 0 && k % 2 === 1))
     }
   }
 }

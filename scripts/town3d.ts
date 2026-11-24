@@ -10,10 +10,10 @@
  *            street（城心街巷近景）、roofs（城心屋顶中景）、landmark（最大的宗教建筑）、keep、gate、bridge、wall、edge（沙盘边缘）、trees、water、
  *            forest / canopy / tree（树最密处的中景、远景、贴近）、orchard、vineyard、park、garden、cemetery、bank（水边的树）
  *   自定     x,z,dist,azimuth,pitch（米与度；azimuth 0 为从南向北看，pitch 90 为正俯视），可加 :名字
- * 不给 --view 时截一组默认机位。--perf 另外实测每个机位移动中一帧的耗时。
+ * 不给 --view 时截一组默认机位。--perf 另外实测每个机位移动中一帧的耗时。--eval=<脚本> 或 --eval=@<文件> 在截图前于检查页里执行（调试用）。
  * 截图文件名：<文明>-<种子>-<机位>.png；同时打印聚落概况（建筑数、三角形数、各阶段耗时）。
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import puppeteer from 'puppeteer-core'
 import { createServer } from 'vite'
 
@@ -105,6 +105,9 @@ try {
   })
   mkdirSync(OUT, { recursive: true })
   const tag = `${query.get('culture') ?? 'western'}-${query.get('seed')}`
+  // --eval=<脚本>：截图前在检查页里执行（调试用，如隐藏某一层：__shot.town.trees.group.visible=false）
+  // --eval=@文件 读文件里的脚本（命令行参数在 Windows 上带不了换行）
+  for (const e of flags.filter((a) => a.startsWith('--eval='))) await page.evaluate(e[7] === '@' ? readFileSync(e.slice(8), 'utf8') : e.slice(7))
   for (const v of views) {
     await page.evaluate((v) => (window as any).__shot.town.setView(v), v)
     // 停稳后才栅格化地面高清块（见 TownScene 的 DETAIL_IDLE），再等时间累积收敛
