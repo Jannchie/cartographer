@@ -131,9 +131,12 @@ class Batch {
   }
   add(s: TreeSet, i: number) {
     if (this.n >= this.cap) return
+    // 每帧要加上万个：逐个拷贝，不为每个实例新建 subarray 视图
     const o = this.n++
-    this.f.set(s.inst.subarray(i * INST_F, i * INST_F + INST_F), o * INST_F)
-    this.b.set(s.attr.subarray(i * INST_B, i * INST_B + INST_B), o * INST_B)
+    const f = this.f
+    const b = this.b
+    for (let k = 0; k < INST_F; k++) f[o * INST_F + k] = s.inst[i * INST_F + k]
+    for (let k = 0; k < INST_B; k++) b[o * INST_B + k] = s.attr[i * INST_B + k]
   }
   commit() {
     this.geo.instanceCount = this.n
@@ -162,6 +165,10 @@ interface Chunk {
   a: THREE.Mesh
   b: THREE.Mesh
 }
+
+/** 各树种树冠的半宽（轮廓最宽处连同参差）与顶高，以冠径为单位（盖高度场用） */
+const CROWN_W = SPECIES.map((sp) => Math.max(...sp.profile.map((q) => q[0])) * (1 + sp.lump))
+const CROWN_TOP = SPECIES.map((sp) => sp.profile[sp.profile.length - 1][1])
 
 export class TreeLayer {
   /** 挂进城市组（聚落米坐标） */
@@ -295,12 +302,10 @@ export class TreeLayer {
       const f = i * INST_F
       if (pop < t.inst[f + 4] || pop >= t.inst[f + 5]) continue
       const b = i * INST_B
-      const sp = SPECIES[t.attr[b] & 15]
+      const sp = t.attr[b] & 15
       const r = t.inst[f + 3]
-      let w = 0
-      for (const q of sp.profile) w = Math.max(w, q[0])
-      const top = t.inst[f + 1] + sp.profile[sp.profile.length - 1][1] * r * (h0 + (t.attr[b + 1] / 255) * (h1 - h0))
-      put(origin.x + t.inst[f] * K, origin.z + t.inst[f + 2] * K, w * r * (1 + sp.lump) * K, origin.y + top * K)
+      const top = t.inst[f + 1] + CROWN_TOP[sp] * r * (h0 + (t.attr[b + 1] / 255) * (h1 - h0))
+      put(origin.x + t.inst[f] * K, origin.z + t.inst[f + 2] * K, CROWN_W[sp] * r * K, origin.y + top * K)
     }
   }
 
@@ -364,8 +369,12 @@ export class TreeLayer {
           if (!frustum.intersectsSphere(sphere)) continue
           for (let t = a; t < e; t++) {
             const o = t * INST_F
-            const d = Math.hypot(s.inst[o] - cam.x, s.inst[o + 1] - cam.y, s.inst[o + 2] - cam.z)
-            if (d >= R) continue
+            const ex = s.inst[o] - cam.x
+            const ey = s.inst[o + 1] - cam.y
+            const ez = s.inst[o + 2] - cam.z
+            const d2 = ex * ex + ey * ey + ez * ez
+            if (d2 >= R * R) continue
+            const d = Math.sqrt(d2)
             const b = this.near[s.attr[t * INST_B] & 15]
             if (!b) continue
             // 落在交界带里的两级都收（各自的着色器按抖动留一部分）

@@ -269,7 +269,8 @@ export class Writer {
     let nx = uy * vz - uz * vy
     let ny = uz * vx - ux * vz
     let nz = ux * vy - uy * vx
-    const l = Math.hypot(nx, ny, nz)
+    // 每个三角形都要求一次：Math.sqrt 比三参数的 Math.hypot 快约十倍，结果量化成 Int8 后没有差别
+    const l = Math.sqrt(nx * nx + ny * ny + nz * nz)
     // 退化的三角形（收成一点的屋脊端）不写
     if (l < 1e-9) return
     nx = Math.round((nx / l) * 127)
@@ -301,7 +302,7 @@ export class Writer {
     if (B.n + 3 > B.cap) B.grow()
     B.ids[B.n / 3] = this.id
     const put = (p: V3, n: V3) => {
-      const l = Math.hypot(n[0], n[1], n[2]) || 1
+      const l = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) || 1
       this.vert(B, p, Math.round((n[0] / l) * 127), Math.round((n[1] / l) * 127), Math.round((n[2] / l) * 127))
     }
     put(a, na)

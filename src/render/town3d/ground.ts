@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { buildGroundVector, type GroundVector } from '../../settlement/render'
+import { buildGroundVector, clearGroundTiles, type GroundVector } from '../../settlement/render'
 import { dioramaGround, type SettleStyleId } from '../../settlement/themes'
 import type { Settlement } from '../../settlement/types'
 import { NOISE_GLSL } from '../aerial/glsl'
@@ -686,6 +686,7 @@ export class TownGround {
    */
   build(st: Settlement, t: TerrainMesh, life: Uniforms, K: number): THREE.Mesh[] {
     this.forget()
+    clearGroundTiles()
     const shore = new THREE.DataTexture(t.shore, st.terrain.W, st.terrain.H, THREE.RGBAFormat, THREE.UnsignedByteType)
     shore.magFilter = shore.minFilter = THREE.LinearFilter
     shore.needsUpdate = true

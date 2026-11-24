@@ -1167,6 +1167,8 @@ function groundItems(d: string, bb: BBox | undefined, paint: GroundPaint | null,
 const TILE = 300
 const TILE_KEEP = 4
 const tileMemo = new Map<string, { key: string; color: PathItem[][]; mask: PathItem[][] }[]>()
+/** 换城时清掉沙盘地面的分块缓存（键里没有城，旧城的块不会被挤掉） */
+export const clearGroundTiles = () => tileMemo.clear()
 type TileOut = (layer: number, d: string, paint: GroundPaint | null, mat: GroundMatPaint | null) => void
 
 class GroundPen {
