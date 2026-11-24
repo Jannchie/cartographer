@@ -63,11 +63,13 @@ const DENS: Record<string, Dens> = {
   craft: { maxA: 250, minA: 60, alley: 2.6, alleyP: 0.3, depth: 19, fill: 0.9, irr: 0.7 },
   slum: { maxA: 75, minA: 22, alley: 1.6, alleyP: 0.55, depth: 14, fill: 0.92, irr: 1.25, back: 0.75, floors: 1 },
   harbor: { maxA: 480, minA: 110, alley: 3.2, alleyP: 0.45, depth: 24, fill: 0.86, irr: 0.35, kind: 'large', floors: 3 },
-  suburb: { maxA: 240, minA: 60, alley: 2.4, alleyP: 0.25, depth: 14, fill: 0.72, irr: 0.9, floors: 2 },
+  // 城郊：沿路一排贴着街的屋子，屋后各带长院子（与疏档的街坊同一种盖法，空着的宅地多些）
+  suburb: { maxA: 360, minA: 120, alley: 2.4, alleyP: 0.1, depth: 26, fill: 0.8, irr: 0.8, floors: 2, form: 'detached' },
   // —— 按密度档的变体（片区密度见 scale.ts 的 densityOf）——
-  // 民居：密的是窄面宽、三四层的连排楼，后院再盖后屋（大杂院）；疏的是退后临街、带菜园与果树的独院
+  // 民居：密的是窄面宽、三四层的连排楼，后院再盖后屋（大杂院）；疏的是贴着街、隔着过道的一排屋子，屋后各带长院子
   common_high: { maxA: 105, minA: 35, alley: 1.8, alleyP: 0.5, depth: 15, fill: 0.99, irr: 0.6, back: 0.7 },
-  common_low: { maxA: 440, minA: 170, alley: 2.4, alleyP: 0.15, depth: 12, fill: 0.92, irr: 0.7, form: 'detached' },
+  // 疏档的进深是整条宅地的（屋后带长院子），面宽约十米
+  common_low: { maxA: 330, minA: 110, alley: 2.4, alleyP: 0.1, depth: 25, fill: 0.94, irr: 0.6, form: 'detached' },
   // 商业：密的是整条街的铺面楼、后面是货仓；疏的是四面围合的客栈、货栈大院
   merchant_high: { maxA: 160, minA: 50, alley: 2.2, alleyP: 0.35, depth: 18, fill: 1, irr: 0.45, back: 0.55, backKind: 'shed' },
   merchant_low: { maxA: 760, minA: 300, alley: 3, alleyP: 0.3, depth: 22, fill: 0.95, irr: 0.35, form: 'court' },
@@ -246,11 +248,12 @@ function frontStrips(piece: Poly, fronts: Seg[], o: Dens, rng: Ctx['rng'], keep:
     const [strip, left] = splitConvex(rest, [a[0] + n[0] * D, a[1] + n[1] * D], [n[1], -n[0]])
     rest = left.length >= 3 && area(left) > 1 ? left : null
     if (strip.length < 3) continue
-    // 沿街切成一块块：分割线大致垂直于街，略带偏斜
+    // 沿街切成一块块：连排的宅地垂直于街切（相邻两栋共用一道山墙，中间不留楔形的缝），带院子的略带偏斜
+    const skew = o.form ? 0.4 : 0
     const { a0: t0, a1: t1 } = extent(F, strip)
     let cur = strip
     for (let t = t0 + W * (0.75 + rng.next() * 0.5); t < t1 - W * 0.55; t += W * (0.75 + rng.next() * 0.5)) {
-      const m = rot(u, (rng.next() - 0.5) * 0.12 * o.irr)
+      const m = rot(u, (rng.next() - 0.5) * 0.12 * o.irr * skew)
       if (cur.length < 3) continue
       const [lot, after] = splitConvex(cur, [a[0] + u[0] * t, a[1] + u[1] * t], [m[1], -m[0]])
       cur = after
@@ -360,8 +363,8 @@ function lotBuilding(lot: Lot, depth: number): Poly | null {
   const f = frontOf(lot)
   if (!f) return null
   const { a, u, n } = f
-  // 拐角地块整块建满
-  if (f.corner) return inscribedRect(lot.poly, u, { v: n, minSide: 3.5 })
+  // 拐角地块两面临街，盖得深些（不整块盖满：街坊深处切出来的大地块会盖成一座方墩）
+  if (f.corner) depth *= 1.6
   const out = clipHalf(lot.poly, [a[0] + n[0] * depth, a[1] + n[1] * depth], n)
   if (out.length < 3) return null
   const r = inscribedRect(out, u, { v: n, minSide: 3.5 })
@@ -473,15 +476,17 @@ export function place(ctx: Ctx, poly: Poly, kind: BuildingKind, o: { pad?: numbe
 /** 一组部件（中殿、耳堂、后殿）要么全部放下，要么一个都不放；部件之间允许相交 */
 export function addGroup(ctx: Ctx, parts: [Poly, BuildingKind][], pad: number): boolean {
   for (const [p] of parts) if (!isFree(ctx, p, { pad })) return false
+  // 同组的部件记同一个组号：它们之间的重叠是有意的（见 settle.ts）
+  const group = parts.length > 1 ? ctx.groupSeq++ : undefined
   for (const [p, kind] of parts) {
     // 不算人口的（城外的村子、宫殿）：不占民居预算，住户记 0
-    if (dwelling(kind) && ctx.uncounted) record(ctx, p, kind, { floors: 1, units: 0 })
+    if (dwelling(kind) && ctx.uncounted) record(ctx, p, kind, { floors: 1, units: 0, group })
     else {
       if (dwelling(kind)) {
         ctx.houseBudget--
         ctx.wardQuota--
       }
-      record(ctx, p, kind)
+      record(ctx, p, kind, { group })
     }
   }
   for (const [p] of parts) ctx.occ.add(p)
@@ -555,9 +560,21 @@ function overlaps(poly: Poly, zones: Poly[]) {
 /** 有密度档变体的片区（见 DENS 里的 *_high / *_low） */
 const TIERED = new Set(['common', 'merchant', 'market', 'craft'])
 
-/** 候选房屋落地：略缩一圈、让开道路与水面，被裁过的取回矩形 */
-function put(ctx: Ctx, b: Poly, kind: BuildingKind, floorCap?: number): boolean {
-  const q0 = insetConvex(b, 0.2)
+/**
+ * 候选房屋落地：略缩一圈、让开道路与水面，被裁过的取回矩形。
+ * along：连排房屋的沿街方向——只收前后两面，两侧的山墙贴着宅地的边，与邻居的山墙合成一道（中间不留一条窄缝）
+ */
+function put(ctx: Ctx, b: Poly, kind: BuildingKind, floorCap?: number, along?: P): boolean {
+  const q0 = insetConvex(
+    b,
+    along
+      ? b.map((v, i) => {
+          const w = b[(i + 1) % b.length]
+          const L = dist(v, w) || 1
+          return Math.abs(((w[0] - v[0]) * along[0] + (w[1] - v[1]) * along[1]) / L) > 0.7 ? 0.2 : 0
+        })
+      : 0.2,
+  )
   if (q0.length < 3) return false
   const clipped = placeable(ctx, q0)
   const q = clipped && squareUp(q0, clipped)
@@ -582,6 +599,7 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
       if (rng.next() < 0.18) scatterTrees(ctx, insetConvex(lot.poly, 2), 0.004, 2.5, 4.5)
       continue
     }
+    if (!rural) vacantLot(ctx, lot.poly)
     if (rural) {
       const nb = ctx.out.buildings.length
       if (rng.next() < o.fill) farmstead(ctx, lot)
@@ -591,11 +609,18 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
       continue
     }
     if (o.form === 'detached' || o.form === 'court' || o.form === 'works') {
+      // 疏档街坊里不临街的地（街坊深处）：各家后院之外的菜园、果园
+      if (o.form === 'detached' && !lot.front.length) {
+        if (rng.next() < 0.6) croft(ctx, lot.poly)
+        continue
+      }
       if (rng.next() < o.fill) (o.form === 'detached' ? detached : o.form === 'court' ? courtyard : works)(ctx, lot, o)
       continue
     }
-    const depth = o.depth * (0.75 + rng.next() * 0.5)
+    // 临街的屋子进深约为宅地的一半（各户不一，背面参差），其余是后院：密的街坊里后院再盖后屋
+    const depth = o.depth * (0.55 + rng.next() * 0.3)
     let b = rng.next() < o.fill ? lotBuilding(lot, depth) : null
+    const row = b && lot.front.length ? frontOf(lot)?.u : undefined
     // 院落深处偶有后屋、作坊
     if (!b && !lot.front.length && nearRoad === Infinity && rng.next() < (o.back ?? 0.3)) {
       const bb = obb(lot.poly)
@@ -613,7 +638,7 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
       if (!lot.front.length && area(lot.poly) > 60 && rng.next() < 0.35) scatterTrees(ctx, insetConvex(lot.poly, 1.5), 0.01, 2, 3.5)
       continue
     }
-    if (!put(ctx, b, o.kind ?? (area(b) > 420 ? 'large' : 'house'), o.floors)) continue
+    if (!put(ctx, b, o.kind ?? (area(b) > 420 ? 'large' : 'house'), o.floors, row)) continue
     // 临街房屋后面的后屋 / 工棚：密的街坊里后院也盖满（大杂院、作坊院）
     if (o.back && lot.front.length && nearRoad === Infinity && rng.next() < o.back) {
       const f = frontOf(lot)
@@ -623,6 +648,16 @@ export function urban(ctx: Ctx, block: Poly, densKey: string, reserve: Poly[] = 
     }
   }
   ctx.rng = wardRng
+}
+
+/**
+ * 还没盖房的宅地：先是一块园地（菜畦、草场）。成长史里它在街坊开张时就有，这户人家入住时让给房子与院子
+ *（见 history.ts 的 groupForm）；到头也没盖上房的就一直是园地。住了一半的街坊于是不是一片光地
+ */
+function vacantLot(ctx: Ctx, poly: Poly) {
+  const g = placeable(ctx, insetConvex(poly, 0.7), 1.5)
+  if (!g || g.length < 3 || area(g) < 40) return
+  if (emitArea(ctx, 'greens', g, 'garden')) ctx.vacant.add(ctx.out.greens[ctx.out.greens.length - 1])
 }
 
 /** 村里空着的宅地：菜园（让开道路、水与已有的房子） */
@@ -639,34 +674,57 @@ function shrink(poly: Poly, k: number): Poly {
   return poly.map((v) => [c[0] + (v[0] - c[0]) * k, c[1] + (v[1] - c[1]) * k] as P)
 }
 
-/** 独院：房子退后临街一段，四周篱笆，屋后菜园果树，偶有柴棚 */
+/**
+ * 疏档街坊的一户：窄长的宅地（面宽约十米、进深三十来米），屋子贴着街边、靠宅地的一侧（另一侧留一条进后院的过道），
+ * 屋脊顺街；屋后是篱笆围起的长院子，菜畦、果树，偶有柴棚。沿街望去是一排隔着过道的屋子，背后是连成片的园地——
+ * 城边、小镇的街就是这样，再密一档时过道填满、成了连排
+ */
 function detached(ctx: Ctx, lot: Lot, o: Dens) {
   const f = frontOf(lot)
-  if (!f || f.L < 10) return
+  if (!f || f.L < 5.5) return
   const rng = ctx.rng
   const { a, b, u, n } = f
-  const w = Math.min(f.L * 0.65, 8 + rng.next() * 5)
-  const dep = 7 + rng.next() * 3
-  const set = 2 + rng.next() * 3
-  const slide = (rng.next() - 0.5) * Math.max(0, f.L - w) * 0.7
-  const hc: P = [(a[0] + b[0]) / 2 + u[0] * slide + n[0] * (set + dep / 2), (a[1] + b[1]) / 2 + u[1] * slide + n[1] * (set + dep / 2)]
-  const house = rect(hc, u, w, dep)
-  if (!house.every((v) => pointInPoly(v, lot.poly)) || !put(ctx, house, 'house', o.floors)) return
-  const yard = ctx.corridors.clip(insetConvex(lot.poly, 0.6))
-  if (yard && yard.length >= 3 && area(yard) > 80) emitArea(ctx, 'enclosures', yard)
-  const rear = rearOf(lot, set + dep + 2)
-  if (rear && area(rear) > 60) {
-    const g = placeable(ctx, insetConvex(rear, 1.2))
-    if (g && area(g) > 40) {
-      emitArea(ctx, 'greens', g, 'garden')
-      scatterTrees(ctx, g, 0.006, 2, 3.5)
+  const dep = 6.5 + rng.next() * 2.5
+  // 多数贴着街，少数退后一段留出前院
+  const set = rng.next() < 0.18 ? 2.5 + rng.next() * 2.5 : 0.4 + rng.next() * 0.8
+  const side = rng.next() < 0.5 ? -1 : 1
+  const w0 = Math.min(f.L - 1.6, 6.5 + rng.next() * 4.5)
+  const mid: P = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+  // 宅地不是正矩形（斜边、街角）时放不下：先改靠另一侧、居中，再收窄
+  let house: Poly | null = null
+  let w = w0
+  let slide = 0
+  for (const [k, sd] of [[1, side], [1, -side], [1, 0], [0.78, 0], [0.6, 0]] as const) {
+    w = w0 * k
+    if (w < 4.5) break
+    slide = sd * Math.max(0, (f.L - w) / 2 - 0.5)
+    const hc: P = [mid[0] + u[0] * slide + n[0] * (set + dep / 2), mid[1] + u[1] * slide + n[1] * (set + dep / 2)]
+    const h = rect(hc, u, w, dep)
+    if (h.every((v) => pointInPoly(v, lot.poly))) {
+      house = h
+      break
     }
   }
-  if (rng.next() < 0.35) {
-    const sg = slide > 0 ? -1 : 1
-    const sc: P = [hc[0] + u[0] * (w / 2 + 3.5) * sg, hc[1] + u[1] * (w / 2 + 3.5) * sg]
-    const shed = rect(sc, u, 3.5 + rng.next(), 4.5 + rng.next() * 1.5)
-    if (shed.every((v) => pointInPoly(v, lot.poly))) put(ctx, shed, 'shed')
+  if (!house || !put(ctx, house, 'house', o.floors)) return
+  const rear = rearOf(lot, set + dep + 1)
+  const yard = rear && ctx.corridors.clip(insetConvex(rear, 0.5))
+  if (!yard || yard.length < 3 || area(yard) < 40) return
+  // 柴棚：在后院尽头或屋后靠过道的一侧（先盖棚再种树，树不会落进棚里）
+  if (rng.next() < 0.4) {
+    const yb = localBox(yard, u, n)
+    const far = rng.next() < 0.5
+    const sw = 3 + rng.next() * 1.5
+    const sd = 3.5 + rng.next() * 2
+    const su = slide >= 0 ? yb.u1 - sw / 2 - 0.8 : yb.u0 + sw / 2 + 0.8
+    const sv = far ? yb.v1 - sd / 2 - 0.8 : yb.v0 + sd / 2 + 1.5
+    const shed = rect(yb.at(su, sv), u, sw, sd)
+    if (shed.every((v) => pointInPoly(v, yard))) put(ctx, shed, 'shed')
+  }
+  if (!emitArea(ctx, 'enclosures', yard)) return
+  const g = placeable(ctx, insetConvex(yard, 1))
+  if (g && area(g) > 30) {
+    emitArea(ctx, 'greens', g, 'garden')
+    scatterTrees(ctx, insetConvex(g, 1), 0.007, 1.8, 3.2)
   }
 }
 
@@ -739,6 +797,7 @@ function farmstead(ctx: Ctx, lot: Lot) {
   const hc: P = [m[0] + n[0] * (2.5 + dep / 2), m[1] + n[1] * (2.5 + dep / 2)]
   const house = rect(hc, u, len, dep)
   if (!house.every((v) => pointInPoly(v, poly)) || !addBuilding(ctx, house, 'house')) return
+  let barn: Poly | null = null
   if (rng.next() < 0.65) {
     const side = rng.next() < 0.5
     const bl = 7 + rng.next() * 4
@@ -747,17 +806,19 @@ function farmstead(ctx: Ctx, lot: Lot) {
     const bc: P = side
       ? [hc[0] + u[0] * (len / 2 + bw / 2 + 2) * sg, hc[1] + u[1] * (len / 2 + bw / 2 + 2) * sg]
       : [hc[0] + n[0] * (dep / 2 + bw / 2 + 4), hc[1] + n[1] * (dep / 2 + bw / 2 + 4)]
-    const barn = side ? rect([bc[0] + n[0] * 2, bc[1] + n[1] * 2], n, bl, bw) : rect(bc, u, bl, bw)
-    if (barn.every((v) => pointInPoly(v, poly))) addBuilding(ctx, barn, 'shed')
+    const q = side ? rect([bc[0] + n[0] * 2, bc[1] + n[1] * 2], n, bl, bw) : rect(bc, u, bl, bw)
+    if (q.every((v) => pointInPoly(v, poly)) && addBuilding(ctx, q, 'shed')) barn = q
   }
-  // 院子：以主屋为准的规整矩形（前临路，后带菜园），裁到宅地里，再让开道路与城墙
+  // 院子：以主屋为准的规整矩形（前临路，后带菜园），裁到宅地里，再让开道路与城墙。
+  // 篱笆从主屋的正面起（与屋墙取齐），裁完以后屋子、谷仓有一角落在外面的（篱笆从屋子中间穿过）不围
   if (rng.next() < 0.8) {
     const yw = Math.max(len + 10, 18 + rng.next() * 6)
     const yd = dep + 12 + rng.next() * 8
-    const yc: P = [m[0] + n[0] * (1.2 + yd / 2), m[1] + n[1] * (1.2 + yd / 2)]
+    const yc: P = [m[0] + n[0] * (2.5 + yd / 2), m[1] + n[1] * (2.5 + yd / 2)]
     const raw = clipConvex(rect(yc, u, yw, yd), insetConvex(poly, 0.8))
     const yard = raw.length >= 3 ? ctx.corridors.clip(raw) : null
-    if (yard && yard.length >= 3 && area(yard) > 120) emitArea(ctx, 'enclosures', yard)
+    const within = (b: Poly) => b.every((v) => pointInPoly(v, yard!) || yard!.some((w, k) => segDist(v, w, yard![(k + 1) % yard!.length]).d < 0.4))
+    if (yard && yard.length >= 3 && area(yard) > 120 && within(house) && (!barn || within(barn) || !barn.some((v) => pointInPoly(v, yard)))) emitArea(ctx, 'enclosures', yard)
   }
   if (rng.next() < 0.6) scatterTrees(ctx, clipHalf(insetConvex(poly, 2), [hc[0] + n[0] * (dep / 2 + 3), hc[1] + n[1] * (dep / 2 + 3)], [-n[0], -n[1]]), 0.003, 2.2, 3.6)
 }

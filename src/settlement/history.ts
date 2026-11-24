@@ -45,6 +45,8 @@ interface Group {
   entered: boolean
   /** 进候补的先后（schedule 里用） */
   seq?: number
+  /** 这户的宅地入住前的样子（一块园地，见 wards.ts 的 vacantLot）：形态开张时就有，这户入住时让出来 */
+  pre?: Piece[]
 }
 export interface Form {
   patch: number
@@ -157,20 +159,46 @@ export function overlaps(a: Piece, b: Piece) {
   return true
 }
 
+/** 一块片区里各户入住的先后有多少按位置（其余按位置哈希）：按位置的部分让房子从靠城心、靠大路的一头连着排过去 */
+const GROUP_ORDER = 0.8
+
 /**
  * 一个民居形态里的东西分户：每栋民居一户，院里的棚、院墙、菜园、树归给离它最近、10 米以内的那户；
  * 不属于哪一户的（街坊底、公共的树）开始时就有。
+ * 各户入住的先后（0 ~ 1）：给了 near（位置 → 远近，小的先）时主要按它在这块片区里的名次——
+ * 片区是从靠城心、靠大路的一头一户挨一户住过去的，住了一半的片区一头是连着的街面、另一头还空着，
+ * 不是东一栋西一栋；再掺一点位置哈希，前沿参差不齐
  */
-export function groupForm(ctx: Ctx, f: Form, avail: (h: number) => number, key: (h: number) => number) {
+export function groupForm(ctx: Ctx, f: Form, avail: (h: number) => number, key: (h: number) => number, near?: (c: P) => number) {
   const heads = f.pieces.filter((x) => x.units > 0 || (x.key === 'buildings' && ((x.item as any).kind === 'house' || (x.item as any).kind === 'large')))
-  const groups: Group[] = heads.map((x) => {
-    const c: P = [(x.box[0] + x.box[2]) / 2, (x.box[1] + x.box[3]) / 2]
-    const h = hashAt(ctx, c, 'history.group')
+  const centers = heads.map((x): P => [(x.box[0] + x.box[2]) / 2, (x.box[1] + x.box[3]) / 2])
+  const raw = near ? centers.map(near) : []
+  let lo = Infinity
+  let hi = -Infinity
+  for (const v of raw) {
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  const groups: Group[] = heads.map((x, k) => {
+    const h0 = hashAt(ctx, centers[k], 'history.group')
+    const h = near && hi - lo > 1 ? (GROUP_ORDER * (raw[k] - lo)) / (hi - lo) + (1 - GROUP_ORDER) * h0 : h0
     return { pieces: [x], units: x.units, avail: avail(h), key: key(h), form: f, entered: false }
   })
   const headSet = new Set(heads)
   for (const x of f.pieces) {
     if (headSet.has(x)) continue
+    // 空宅地：归给盖在它上面的各户（没人盖的一直是园地）
+    if (x.key === 'greens' && x.poly && ctx.vacant.has(x.item)) {
+      let owned = false
+      for (let k = 0; k < heads.length; k++) {
+        const c = centers[k]
+        if (c[0] < x.box[0] || c[0] > x.box[2] || c[1] < x.box[1] || c[1] > x.box[3] || !pointInPoly(c, x.poly)) continue
+        ;(groups[k].pre ??= []).push(x)
+        owned = true
+      }
+      if (!owned) f.base.push(x)
+      continue
+    }
     if (x.key === 'blocks' || x.key === 'roads' || x.key === 'walls' || x.key === 'labels') {
       f.base.push(x)
       continue
@@ -257,6 +285,7 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
       }
     }
     for (const x of f.base) bear(x, t, f.patch)
+    for (const g of f.groups) if (g.pre) for (const x of g.pre) if (!life.has(x)) bear(x, t, f.patch)
   }
   // 等着入住的户：按 (最早可以入住的时刻, 进候补的先后) 的小顶堆，到时移进"可以入住"，再按先后入住
   const wait: Group[] = []
@@ -366,6 +395,7 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
               queue.push(h)
             }
         }
+        if (g.pre) for (const x of g.pre) kill(x, t, f.patch)
         for (const x of g.pieces) bear(x, t, f.patch)
       }
     }

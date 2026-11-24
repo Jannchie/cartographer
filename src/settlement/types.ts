@@ -199,6 +199,8 @@ export interface Building {
   floors?: number
   /** 住户数（民居）：多层的楼房一栋住几户 */
   units?: number
+  /** 一起放下的一组部件（教堂的中殿、耳堂、后殿；磨坊与水轮棚……）的组号：同组的部件之间是有意叠放的 */
+  group?: number
   /** 各户的营生与口数（民居，见 people.ts）；城外村子、宫殿里不算城里人口的没有 */
   households?: Household[]
   /** 用途（悬停说明的中文键）：祠、鸟居、路边十字架这类由类型推不出的，盖的时候写明 */

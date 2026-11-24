@@ -37,7 +37,7 @@ const segFar = (a: P, b: P, bb: BBox, r: number) =>
 export type RegMark = readonly [number, number]
 
 export class Corridors {
-  /** dead：已拆掉的路段（只打标记） */
+  /** dead：已拆掉的路段（只打标记）；与 suspend 暂时拿掉的共用这个标记 */
   private segs: { a: P; b: P; hw: number; tag: CorridorTag; dead?: boolean }[] = []
   private grid = new Map<number, number[]>()
   private readonly B = 40
@@ -69,6 +69,19 @@ export class Corridors {
 
   mark(): RegMark {
     return [this.segs.length, this.killed.length]
+  }
+
+  /** 已登记的段数：登记一批走廊的前后各取一次，就是这批走廊的序号范围（给 suspend 用） */
+  get count() {
+    return this.segs.length
+  }
+
+  /**
+   * 暂时拿掉（off 为真）或放回序号在 [from, to) 的走廊：成长史里后来拆掉的老城墙，拆了以后才盖的街坊不必再让开它
+   *（见 generate.ts 的 buildForm）。拿掉与放回要成对，中间不登记拆除（removeWhere）
+   */
+  suspend(from: number, to: number, off: boolean) {
+    for (let id = from; id < to && id < this.segs.length; id++) this.segs[id].dead = off
   }
 
   /** 撤回到 mark 时的样子：之后拆掉的段复活，之后登记的段删掉 */
@@ -316,7 +329,10 @@ export interface StreetCut {
   box: BBox
 }
 
-/** 切街坊的街（见 generate.ts 的 townStreets），按 CELL 米一格登记外包框：查一块街坊附近的街只看它压着的格子 */
+/**
+ * 切街坊的街（见 generate.ts 的 townStreets），按 CELL 米一格登记：每一段压着哪些格子就记在哪些格子里
+ *（横贯全城的干道不会因为外包框大而被每块街坊都查到），查一块街坊附近的街只看它压着的格子
+ */
 export class StreetCuts {
   private static CELL = 120
   private list: StreetCut[] = []
@@ -329,7 +345,11 @@ export class StreetCuts {
     const k = this.list.length
     const cut = { line, width, box: bboxOf(line) }
     this.list.push(cut)
-    this.cells(cut.box, (key) => (this.grid.get(key) ?? this.grid.set(key, []).get(key)!).push(k))
+    const put = (key: number) => {
+      const l = this.grid.get(key) ?? this.grid.set(key, []).get(key)!
+      if (l[l.length - 1] !== k) l.push(k)
+    }
+    for (let i = 0; i + 1 < line.length; i++) this.cells(bboxOf([line[i], line[i + 1]]), put)
   }
   /** 外包框与 b 相交的街（按登记的先后） */
   near(b: BBox): StreetCut[] {
@@ -378,6 +398,8 @@ export interface Ctx {
   streetCuts?: StreetCuts
   /** 各片城区的城墙（卫星城各有一道；不含城堡幕墙与瓮城） */
   cityWalls: Wall[]
+  /** 成长史里后来拆掉的老城墙：它的走廊（墙体与护城河）的序号范围与拆掉的时刻（人口） */
+  razedWalls: { from: number; to: number; died: number }[]
   /** 都城布局时预留的宫城矩形（见 generate.ts 的 palaceZone） */
   palaceRect?: Poly
   /** 还能盖多少户民居（house / large）：由目标人口折算，盖满就停 */
@@ -415,6 +437,10 @@ export interface Ctx {
   corridors: Corridors
   occ: Occupancy
   out: Omit<Settlement, 'params' | 'name' | 'nameZh' | 'nameJa' | 'width' | 'height' | 'terrain' | 'river' | 'sea' | 'stats'>
+  /** 下一组部件的组号（见 wards.ts 的 addGroup） */
+  groupSeq: number
+  /** 还没盖房的宅地上的园地（greens 里的项，见 wards.ts 的 vacantLot）：成长史里这户入住时让给房子 */
+  vacant: WeakSet<object>
   /** 从输出数组里删掉的东西（按删除的先后）：撤回时原样插回去（见 undo.ts） */
   dropped: { key: keyof Ctx['out']; idx: number; item: unknown }[]
 }
