@@ -7,7 +7,8 @@
  * 另有 time（时刻）、quality、dof、haze、stage、labels、ground、pop（时间轴上的人口）。
  * 机位：
  *   预设名   overview（整城斜俯）、north / east / south / west（四向低角度）、top（正俯视）、
- *            street（城心街巷近景）、roofs（城心屋顶中景）、landmark（最大的宗教建筑）、keep、gate、bridge、wall、edge（沙盘边缘）、trees、water
+ *            street（城心街巷近景）、roofs（城心屋顶中景）、landmark（最大的宗教建筑）、keep、gate、bridge、wall、edge（沙盘边缘）、trees、water、
+ *            forest / canopy / tree（树最密处的中景、远景、贴近）、orchard、vineyard、park、garden、cemetery、bank（水边的树）
  *   自定     x,z,dist,azimuth,pitch（米与度；azimuth 0 为从南向北看，pitch 90 为正俯视），可加 :名字
  * 不给 --view 时截一组默认机位。--perf 另外实测每个机位移动中一帧的耗时。
  * 截图文件名：<文明>-<种子>-<机位>.png；同时打印聚落概况（建筑数、三角形数、各阶段耗时）。
@@ -63,6 +64,7 @@ try {
   const of = (k: string, i = 0): [number, number] => (info.big[k]?.[i]?.p as [number, number]) ?? mid
   const core = info.landmarks.find((l) => l.kind === 'market')?.p ?? mid
   const first = (a: number[][], d: [number, number]) => (a[0] as [number, number]) ?? d
+  const spot = (k: string) => (info.spots?.[k] as [number, number] | undefined) ?? mid
   type View = { name: string; x: number; z: number; dist: number; azimuth: number; pitch: number }
   const PRESET: Record<string, () => Omit<View, 'name'>> = {
     overview: () => ({ x: mid[0], z: mid[1], dist: W * 0.95, azimuth: 20, pitch: 38 }),
@@ -80,6 +82,16 @@ try {
     wall: () => ({ x: first(info.gates, mid)[0], z: first(info.gates, mid)[1], dist: 220, azimuth: 110, pitch: 28 }),
     edge: () => ({ x: W * 0.06, z: D * 0.9, dist: 260, azimuth: 315, pitch: 12 }),
     trees: () => ({ x: W * 0.2, z: D * 0.25, dist: 90, azimuth: 70, pitch: 20 }),
+    // 植被的看点（见检查页的 spots）：林地、果园、葡萄园、园林、墓地、水边；tree 为贴近一棵树
+    forest: () => ({ x: spot('forest')[0], z: spot('forest')[1], dist: 140, azimuth: 30, pitch: 18 }),
+    canopy: () => ({ x: spot('forest')[0], z: spot('forest')[1], dist: 420, azimuth: 200, pitch: 35 }),
+    tree: () => ({ x: spot('forest')[0], z: spot('forest')[1], dist: 26, azimuth: 60, pitch: 10 }),
+    orchard: () => ({ x: spot('orchard')[0], z: spot('orchard')[1], dist: 70, azimuth: 40, pitch: 20 }),
+    vineyard: () => ({ x: spot('vineyard')[0], z: spot('vineyard')[1], dist: 60, azimuth: 40, pitch: 22 }),
+    park: () => ({ x: spot('park')[0], z: spot('park')[1], dist: 90, azimuth: 150, pitch: 22 }),
+    garden: () => ({ x: spot('garden')[0], z: spot('garden')[1], dist: 60, azimuth: 150, pitch: 25 }),
+    cemetery: () => ({ x: spot('cemetery')[0], z: spot('cemetery')[1], dist: 80, azimuth: 320, pitch: 20 }),
+    bank: () => ({ x: spot('bank')[0], z: spot('bank')[1], dist: 60, azimuth: 250, pitch: 14 }),
     water: () => ({ x: first(info.piers, first(info.bridges, mid))[0], z: first(info.piers, first(info.bridges, mid))[1], dist: 110, azimuth: 150, pitch: 20 }),
   }
   const wanted = flags.filter((a) => a.startsWith('--view=')).map((a) => a.slice(7))
@@ -132,4 +144,5 @@ interface Info {
   bridges: number[][]
   piers: number[][]
   big: Record<string, { p: number[]; area: number }[]>
+  spots?: Record<string, number[]>
 }

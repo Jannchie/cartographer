@@ -1,23 +1,65 @@
 /**
  * 沙盘检查页（scripts/town3d.ts 用无头浏览器打开）：不经界面，直接由地址里的聚落参数推演成长史、搭沙盘。
  * 地址参数同聚落模块（seed、population、culture、capital=1 …，见 ui/settlement/route.ts），另有
- * time（时刻）、quality、dof、haze、stage、labels、ground（地面风格）、pop（时间轴上的人口，缺省为终态）。
+ * time（时刻）、quality、dof、haze、stage、labels、ground（地面风格）、pop（时间轴上的人口，缺省为终态）、
+ * specimen=x,z（植被换成各树种的陈列，中心在该处）。
  * 截图脚本经 window.__shot 摆镜头、取画面、测帧耗时。
  */
 import '../../src/style.css'
 import { generateHistory } from '../../src/settlement/generate'
 import { snapshot } from '../../src/settlement/history'
 import { scaleOf } from '../../src/settlement/scale'
-import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../src/settlement/types'
+import { DEFAULT_SETTLEMENT, type Settlement, type SettlementParams } from '../../src/settlement/types'
 import type { SettleStyleId } from '../../src/settlement/themes'
 import { decodeSettlement } from '../../src/ui/settlement/route'
-import { buildTown } from '../../src/render/town3d/massing'
+import { buildTown, heightSampler } from '../../src/render/town3d/massing'
+import { treeSpecimens } from '../../src/render/town3d/vegetation'
 import { TownScene } from '../../src/render/town3d/townScene'
 import { LOOKS, type QualityId } from '../../src/render/aerial/looks'
 
 const q = new URLSearchParams(location.search)
 const num = (k: string, d: number) => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d)
 const flag = (k: string, d: boolean) => (q.has(k) ? q.get(k) !== '0' : d)
+
+/** 植被的看点（供脚本挑机位）：树最密的一处、最大的果园 / 葡萄园、最大的园林 / 墓地、离水最近的一棵树 */
+function spots(st: Settlement) {
+  const out: Record<string, number[]> = {}
+  const cell = 60
+  const count = new Map<number, number>()
+  let best = 0
+  for (const t of st.trees) {
+    // 野地的树冠径大，果园、行道树小：只数大的
+    if (t.r < 3) continue
+    const k = Math.floor(t.p[1] / cell) * 4096 + Math.floor(t.p[0] / cell)
+    const n = (count.get(k) ?? 0) + 1
+    count.set(k, n)
+    if (n > best) {
+      best = n
+      out.forest = [(k % 4096) * cell + cell / 2, Math.floor(k / 4096) * cell + cell / 2]
+    }
+  }
+  const mid = (poly: number[][]) => [poly.reduce((s, p) => s + p[0], 0) / poly.length, poly.reduce((s, p) => s + p[1], 0) / poly.length]
+  const size = (poly: number[][]) => Math.abs(poly.reduce((s, p, i) => s + p[0] * poly[(i + 1) % poly.length][1] - poly[(i + 1) % poly.length][0] * p[1], 0))
+  const largest = (polys: number[][][]) => polys.sort((a, b) => size(b) - size(a))[0]
+  for (const k of ['orchard', 'vineyard']) {
+    const p = largest(st.fields.filter((f) => f.kind === k).map((f) => f.poly))
+    if (p) out[k] = mid(p)
+  }
+  for (const k of ['park', 'garden', 'cemetery', 'courtyard']) {
+    const p = largest(st.greens.filter((g) => g.kind === k).map((g) => g.poly))
+    if (p) out[k] = mid(p)
+  }
+  const T = st.terrain
+  let wd = Infinity
+  for (const t of st.trees) {
+    const d = T.water[Math.min(T.H - 1, Math.max(0, Math.round(t.p[1] / T.cell))) * T.W + Math.min(T.W - 1, Math.max(0, Math.round(t.p[0] / T.cell)))]
+    if (d > 2 && d < wd) {
+      wd = d
+      out.bank = [t.p[0], t.p[1]]
+    }
+  }
+  return out
+}
 
 const api: Record<string, unknown> = { ready: false, error: '' }
 ;(window as unknown as { __shot: typeof api }).__shot = api
@@ -29,6 +71,11 @@ try {
   const hist = generateHistory(params)
   const t1 = performance.now()
   const build = buildTown(hist.st, hist.life)
+  // specimen=x,z：把植被换成各树种的陈列（见 vegetation.ts 的 treeSpecimens）
+  if (q.has('specimen')) {
+    const [sx, sz] = q.get('specimen')!.split(',').map(Number)
+    build.trees = treeSpecimens(hist.st, heightSampler(hist.st.terrain), sx, sz)
+  }
   const t2 = performance.now()
   const pop = num('pop', hist.until)
   const st = snapshot(hist, pop)
@@ -65,7 +112,7 @@ try {
       until: hist.until,
       ms: { history: t1 - t0, build: t2 - t1, scene: t3 - t2 },
       tris: build.tris,
-      trees: build.trees.map((t) => [t.kind, t.count]),
+      trees: build.trees.species,
       buildings: st.buildings.length,
       kinds: st.buildings.reduce((m: Record<string, number>, b) => ((m[b.kind] = (m[b.kind] ?? 0) + 1), m), {}),
       landmarks: st.landmarks.map((l) => ({ kind: l.kind, p: l.p, major: !!l.major })),
@@ -96,6 +143,7 @@ try {
       ),
       center: st.center,
       heightAt: null,
+      spots: spots(st),
     },
     heightAt: H,
     ready: true,
