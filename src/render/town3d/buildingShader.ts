@@ -956,26 +956,37 @@ const FRAG_BODY = /* glsl */ `
 
 type Uniforms = Record<string, THREE.IUniform>
 
-/** 建筑：成长升降（以地基为支点压缩高度）、sRGB 顶点色、墙面与屋面的纹理、窗与门、凹凸与夜里的窗灯 */
+/**
+ * 建筑顶点的成长升降（以地基为支点压缩高度），细节、简化、深度三种材质共用。
+ * decl、body：各自追加的声明，与 begin_vertex 之后、升降之前的语句
+ */
+function lifeVertex(vs: string, decl = '', body = '') {
+  return vs.replace('#include <common>', `#include <common>\n${LIFE_GLSL}\nattribute vec3 aLife;\n${decl}`).replace(
+    '#include <begin_vertex>',
+    `#include <begin_vertex>
+        float lk = lifeK(aLife.xy);
+        ${body}
+        if (lk <= 0.0) transformed = vec3(0.0);
+        else transformed.y = aLife.z + (transformed.y - aLife.z) * lk;`,
+  )
+}
+/** 顶点色是 sRGB：转成线性 */
+const SRGB_VERTEX = '#include <color_vertex>\nvColor.rgb = pow(vColor.rgb, vec3(2.2));'
+
+/** 建筑：成长升降、sRGB 顶点色、墙面与屋面的纹理、窗与门、凹凸与夜里的窗灯 */
 export function patchBuilding(mat: THREE.Material, u: Uniforms, depth: boolean) {
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u)
-    sh.vertexShader = sh.vertexShader
-      .replace(
-        '#include <common>',
-        `#include <common>\n${LIFE_GLSL}\nattribute vec3 aLife;\n${depth ? '' : 'attribute float aFace;\nattribute vec3 aUv;\nvarying vec3 vLocal;\nvarying vec3 vLocalN;\nvarying float vFace;\nvarying float vBase;\nvarying vec3 vUv;\nvarying float vSeed;\nvarying vec3 vCam;'}`,
-      )
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-        float lk = lifeK(aLife.xy);
-        ${depth ? '' : 'vLocal = transformed; vLocalN = normal; vFace = aFace; vBase = aLife.z; vUv = aUv; vSeed = fract(sin(aLife.z * 12.9898 + aLife.x * 0.0731) * 43758.5453);'}
-        if (lk <= 0.0) transformed = vec3(0.0);
-        else transformed.y = aLife.z + (transformed.y - aLife.z) * lk;`,
-      )
-    if (depth) return
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <color_vertex>', '#include <color_vertex>\nvColor.rgb = pow(vColor.rgb, vec3(2.2));')
+    if (depth) {
+      sh.vertexShader = lifeVertex(sh.vertexShader)
+      return
+    }
+    sh.vertexShader = lifeVertex(
+      sh.vertexShader,
+      'attribute float aFace;\nattribute vec3 aUv;\nvarying vec3 vLocal;\nvarying vec3 vLocalN;\nvarying float vFace;\nvarying float vBase;\nvarying vec3 vUv;\nvarying float vSeed;\nvarying vec3 vCam;',
+      'vLocal = transformed; vLocalN = normal; vFace = aFace; vBase = aLife.z; vUv = aUv; vSeed = fract(sin(aLife.z * 12.9898 + aLife.x * 0.0731) * 43758.5453);',
+    )
+      .replace('#include <color_vertex>', SRGB_VERTEX)
       // 顶点指向镜头的方向（模型空间，只用方向）：洞口的视差按它算
       .replace('#include <project_vertex>', '#include <project_vertex>\nvCam = -(transpose(mat3(modelViewMatrix)) * mvPosition.xyz);')
     sh.fragmentShader = sh.fragmentShader
@@ -997,16 +1008,7 @@ export function patchBuilding(mat: THREE.Material, u: Uniforms, depth: boolean) 
 export function patchBuildingLite(mat: THREE.Material, u: Uniforms) {
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u)
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\n${LIFE_GLSL}\nattribute vec3 aLife;`)
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-        float lk = lifeK(aLife.xy);
-        if (lk <= 0.0) transformed = vec3(0.0);
-        else transformed.y = aLife.z + (transformed.y - aLife.z) * lk;`,
-      )
-      .replace('#include <color_vertex>', '#include <color_vertex>\nvColor.rgb = pow(vColor.rgb, vec3(2.2));')
+    sh.vertexShader = lifeVertex(sh.vertexShader).replace('#include <color_vertex>', SRGB_VERTEX)
   }
   mat.customProgramCacheKey = () => 'town-bld-lite'
 }

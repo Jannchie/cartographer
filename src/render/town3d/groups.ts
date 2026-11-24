@@ -5,6 +5,7 @@
  */
 import { bboxOf, type P } from '../../settlement/geom'
 import type { Building, Settlement } from '../../settlement/types'
+import { hash } from './worksMesh'
 
 export interface Group {
   /** 组里的全部部件 */
@@ -65,8 +66,7 @@ function build(st: Settlement): Map<Building, Group> {
       sx += b.poly[0][0]
       sy += b.poly[0][1]
     }
-    const s = Math.sin(sx * 12.9898 + sy * 78.233) * 43758.5453
-    const g: Group = { all, of: (p) => byPart.get(p) ?? NONE, seed: s - Math.floor(s), memo: new Map() }
+    const g: Group = { all, of: (p) => byPart.get(p) ?? NONE, seed: hash(sx, sy), memo: new Map() }
     for (const b of all) out.set(b, g)
   }
   return out
@@ -90,4 +90,20 @@ export function mid(poly: P[]): P {
     y += p[1]
   }
   return [x / poly.length, y / poly.length]
+}
+
+/** 多边形里朝向 dir 的那面墙（下标） */
+export function edgeFacing(poly: P[], dir: P): number {
+  const ct = mid(poly)
+  let best = 0
+  let bd = -Infinity
+  for (let i = 0; i < poly.length; i++) {
+    const q = poly[(i + 1) % poly.length]
+    const d = ((poly[i][0] + q[0]) / 2 - ct[0]) * dir[0] + ((poly[i][1] + q[1]) / 2 - ct[1]) * dir[1]
+    if (d > bd) {
+      bd = d
+      best = i
+    }
+  }
+  return best
 }

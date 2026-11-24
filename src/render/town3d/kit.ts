@@ -4,7 +4,7 @@
  */
 import type { P } from '../../settlement/geom'
 import type { Building } from '../../settlement/types'
-import { MAT, STYLE, WIN, annulus, at, block, cap, lathe, leanTo, prism, rectOf, shade, strip, tube, v3, walls, type Frame, type RGB, type V3, type Writer } from './mesh'
+import { DOWN, MAT, STYLE, WIN, annulus, at, block, cap, lathe, leanTo, prism, rectOf, shade, strip, tube, v3, walls, type Frame, type RGB, type V3, type Writer } from './mesh'
 import type { Facade } from './facade'
 import { BRICK, MARBLE, STONE, frac } from './shared'
 
@@ -99,7 +99,6 @@ export function dormer(w: Writer, f: Frame, s: number, sgn: number, top: number,
   }
   w.face = face
 }
-const DOWN: V3 = [0, -1, 0]
 
 /** 沿 a → b 均布 n 根圆柱（含两端），自 y0 到 y1，半径 r，用当前颜色与材质 */
 export function columnRow(w: Writer, a: P, b: P, n: number, y0: number, y1: number, r: number, sides = 8, ends = true) {

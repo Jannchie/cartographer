@@ -5,11 +5,11 @@
  * - 园林的置石与假山；奇观（法阵、灵泉、浮空岛、灵脉的晶簇）；田里的草垛。
  * 都并进体块的网格、带各自的生卒。数量可能上千（墓、摊棚），每件只用几十个三角形。纯函数，在 Worker 中运行。
  */
-import { centroid, obb, pointInPoly, type P } from '../../settlement/geom'
+import { area, bboxOf, centroid, obb, pointInPoly, type P } from '../../settlement/geom'
 import type { Building, Field, Landmark, ParkPart, Settlement } from '../../settlement/types'
-import { MAT, type RGB, type V3 } from './mesh'
+import { MAT, mixRGB, shade, type RGB, type V3 } from './mesh'
 import { COPPER, STONE, STONE_EAST, TIMBER, TIMBER_DARK, hex } from './shared'
-import { archFace, archOutline, axOf, axUV, ball, beam, box, cbox, hash, l3, loft, lp, mixC, placeArch, ringUnder, tint, tube, vault, type Ax } from './worksMesh'
+import { archFace, archOutline, axOf, axUV, ball, beam, box, cbox, hash, l3, loft, lp, placeArch, ringUnder, tube, vault, type Ax } from './worksMesh'
 import type { WCtx } from './works'
 
 const GRANITE = hex('#9c9a95')
@@ -31,28 +31,8 @@ interface Boxed {
   poly: P[]
   box: [number, number, number, number]
 }
-const boxed = (poly: P[]): Boxed => {
-  let x0 = Infinity
-  let z0 = Infinity
-  let x1 = -Infinity
-  let z1 = -Infinity
-  for (const p of poly) {
-    x0 = Math.min(x0, p[0])
-    z0 = Math.min(z0, p[1])
-    x1 = Math.max(x1, p[0])
-    z1 = Math.max(z1, p[1])
-  }
-  return { poly, box: [x0, z0, x1, z1] }
-}
+const boxed = (poly: P[]): Boxed => ({ poly, box: bboxOf(poly) })
 const inAny = (p: P, list: Boxed[]) => list.some((q) => p[0] >= q.box[0] && p[0] <= q.box[2] && p[1] >= q.box[1] && p[1] <= q.box[3] && pointInPoly(p, q.poly))
-const polyArea = (poly: P[]) => {
-  let a = 0
-  for (let i = 0; i < poly.length; i++) {
-    const q = poly[(i + 1) % poly.length]
-    a += poly[i][0] * q[1] - q[0] * poly[i][1]
-  }
-  return Math.abs(a) / 2
-}
 
 export function propIndex(st: Settlement): PropIndex {
   const graveyards = st.greens.filter((g) => g.kind === 'cemetery').map((g) => boxed(g.poly))
@@ -68,7 +48,7 @@ export function propIndex(st: Settlement): PropIndex {
     of(b) {
       const round = b.poly.length >= 8
       if (b.kind === 'shed' || (b.kind === 'civic' && !round)) {
-        const a = polyArea(b.poly)
+        const a = area(b.poly)
         const c = centroid(b.poly)
         if (a < 3.4 && inAny(c, graveyards)) return 'grave'
         if (b.kind === 'shed' && a < 24 && near(c, gallows, 1.5)) return 'gallows'
@@ -78,7 +58,7 @@ export function propIndex(st: Settlement): PropIndex {
       if (round && b.kind === 'civic' && near(centroid(b.poly), windmills, 1.5)) return 'windmill'
       if (round && b.kind === 'tower' && near(centroid(b.poly), lighthouses, 1.5)) return 'lighthouse'
       if (round && b.kind === 'hall' && near(centroid(b.poly), kilns, 14)) return 'kiln'
-      if (b.kind === 'magic' && b.poly.length === 4 && polyArea(b.poly) < 14 && near(centroid(b.poly), circles, 2)) return 'portal'
+      if (b.kind === 'magic' && b.poly.length === 4 && area(b.poly) < 14 && near(centroid(b.poly), circles, 2)) return 'portal'
       return null
     },
   }
@@ -98,11 +78,11 @@ export function propBuilding(c: WCtx, b: Building, kind: PropKind) {
     case 'stall':
       return stall(c, f, g, o.len / 2, o.wid / 2, b.tone)
     case 'windmill':
-      return windmill(c, o.center, g, Math.sqrt(polyArea(b.poly) / Math.PI))
+      return windmill(c, o.center, g, Math.sqrt(area(b.poly) / Math.PI))
     case 'lighthouse':
-      return lighthouse(c, o.center, g, Math.sqrt(polyArea(b.poly) / Math.PI))
+      return lighthouse(c, o.center, g, Math.sqrt(area(b.poly) / Math.PI))
     case 'kiln':
-      return kiln(c, o.center, g, Math.sqrt(polyArea(b.poly) / Math.PI))
+      return kiln(c, o.center, g, Math.sqrt(area(b.poly) / Math.PI))
     case 'gallows':
       return gallows(c, f, g, Math.min(o.len, o.wid) / 2)
     case 'portal':
@@ -119,17 +99,17 @@ function grave(c: WCtx, f: Ax, g: number, len: number, wid: number) {
   const lo = g - 0.4
   if (culture === 'eastern') {
     // 坟丘：覆草的土丘，丘前一方石碑
-    w.c = mixC(hex('#77824f'), EARTH, h1 * 0.6)
+    w.c = mixRGB(hex('#77824f'), EARTH, h1 * 0.6)
     w.face = MAT.straw
     ball(w, [x, g - 0.05, z], Math.min(wid, len) * 0.52, 6, 2, 0, Math.PI / 2, 0.75)
-    w.c = tint(GRANITE, 0.9 + h2 * 0.2)
+    w.c = shade(GRANITE, 0.9 + h2 * 0.2)
     w.face = MAT.plain
     box(w, f, len * 0.36, len * 0.36 + 0.14, -0.22, 0.22, lo, g + 0.62 + h1 * 0.2)
     return
   }
   if (culture === 'wa') {
     // 墓石：台石上立一根方柱
-    w.c = tint(GRANITE, 0.82 + h2 * 0.22)
+    w.c = shade(GRANITE, 0.82 + h2 * 0.22)
     cbox(w, f, 0.34, 0.34, lo, g + 0.2)
     cbox(w, f, 0.24, 0.24, g + 0.2, g + 0.36)
     cbox(w, f, 0.14, 0.14, g + 0.36, g + 1.05 + h1 * 0.25, { inset: 0.012 })
@@ -137,16 +117,16 @@ function grave(c: WCtx, f: Ax, g: number, len: number, wid: number) {
   }
   if (culture === 'islamic') {
     // 卧碑：一方低矮的白石棺台，头脚各立一块碑石
-    w.c = tint(hex('#dcd6c6'), 0.9 + h2 * 0.14)
+    w.c = shade(hex('#dcd6c6'), 0.9 + h2 * 0.14)
     box(w, f, -len * 0.42, len * 0.42, -wid * 0.3, wid * 0.3, lo, g + 0.26, { inset: 0.04 })
     for (const s of [-1, 1]) box(w, f, s * len * 0.4 - 0.05, s * len * 0.4 + 0.05, -0.13, 0.13, g + 0.2, g + (s > 0 ? 0.82 : 0.55) + h1 * 0.15, { inset: 0.02 })
     return
   }
   // 西式：立碑（多数）或石十字，碑前一方略高的墓床
-  w.c = mixC(hex('#6f7a4c'), EARTH, 0.35)
+  w.c = mixRGB(hex('#6f7a4c'), EARTH, 0.35)
   w.face = MAT.straw
   box(w, f, -len * 0.3, len * 0.42, -wid * 0.36, wid * 0.36, lo, g + 0.1, { inset: 0.08 })
-  w.c = tint(mixC(GRANITE, hex('#b9b5a6'), h2), 0.85 + h1 * 0.2)
+  w.c = shade(mixRGB(GRANITE, hex('#b9b5a6'), h2), 0.85 + h1 * 0.2)
   w.face = MAT.plain
   const s = -len * 0.4
   // 歪一点：年久的碑并不都直
@@ -195,7 +175,7 @@ function stall(c: WCtx, f: Ax, g: number, hs: number, ht: number, tone: number) 
   const e = l3(f, hs + ov, ht + ov, yf + 0.1)
   const stripe = east ? 0 : h1 < 0.75 ? 0.34 : 0
   w.uvOf = (p) => [(p[0] - f.o[0]) * f.u[0] + (p[2] - f.o[1]) * f.u[1] + hs + ov, stripe, 0]
-  w.slabQuad(a, b, e, d, 0.05, tint(col, 0.6))
+  w.slabQuad(a, b, e, d, 0.05, shade(col, 0.6))
   w.uvOf = null
   // 前檐垂下的一道布边
   if (!east) {
@@ -206,7 +186,7 @@ function stall(c: WCtx, f: Ax, g: number, hs: number, ht: number, tone: number) 
     w.uvOf = null
   }
   // 柜台与货：台面上两三堆
-  w.c = tint(TIMBER, 1.15)
+  w.c = shade(TIMBER, 1.15)
   w.face = MAT.board
   box(w, f, -hs + 0.25, hs - 0.25, ht * 0.1, ht - 0.25, lo, g + 0.85)
   w.face = MAT.plain
@@ -314,14 +294,14 @@ function lighthouse(c: WCtx, p: P, g: number, r: number) {
 /** 砖瓦窑：馒头形的窑体、窑顶的烟囱口、拱形的窑门（夜里透出火光） */
 function kiln(c: WCtx, p: P, g: number, r: number) {
   const { w } = c
-  const col = tint(hex('#8f5e46'), 0.9 + hash(p[0], p[1], 1) * 0.2)
+  const col = shade(hex('#8f5e46'), 0.9 + hash(p[0], p[1], 1) * 0.2)
   w.c = col
   w.face = MAT.brick
   tube(w, p, r * 1.02, r, g - 1, g + 1.5, 12)
   w.face = MAT.plain
   ball(w, [p[0], g + 1.5, p[1]], r, 12, 4, 0, Math.PI / 2, 0.82)
   // 烟囱口
-  w.c = tint(col, 0.75)
+  w.c = shade(col, 0.75)
   w.face = MAT.brick
   tube(w, p, 0.55, 0.5, g + 1.5 + r * 0.74, g + 1.5 + r * 0.82 + 0.9, 8)
   w.c = hex('#1c1a18')
@@ -331,7 +311,7 @@ function kiln(c: WCtx, p: P, g: number, r: number) {
   // 窑门：凸出的门脸，拱洞里是火
   const f = axOf(p, hash(p[0], p[1], 2) * Math.PI * 2)
   const ff = { o: lp(f, r * 0.9, 0), u: f.u, v: f.v }
-  w.c = tint(col, 0.85)
+  w.c = shade(col, 0.85)
   w.face = MAT.brick
   box(w, ff, 0, 0.55, -0.85, 0.85, g - 0.5, g + 1.9)
   w.c = hex('#3a1c10')
@@ -469,7 +449,7 @@ function well(c: WCtx, f: Ax, g: number) {
   const yr = g + 2.75
   const ye = g + 2.3
   const P3 = (s: number, t: number, y: number): V3 => l3(f, s, t, y)
-  for (const sg of [-1, 1]) w.slabQuad(P3(sg * B, -A, ye), P3(sg * B, A, ye), P3(0, A, yr), P3(0, -A, yr), 0.06, tint(col, 0.55))
+  for (const sg of [-1, 1]) w.slabQuad(P3(sg * B, -A, ye), P3(sg * B, A, ye), P3(0, A, yr), P3(0, -A, yr), 0.06, shade(col, 0.55))
 }
 
 /** 喷泉：水池（池沿、水面）、中柱与上层的水盘；伊斯兰为贴地的八角浅池 */
@@ -524,7 +504,7 @@ function statue(c: WCtx, f: Ax, g: number) {
   cbox(w, f, 0.82, 0.82, g + 1.75, g + 1.93)
   // 铜像：袍身、躯干、头，一臂前伸
   const y = g + 1.93
-  w.c = tint(COPPER, 0.8)
+  w.c = shade(COPPER, 0.8)
   tube(w, p, 0.3, 0.2, y, y + 1.0, 7)
   tube(w, p, 0.2, 0.27, y + 1.0, y + 1.62, 7)
   tube(w, p, 0.27, 0.1, y + 1.62, y + 1.74, 7)
@@ -537,14 +517,14 @@ function statue(c: WCtx, f: Ax, g: number) {
 function lantern(c: WCtx, f: Ax, g: number) {
   const { w } = c
   const p = f.o
-  w.c = tint(GRANITE, 0.9)
+  w.c = shade(GRANITE, 0.9)
   tube(w, p, 0.42, 0.34, g - 0.3, g + 0.22, 6)
   tube(w, p, 0.15, 0.13, g + 0.22, g + 1.15, 6)
   tube(w, p, 0.14, 0.36, g + 1.15, g + 1.3, 6, { cap: true })
   w.c = hex('#e8d9a0')
   w.face = MAT.lamp
   cbox(w, f, 0.2, 0.2, g + 1.3, g + 1.68, { top: false })
-  w.c = tint(GRANITE, 0.9)
+  w.c = shade(GRANITE, 0.9)
   w.face = MAT.plain
   for (const [s, t] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
     const q = lp(f, s * 0.2, t * 0.2)
@@ -558,13 +538,13 @@ function lantern(c: WCtx, f: Ax, g: number) {
 /** 石碑：龟趺座、碑身与碑首 */
 function stele(c: WCtx, f: Ax, g: number) {
   const { w } = c
-  w.c = tint(STONE_EAST, 1.05)
+  w.c = shade(STONE_EAST, 1.05)
   w.face = MAT.stone
   cbox(w, f, 0.6, 0.95, g - 0.4, g + 0.5, { inset: 0.1 })
   w.c = hex('#55585a')
   w.face = MAT.plain
   cbox(w, f, 0.13, 0.52, g + 0.5, g + 2.5)
-  w.c = tint(STONE_EAST, 1.1)
+  w.c = shade(STONE_EAST, 1.1)
   cbox(w, f, 0.17, 0.6, g + 2.5, g + 3.0, { inset: 0.06 })
 }
 
@@ -655,7 +635,7 @@ export function rock(c: WCtx, q: ParkPart) {
   const h1 = hash(ct[0], ct[1], 1)
   // 太湖石偏高瘦，和式的石矮而稳
   const hgt = r * (culture === 'eastern' ? 1.0 + h1 * 1.1 : culture === 'wa' ? 0.55 + h1 * 0.5 : 0.6 + h1 * 0.6)
-  w.c = tint(culture === 'eastern' ? hex('#a9a69e') : hex('#8f8c84'), 0.85 + hash(ct[0], ct[1], 2) * 0.3)
+  w.c = shade(culture === 'eastern' ? hex('#a9a69e') : hex('#8f8c84'), 0.85 + hash(ct[0], ct[1], 2) * 0.3)
   w.face = MAT.rock
   // 四层：底、腰（略外鼓）、肩（内收、偏心）、顶；各顶点再各自进出一些，面不平滑（石头的棱面）
   const off: P = [(hash(ct[0], ct[1], 3) - 0.5) * r * 0.6, (hash(ct[0], ct[1], 4) - 0.5) * r * 0.6]
@@ -687,7 +667,7 @@ export function wonder(c: WCtx, x: Settlement['wonders'][number], magic: RGB) {
   const [px, pz] = x.p
   w.at(px, pz)
   w.base = H(px, pz) - 0.6
-  const glow = mixC(magic, hex('#c9b8ff'), 0.45)
+  const glow = mixRGB(magic, hex('#c9b8ff'), 0.45)
   // 贴地的光带：沿 a → b 每几米取一次地面高
   const strip = (a: P, b: P, hw: number) => {
     const L = Math.hypot(b[0] - a[0], b[1] - a[1])
@@ -765,7 +745,7 @@ export function wonder(c: WCtx, x: Settlement['wonders'][number], magic: RGB) {
       const f = axOf(q, a + hash(q[0], q[1], 2))
       cbox(w, f, s, s * 1.3, H(q[0], q[1]) - 0.4, H(q[0], q[1]) + 0.3 + s * 0.6, { inset: s * 0.3 })
     }
-    w.c = mixC(hex('#6fd0d8'), glow, 0.35)
+    w.c = mixRGB(hex('#6fd0d8'), glow, 0.35)
     w.face = MAT.glow
     for (let k = 0; k < n; k++) {
       const a0 = (k / n) * Math.PI * 2
@@ -850,7 +830,7 @@ export function fieldProps(c: WCtx, fd: Field) {
   if (fd.kind !== 'crop' && fd.kind !== 'meadow') return
   const ct = centroid(fd.poly)
   if (hash(ct[0], ct[1], 1) > (fd.kind === 'meadow' ? 0.5 : 0.22)) return
-  const a = polyArea(fd.poly)
+  const a = area(fd.poly)
   if (a < 500) return
   const n = Math.min(4, 1 + Math.floor(a / 2500))
   const o = obb(fd.poly)
@@ -861,7 +841,7 @@ export function fieldProps(c: WCtx, fd: Field) {
     const r = 1.3 + hash(q[0], q[1], 1) * 0.7
     w.at(q[0], q[1])
     w.base = g - 0.6
-    w.c = tint(STRAW, 0.85 + hash(q[0], q[1], 2) * 0.25)
+    w.c = shade(STRAW, 0.85 + hash(q[0], q[1], 2) * 0.25)
     w.face = MAT.straw
     if (culture === 'wa' || culture === 'eastern') {
       // 稻架 / 草堆：矮而圆

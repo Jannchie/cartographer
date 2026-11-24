@@ -3,13 +3,13 @@
  * 清真寺（按部件：礼拜殿、成排的两坡绿瓦廊、鼓座与穹顶、庭院四周的回廊、伊旺、宣礼塔）、
  * 圣墓的小穹顶、卡斯巴的碉楼。纯函数，在 Worker 中运行。
  */
+import { clamp } from '../../gen/util'
 import { centroid, type P } from '../../settlement/geom'
 import { MAT, STYLE, WIN, annulus, block, cap, circle, crenels, dome, flat, frameOf, gable, lathe, parapet, prism, rectOf, shade, sub, taper, tent, tube, wall1, walls, type Frame, type RGB } from './mesh'
 import { finial, hashOf, type Site } from './kit'
-import { mid, type Group } from './groups'
+import { edgeFacing, mid, type Group } from './groups'
 import { EARTH, GILT, LIME, ROOF, WALL, hex, pick, type Ctx } from './shared'
 
-const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x))
 /** 公共建筑（客栈、浴场、经学院）单层的墙高 */
 const HALL_H = 5.6
 /** 石砌的清真寺、宫殿的石色 */
@@ -345,7 +345,7 @@ function part(c: Ctx, s: Site, g: Group): boolean {
       w.c = stone
       w.face = MAT.plaster | WIN
       w.style = STYLE.lancet
-      const front = edgeTo(b.poly, [-m.q[0], -m.q[1]])
+      const front = edgeFacing(b.poly, [-m.q[0], -m.q[1]])
       walls(w, b.poly, base, m.top, { win: b.poly.map(() => true), door: -1, alt: (i) => (i === front && m.kind !== 1 ? { face: MAT.plaster | WIN, style: STYLE.arcade } : null) })
       w.style = 0
       flat(w, f, m.top, roofCol, stone, 0.9)
@@ -360,7 +360,7 @@ function part(c: Ctx, s: Site, g: Group): boolean {
       w.face = MAT.plaster | WIN
       w.style = STYLE.arcade
       const top = m.top - 1.6
-      walls(w, b.poly, base, top, { win: b.poly.map((_, i) => i === edgeTo(b.poly, [-m.q[0], -m.q[1]])), door: -1 })
+      walls(w, b.poly, base, top, { win: b.poly.map((_, i) => i === edgeFacing(b.poly, [-m.q[0], -m.q[1]])), door: -1 })
       w.style = 0
       w.roofFace = MAT.tile
       w.roofTh = 0.2
@@ -399,7 +399,7 @@ function part(c: Ctx, s: Site, g: Group): boolean {
       const cen = mid(g.all.flatMap((x) => x.poly))
       const bc = mid(b.poly)
       const dl = Math.hypot(cen[0] - bc[0], cen[1] - bc[1]) || 1
-      const face = edgeTo(b.poly, [(cen[0] - bc[0]) / dl, (cen[1] - bc[1]) / dl])
+      const face = edgeFacing(b.poly, [(cen[0] - bc[0]) / dl, (cen[1] - bc[1]) / dl])
       w.c = stone
       w.face = MAT.plaster
       walls(w, b.poly, base, top, { win: b.poly.map(() => true), door: -1, alt: (i) => (i === face ? { face: MAT.plaster | WIN, style: STYLE.iwan } : null) })
@@ -478,22 +478,6 @@ function part(c: Ctx, s: Site, g: Group): boolean {
     }
   }
   return false
-}
-
-/** 多边形里朝向 dir 的那面墙 */
-function edgeTo(poly: P[], dir: P): number {
-  const ct = mid(poly)
-  let best = 0
-  let bd = -Infinity
-  for (let i = 0; i < poly.length; i++) {
-    const o = poly[(i + 1) % poly.length]
-    const d = ((poly[i][0] + o[0]) / 2 - ct[0]) * dir[0] + ((poly[i][1] + o[1]) / 2 - ct[1]) * dir[1]
-    if (d > bd) {
-      bd = d
-      best = i
-    }
-  }
-  return best
 }
 
 /**

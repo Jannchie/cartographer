@@ -380,13 +380,6 @@ export class TreeLayer {
     this.contact.commit()
   }
 
-  /** 这一帧各级画了多少棵（调试用） */
-  stats() {
-    const n = [0, 0, 0]
-    for (const bs of this.near) if (bs) bs.forEach((b, i) => (n[i] += b.n))
-    return { near: n[0], mid: n[1], low: n[2], farA: this.chunks.filter((c) => c.a.visible).length, farB: this.chunks.filter((c) => c.b.visible).length, chunks: this.chunks.length }
-  }
-
   dispose() {
     this.group.traverse((o) => {
       const m = o as THREE.Mesh

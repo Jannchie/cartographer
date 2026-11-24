@@ -4,9 +4,9 @@
  * 城堡主楼与塔楼、宫殿的主体与圆厅。纯函数，在 Worker 中运行。
  */
 import { centroid, type P } from '../../settlement/geom'
-import { DOOR, MAT, STYLE, WIN, at, block, cap, circle, cone, crenels, dome, flat, frameOf, gable, grow, growEdges, hip, lathe, leanTo, leanToEnds, parapet, prism, rectOf, shade, slab, taper, tent, tube, turned, wall1, walls, type Frame, type RGB, type WallFac } from './mesh'
+import { DOOR, MAT, STYLE, WIN, at, block, cap, circle, cone, crenels, dome, flat, frameOf, gable, grow, growEdges, hip, lathe, leanTo, leanToEnds, mixRGB, parapet, prism, rectOf, shade, slab, taper, tent, tube, turned, wall1, walls, type Frame, type RGB, type WallFac } from './mesh'
 import { chimney, dormer, finial, hashOf, soffitRing, type Site } from './kit'
-import { mid, type Group } from './groups'
+import { edgeFacing, mid, type Group } from './groups'
 import { ASHLAR, BRICK_WALL, GILT, ROOF, STONE, STONE_DARK, TIMBER_DARK, WALL, pick, type Ctx } from './shared'
 
 export function western(c: Ctx, s: Site, g: Group | null) {
@@ -153,10 +153,9 @@ function fleche(c: Ctx, p: P, y: number, r: number, roof: RGB) {
   walls(w, rectOf(f), y, y + r * 2.4)
   w.roofFace = MAT.metal
   w.c = ROOF.lead
-  tent(w, p, 4, Math.PI / 4, r * 1.75, y + r * 2.4, 0, y + r * 2.4 + r * 4.5, mixLead(roof), 'straight')
+  tent(w, p, 4, Math.PI / 4, r * 1.75, y + r * 2.4, 0, y + r * 2.4 + r * 4.5, mixRGB(roof, ROOF.lead, 0.5), 'straight')
   finial(w, p, y + r * 6.8, r * 0.14, r * 0.9, GILT)
 }
-const mixLead = (roof: RGB): RGB => [Math.round((roof[0] + ROOF.lead[0]) / 2), Math.round((roof[1] + ROOF.lead[1]) / 2), Math.round((roof[2] + ROOF.lead[2]) / 2)]
 
 /** 路边的小龛：石柱、龛、小两坡顶 */
 function pillarShrine(c: Ctx, s: Site) {
@@ -239,22 +238,6 @@ function ring(c: Ctx, ct: P, r: number, y: number, h: number, col: RGB) {
   w.c = col
   w.face = MAT.plain
   lathe(w, ct, y, [[r - 0.14, 0], [r, 0.02], [r, h], [r - 0.14, h]], 16)
-}
-
-/** 多边形里朝向 dir 的那面墙（下标） */
-export function edgeFacing(poly: P[], dir: P): number {
-  const ct = mid(poly)
-  let best = 0
-  let bd = -Infinity
-  for (let i = 0; i < poly.length; i++) {
-    const q = poly[(i + 1) % poly.length]
-    const d = ((poly[i][0] + q[0]) / 2 - ct[0]) * dir[0] + ((poly[i][1] + q[1]) / 2 - ct[1]) * dir[1]
-    if (d > bd) {
-      bd = d
-      best = i
-    }
-  }
-  return best
 }
 
 // —————————————————————— 城堡主楼、塔楼 ——————————————————————

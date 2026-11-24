@@ -8,9 +8,9 @@ import type { RGB, Writer } from './mesh'
 
 export type Height = (x: number, z: number) => number
 
-/** 地面高程：地形格网双线性插值（米） */
-export function heightSampler(t: Settlement['terrain']): Height {
-  const { W, H, cell, height } = t
+/** 地形格网上一个逐格量的双线性插值（坐标为米） */
+function gridSampler(t: Settlement['terrain'], f: Float32Array): Height {
+  const { W, H, cell } = t
   return (x, z) => {
     const fx = Math.min(W - 1.001, Math.max(0, x / cell))
     const fz = Math.min(H - 1.001, Math.max(0, z / cell))
@@ -19,9 +19,13 @@ export function heightSampler(t: Settlement['terrain']): Height {
     const u = fx - i
     const v = fz - j
     const k = j * W + i
-    return (height[k] * (1 - u) + height[k + 1] * u) * (1 - v) + (height[k + W] * (1 - u) + height[k + W + 1] * u) * v
+    return (f[k] * (1 - u) + f[k + 1] * u) * (1 - v) + (f[k + W] * (1 - u) + f[k + W + 1] * u) * v
   }
 }
+/** 地面高程（米） */
+export const heightSampler = (t: Settlement['terrain']) => gridSampler(t, t.height)
+/** 到水的有向距离（米，水中为负） */
+export const waterSampler = (t: Settlement['terrain']) => gridSampler(t, t.water)
 
 export const hex = (s: string): RGB => {
   const n = parseInt(s.slice(1, 7), 16)
@@ -50,7 +54,6 @@ export const PLASTER = hex('#f1ede3')
 export const TILE_DARK = hex('#565a60')
 export const COPPER = hex('#7f9a8a')
 export const BRICK = hex('#8a5a44')
-export const GOLD = hex('#c9a24a')
 
 /**
  * 沙盘的屋面与墙面材质色（写实的材质色）。二维彩绘主题的屋顶色是图例色，饱和度偏高，

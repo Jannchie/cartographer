@@ -375,8 +375,8 @@ export class Writer {
 }
 
 export type V3 = [number, number, number]
-const DOWN: V3 = [0, -1, 0]
-const UP: V3 = [0, 1, 0]
+export const DOWN: V3 = [0, -1, 0]
+export const UP: V3 = [0, 1, 0]
 /** 颜色按比例压暗（屋面底板、脊瓦） */
 export const shade = (c: RGB, k: number): RGB => [Math.min(255, Math.round(c[0] * k)), Math.min(255, Math.round(c[1] * k)), Math.min(255, Math.round(c[2] * k))]
 /** 两色相混 */
@@ -690,7 +690,7 @@ function roofLevels(f: Frame, y: number, k: number, o: number, p: Profile): Roof
 /** 屋面板厚：不超过半宽的一成（小棚子的屋面不至于成一块厚板） */
 const thOf = (w: Writer, f: Frame) => Math.min(w.roofTh, 0.04 + f.b * 0.09)
 /** 水平方向的单位向量（平面 → 三维） */
-const h3 = (p: P, k = 1): V3 => [p[0] * k, 0, p[1] * k]
+export const h3 = (p: P, k = 1): V3 => [p[0] * k, 0, p[1] * k]
 
 /** 屋顶的附加做法（东亚的殿堂） */
 export interface RoofOpt {
@@ -1212,13 +1212,6 @@ export function strip(a: P, b: P, half: number): P[] {
   ]
 }
 
-/** 墙段：两端各自的墙顶高度（随地形），连同顶面 */
-export function wallSegment(w: Writer, a: P, b: P, half: number, y0: number, ya: number, yb: number) {
-  const r = strip(a, b, half)
-  walls(w, r, y0, [ya, yb, yb, ya])
-  w.quad(v3(r[0], ya), v3(r[1], yb), v3(r[2], yb), v3(r[3], ya))
-}
-
 /** 斜板：沿 a→b 的条，两端顶面高 ya、yb，厚 th（桥面、飞扶壁） */
 export function slab(w: Writer, a: P, b: P, half: number, ya: number, yb: number, th: number) {
   const r = strip(a, b, half)
@@ -1228,85 +1221,4 @@ export function slab(w: Writer, a: P, b: P, half: number, ya: number, yb: number
   w.quad(bot[0], bot[3], bot[2], bot[1])
   w.quad(bot[0], bot[1], top[1], top[0])
   w.quad(bot[2], bot[3], top[3], top[2])
-}
-
-/** 闭合环按 step 米加密（随地形起伏的墙顶逐点取高），去掉过近的点 */
-function densify(ring: P[], step: number): P[] {
-  const out: P[] = []
-  ring.forEach((a, i) => {
-    const b = ring[(i + 1) % ring.length]
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1])
-    if (L < 0.3) return
-    const segs = Math.max(1, Math.ceil(L / step))
-    for (let s = 0; s < segs; s++) out.push([a[0] + ((b[0] - a[0]) * s) / segs, a[1] + ((b[1] - a[1]) * s) / segs])
-  })
-  return out
-}
-
-/**
- * 围墙：沿闭合环拉成厚 2·half 的墙（内外两面 + 顶），转角斜接。
- * top(p) 给出该点的墙顶高度，y0 为埋入地下的墙脚；返回加密后的环（upward 绕向）供墙帽沿用
- */
-export function fence(w: Writer, ring: P[], half: number, y0: (p: P) => number, top: (p: P) => number, step = 40): P[] {
-  const r = upward(densify(ring, step))
-  if (r.length < 3) return r
-  const o = offsetRing(r, half)
-  const i = offsetRing(r, -half)
-  r.forEach((c, k) => {
-    const l = (k + 1) % r.length
-    const d = r[l]
-    w.at(c[0], c[1])
-    const t0 = top(c)
-    const t1 = top(d)
-    const b0 = y0(c)
-    const b1 = y0(d)
-    const nx = -(d[1] - c[1])
-    const nz = d[0] - c[0]
-    w.quadOut(v3(o[k], t0), v3(o[l], t1), v3(i[l], t1), v3(i[k], t0), UP)
-    w.quadOut(v3(o[k], b0), v3(o[l], b1), v3(o[l], t1), v3(o[k], t0), [nx, 0, nz])
-    w.quadOut(v3(i[k], b0), v3(i[l], b1), v3(i[l], t1), v3(i[k], t0), [-nx, 0, -nz])
-  })
-  return r
-}
-
-/**
- * 墙帽：骑在围墙上的小两坡瓦顶，屋脊沿墙中线，两侧出檐 half 到墙外，转角斜接。
- * r 为 fence 返回的环；y(p) 为檐口高度，rise 为脊高于檐口，th 为瓦面厚（檐口的封檐板与底板）
- */
-export function coping(w: Writer, r: P[], half: number, y: (p: P) => number, rise: number, th: number, under: RGB) {
-  if (r.length < 3) return
-  const o = offsetRing(r, half)
-  const i = offsetRing(r, -half)
-  // 脊瓦：压在屋脊上的一道三角棱，两侧落在坡面上
-  const rw = Math.min(0.12, half * 0.3)
-  const ro = offsetRing(r, rw)
-  const ri = offsetRing(r, -rw)
-  const drop = (rw / half) * rise - 0.01
-  const roof = w.c
-  const face = w.face
-  const ridge = shade(roof, 0.8)
-  r.forEach((c, k) => {
-    const l = (k + 1) % r.length
-    const d = r[l]
-    const e0 = y(c)
-    const e1 = y(d)
-    const out: V3 = [-(d[1] - c[1]), 0, d[0] - c[0]]
-    const inn: V3 = [-out[0], 0, -out[2]]
-    w.at(c[0], c[1])
-    w.c = roof
-    w.face = face
-    w.slabQuad(v3(c, e0 + rise), v3(d, e1 + rise), v3(o[l], e1), v3(o[k], e0), th, under)
-    w.slabQuad(v3(c, e0 + rise), v3(d, e1 + rise), v3(i[l], e1), v3(i[k], e0), th, under)
-    w.c = under
-    w.face = MAT.plain
-    w.edgeStrip(v3(o[k], e0), v3(o[l], e1), th, out)
-    w.edgeStrip(v3(i[k], e0), v3(i[l], e1), th, inn)
-    w.c = ridge
-    const t0 = e0 + rise + rw * 0.6
-    const t1 = e1 + rise + rw * 0.6
-    w.quadOut(v3(c, t0), v3(d, t1), v3(ro[l], e1 + rise - drop), v3(ro[k], e0 + rise - drop), [out[0], 1, out[2]])
-    w.quadOut(v3(c, t0), v3(d, t1), v3(ri[l], e1 + rise - drop), v3(ri[k], e0 + rise - drop), [inn[0], 1, inn[2]])
-  })
-  w.c = roof
-  w.face = face
 }

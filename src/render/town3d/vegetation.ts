@@ -13,6 +13,7 @@
 import type { Life } from '../../settlement/history'
 import type { Culture, Settlement } from '../../settlement/types'
 import { NEVER } from './mesh'
+import { waterSampler } from './shared'
 import { ACCENT, SP, SPECIES, SPECIES_NAMES } from './treeSpecies'
 
 /** 实例的两个缓冲的步长：浮点 6 个（x, 地面高, z, 冠径, 出生人口, 消亡人口），字节 12 个（见 push） */
@@ -394,16 +395,7 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
   const sr = ih(seed, 7, 3)
   const season: Season = culture === 'wa' || culture === 'eastern' ? (sr < 0.36 ? 'spring' : sr < 0.66 ? 'summer' : 'autumn') : 'summer'
   const span = (o: object): Span => life.get(o) ?? ALWAYS
-  const water = (x: number, z: number) => {
-    const fx = Math.min(T.W - 1.001, Math.max(0, x / T.cell))
-    const fz = Math.min(T.H - 1.001, Math.max(0, z / T.cell))
-    const i = Math.floor(fx)
-    const j = Math.floor(fz)
-    const u = fx - i
-    const v = fz - j
-    const k = j * T.W + i
-    return (T.water[k] * (1 - u) + T.water[k + 1] * u) * (1 - v) + (T.water[k + T.W] * (1 - u) + T.water[k + T.W + 1] * u) * v
-  }
+  const water = waterSampler(T)
 
   // —— 空间索引 ——
   const bGrid = new Grid<{ poly: Pt[]; life: Span }>(W, D, 16)

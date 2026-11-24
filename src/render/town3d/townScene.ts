@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import type { P } from '../../settlement/geom'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import type { SettleStyleId } from '../../settlement/themes'
@@ -13,7 +12,8 @@ import { daylight, type Daylight } from '../aerial/daylight'
 import { FocusProbe } from '../aerial/focusProbe'
 import { CameraTour, type TourPoi } from '../aerial/tour'
 import { patchBuilding, patchBuildingLite } from './buildingShader'
-import { heightSampler, type TownBuild } from './massing'
+import type { TownBuild } from './massing'
+import { heightSampler } from './shared'
 import type { TownChunk } from './mesh'
 import { TownGround, skirtGeometries } from './ground'
 import { WATER_LEVEL } from './relief'
@@ -97,7 +97,6 @@ export class TownScene {
   private probe: FocusProbe | null = null
   private diorama: Diorama
   private timer: GpuTimer
-  private env: THREE.Texture
   private dl: Daylight
   /** 城市组：米坐标，整体缩放 K、平移到中心 */
   private city = new THREE.Group()
@@ -148,8 +147,6 @@ export class TownScene {
   private tour: CameraTour
   private tourFade: HTMLDivElement
   private pois: TourPoi[] = []
-  /** 自动运镜开始 / 结束时通知界面 */
-  onTourChange: ((on: boolean) => void) | null = null
   private perf: { el: HTMLDivElement; frames: number; t0: number } | null = null
   private lastFrame = 0
   private lastMove = 0
@@ -190,9 +187,6 @@ export class TownScene {
     this.scene.add(this.hemi, this.fill, this.city)
     this.diorama = new Diorama(this.renderer)
     this.scene.add(this.diorama.group)
-    const pmrem = new THREE.PMREMGenerator(this.renderer)
-    this.env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-    pmrem.dispose()
     // 读回浮点像素要这个扩展；没有时对焦退回到轨道中心
     if (this.renderer.extensions.has('EXT_color_buffer_float')) this.probe = new FocusProbe(this.post.sceneRT.depthTexture!)
 
@@ -411,7 +405,7 @@ export class TownScene {
     // 着色器在后台并行编译（KHR_parallel_shader_compile），首帧不因同步编译卡住主线程
     this.ready = false
     // 建筑的细节着色器（按文明编译，首次要数秒）没编译好时先用简化材质显示，后台编译好再换上
-    const detailed = this.bldFor === cult
+    const detailed = this.detailed
     for (const m of this.chunks) m.material = detailed ? this.bldMat : this.bldLite
     if (!detailed && this.chunks.length) {
       const probe = new THREE.Mesh(this.chunks[0].geometry, this.bldMat)
@@ -456,7 +450,7 @@ export class TownScene {
     m.castShadow = m.receiveShadow = true
     m.userData.ids = c.ids
     m.userData.life = c.life
-    m.userData.chunk = true
+    m.userData.shared = true
     return m
   }
 
@@ -472,7 +466,6 @@ export class TownScene {
       if (c.userData.depth) (c.userData.depth as THREE.Material).dispose()
       const m = c as THREE.Mesh
       if (c.userData.shared) m.geometry.dispose()
-      else if (c.userData.chunk) m.geometry.dispose()
       else deep(c)
     }
     this.stopTour()
@@ -566,6 +559,7 @@ export class TownScene {
           inner: { x0: -hx, z0: -hz, x1: hx, z1: hz, level: WATER_LEVEL * this.K },
           cell: 1.5 * this.K,
           stamp: (put) => this.trees?.stamp(put, this.K, this.city.position, this.u.uPop.value),
+          exclude: this.trees ? [this.trees.group] : [],
         })
         .then(() => {
           if (this.hist !== hist) return
@@ -817,7 +811,6 @@ export class TownScene {
     this.pointer = null
     this.focus.dirty = true
     this.tour.start(this.camera, this.rig.target)
-    this.onTourChange?.(true)
     this.invalidate(false)
   }
 
@@ -825,7 +818,6 @@ export class TownScene {
     if (!this.tour.active) return
     this.tour.stop()
     this.tourFade.style.opacity = '0'
-    this.onTourChange?.(false)
     this.invalidate(false)
   }
 
@@ -985,7 +977,7 @@ export class TownScene {
    * 每帧强制重新拟合并重画近、中两级阴影（平移、缩放时的最坏情况）；all 时连全城一级也重画（成长过渡期间）。
    * 调试与性能对比用（scripts/town3d.ts）
    */
-  measure(frames = 40, all = false): { ms: number; calls: number; triangles: number } {
+  measure(frames = 40): { ms: number; calls: number; triangles: number } {
     const gl = this.renderer.getContext()
     const t = this.rig.target
     const off = this.camera.position.clone().sub(t)
@@ -1002,7 +994,6 @@ export class TownScene {
         this.camera.lookAt(t)
         this.camera.updateMatrixWorld()
         this.shadows.fit(t, off.length(), true)
-        if (all) this.shadows.invalidate()
         info.reset()
         this.renderFrame(true, 1 / 60)
         calls = info.render.calls
@@ -1044,8 +1035,8 @@ export class TownScene {
       this.post.cameraChanged(this.camera)
       this.renderFrame(false, 0, true)
       const [u, v] = this.focusUv()
-      const d = this.probe.read(this.renderer, this.camera, u, v, this.post.sub, 0.022)
-      this.focus.dist = Math.max(this.camera.near * 2, d > 0 ? d : this.rig.distance)
+      this.probe.read(this.renderer, this.camera, u, v, this.post.sub, 0.022)
+      this.focus.dist = this.focusWant()
       this.focus.dirty = this.focus.snap = false
       this.post.reset()
     }
@@ -1066,7 +1057,6 @@ export class TownScene {
     this.bldMat.dispose()
     this.bldDepth.dispose()
     this.bldLite.dispose()
-    this.env.dispose()
     this.ground.dispose()
     this.rig.dispose()
     this.renderer.dispose()

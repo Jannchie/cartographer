@@ -4,7 +4,7 @@
  * 朝向一律由"朝外的方向"决定（Writer.quadOut / triN），调用处不必操心绕向。
  */
 import type { P } from '../../settlement/geom'
-import type { RGB, V3, Writer } from './mesh'
+import { DOWN, UP, h3, type RGB, type V3, type Writer } from './mesh'
 import type { Height } from './shared'
 
 /** 平面上的局部坐标框：原点 o，u 向与 v 向（单位向量，v 为 u 的左手法线） */
@@ -36,13 +36,6 @@ export const hash = (x: number, z: number, k = 0) => {
   const s = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453
   return s - Math.floor(s)
 }
-/** 颜色按比例调明暗（截到 0 ~ 255） */
-export const tint = (c: RGB, k: number): RGB => [Math.min(255, Math.round(c[0] * k)), Math.min(255, Math.round(c[1] * k)), Math.min(255, Math.round(c[2] * k))]
-export const mixC = (a: RGB, b: RGB, t: number): RGB => [Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t)]
-
-const h3 = (p: P, k = 1): V3 => [p[0] * k, 0, p[1] * k]
-const UP: V3 = [0, 1, 0]
-const DOWN: V3 = [0, -1, 0]
 
 /**
  * 定向的盒：局部 s ∈ [s0, s1]、t ∈ [t0, t1]、y ∈ [y0, y1]；inset 为顶面四周的收进（收分的台、碑）。

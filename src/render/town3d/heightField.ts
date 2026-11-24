@@ -48,9 +48,11 @@ export interface HeightFieldSpec {
   cell: number
   /**
    * 渲染之外补盖的实体：put(x, z, 半径, 顶高)（世界单位）把圆盘内的表面抬到顶高。
-   * 树按镜头距离分级、交界抖动淡入淡出，从正上方渲染时会漏掉一部分，按实例数据补上
+   * 树按镜头距离分级、交界抖动淡入淡出，从正上方渲染会漏掉一部分：树层不渲染（见 exclude），只按实例数据盖
    */
   stamp?: (put: (x: number, z: number, r: number, top: number) => void) => void
+  /** 不渲染的子树（由 stamp 补盖的东西，免得画两遍） */
+  exclude?: THREE.Object3D[]
 }
 
 export class HeightField {
@@ -113,6 +115,11 @@ export class HeightField {
     // 只画会投影的网格，换上各自的深度材质（成长升降、树的实例位置都在里面）
     const swapped: { m: THREE.Mesh; mat: THREE.Material | THREE.Material[] }[] = []
     const hidden: THREE.Object3D[] = []
+    for (const o of spec.exclude ?? []) {
+      if (!o.visible) continue
+      o.visible = false
+      hidden.push(o)
+    }
     for (const root of roots) {
       root.traverse((o) => {
         const m = o as THREE.Mesh

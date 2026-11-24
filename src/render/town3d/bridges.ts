@@ -7,9 +7,9 @@
  */
 import type { P } from '../../settlement/geom'
 import type { Settlement, Wall } from '../../settlement/types'
-import { MAT, type RGB } from './mesh'
+import { MAT, shade, type RGB } from './mesh'
 import { ADOBE, STONE, STONE_EAST, TIMBER, TIMBER_DARK, VERMILION, hex } from './shared'
-import { archFace, archOutline, axUV, beam, box, lp, placeArch, pyramid, sweep, tint, tube, vault, type ArchShape, type Opening, type Station } from './worksMesh'
+import { archFace, archOutline, axUV, beam, box, lp, placeArch, pyramid, sweep, tube, vault, type ArchShape, type Opening, type Station } from './worksMesh'
 import { boat, jetty } from './harbor'
 import type { WCtx } from './works'
 
@@ -97,7 +97,7 @@ function stoneBridge(c: WCtx, sp: Span, col: RGB, face: number, shape: ArchShape
   const o0: P = [sp.a[0] - n[0] * half, sp.a[1] - n[1] * half]
   for (const h of holes) vault(w, o0, e, [n[0] * half * 2, n[1] * half * 2], h)
   // 拱圈：浅色的券石
-  w.c = tint(col, 1.12)
+  w.c = shade(col, 1.12)
   w.face = MAT.plain
   for (const sg of [1, -1]) {
     const o: P = [sp.a[0] + n[0] * half * sg, sp.a[1] + n[1] * half * sg]
@@ -123,11 +123,11 @@ function stoneBridge(c: WCtx, sp: Span, col: RGB, face: number, shape: ArchShape
     }
   }
   // 桥面
-  w.c = tint(col, 0.92)
+  w.c = shade(col, 0.92)
   w.face = MAT.paving
   sweep(w, sts, [[half, 0], [-half, 0]], { caps: false })
   // 桥面外沿一道挑出的线脚
-  w.c = tint(col, 1.06)
+  w.c = shade(col, 1.06)
   w.face = MAT.plain
   for (const sg of [1, -1]) sweep(w, sts, sg > 0 ? [[half, -0.22], [half + 0.1, -0.22], [half + 0.1, 0.02], [half, 0.02]] : [[-half, 0.02], [-half - 0.1, 0.02], [-half - 0.1, -0.22], [-half, -0.22]], { caps: true })
   if (style === 'parapet') {
@@ -139,7 +139,7 @@ function stoneBridge(c: WCtx, sp: Span, col: RGB, face: number, shape: ArchShape
       const i = sg * (half - 0.34)
       sweep(w, sts, sg > 0 ? [[o, 0], [o, 0.95], [i, 0.95], [i, 0]] : [[i, 0], [i, 0.95], [o, 0.95], [o, 0]], { caps: true, faces: [face, MAT.plain, face] })
     }
-    w.c = tint(col, 1.1)
+    w.c = shade(col, 1.1)
     w.face = MAT.plain
     for (const sg of [1, -1]) {
       const o = sg * (half + 0.05)
@@ -147,7 +147,7 @@ function stoneBridge(c: WCtx, sp: Span, col: RGB, face: number, shape: ArchShape
       sweep(w, sts, sg > 0 ? [[o, 0.95], [o, 1.07], [i, 1.07], [i, 0.95]] : [[i, 0.95], [i, 1.07], [o, 1.07], [o, 0.95]], { loop: true, caps: true })
     }
     // 护墙的两头各收在一座方墩上（墩脚埋进引道），护墙不以截断面收尾
-    w.c = tint(col, 1.04)
+    w.c = shade(col, 1.04)
     w.face = face
     for (const x of [-ext + 0.3, L + ext - 0.3]) {
       const y = deck(x)
@@ -161,7 +161,7 @@ function stoneBridge(c: WCtx, sp: Span, col: RGB, face: number, shape: ArchShape
     }
   } else {
     // 望柱栏板：薄的栏板、一根根带柱头的望柱
-    const lc = tint(col, 1.22)
+    const lc = shade(col, 1.22)
     w.c = lc
     w.face = MAT.plain
     for (const sg of [1, -1]) {
@@ -224,7 +224,7 @@ function timberBridge(c: WCtx, sp: Span, sacred: boolean) {
   const wood = sacred ? VERMILION : TIMBER
   const dark = sacred ? hex('#8f2a1c') : TIMBER_DARK
   // 桥板：板缝横穿桥向
-  w.c = sacred ? hex('#6b4a36') : tint(TIMBER, 1.25)
+  w.c = sacred ? hex('#6b4a36') : shade(TIMBER, 1.25)
   w.face = MAT.plank
   for (let i = 0; i + 1 < sts.length; i++) {
     const A = sts[i]
@@ -325,7 +325,7 @@ export function crossing(c: WCtx, x: Settlement['crossings'][number]) {
   const lowest = Math.min(ya, yb)
   const riseK = culture === 'eastern' ? 0.11 : 0.075
   const rise = Math.max(Math.max(0.6, 2.3 - lowest), Math.min(L * riseK, culture === 'eastern' ? 4.2 : 3.2))
-  const col = culture === 'eastern' ? tint(STONE_EAST, 1.12) : culture === 'islamic' ? ADOBE : STONE
+  const col = culture === 'eastern' ? shade(STONE_EAST, 1.12) : culture === 'islamic' ? ADOBE : STONE
   const face = culture === 'islamic' ? MAT.brick : MAT.stone
   stoneBridge(c, { a: x.a, b: x.b, half, ya, yb, rise: Math.min(rise, L * 0.2), ...river }, col, face, culture === 'islamic' ? 'pointed' : 'round', culture === 'eastern' ? 'balustrade' : 'parapet')
 }
@@ -348,6 +348,6 @@ export function moatBridge(c: WCtx, wall: Wall, b: { p: P; angle: number }) {
   const low = Math.min(ya, yb)
   const sp: Span = { a, b: e, half: 3.1, ya, yb, rise: 0.45, bed: low - 4.2, spring: low - 2.2 }
   if (culture === 'wa') return timberBridge(c, sp, false)
-  const col = culture === 'eastern' ? tint(STONE_EAST, 1.12) : culture === 'islamic' ? ADOBE : STONE
+  const col = culture === 'eastern' ? shade(STONE_EAST, 1.12) : culture === 'islamic' ? ADOBE : STONE
   stoneBridge(c, sp, col, culture === 'islamic' ? MAT.brick : MAT.stone, culture === 'islamic' ? 'pointed' : 'round', culture === 'eastern' ? 'balustrade' : 'parapet')
 }

@@ -7,9 +7,9 @@
  */
 import { pointInPoly, type P } from '../../settlement/geom'
 import type { Culture, Settlement, Wall } from '../../settlement/types'
-import { MAT, hip, irimoya, shade, type Frame, type RGB } from './mesh'
+import { MAT, hip, irimoya, mixRGB, shade, type Frame, type RGB } from './mesh'
 import { ADOBE, LACQUER, PLASTER, STONE, STONE_EAST, TILE_DARK, TIMBER, TIMBER_DARK, hex, type Ctx, type Height } from './shared'
-import { LO, archFace, archOutline, axUV, beam, box, cbox, crenels, hash, l3, lp, mixC, placeArch, pyramid, ringUnder, stationsOf, sweep, tint, tube, vault, type Ax, type Station } from './worksMesh'
+import { LO, archFace, archOutline, axUV, beam, box, cbox, crenels, hash, l3, lp, placeArch, pyramid, ringUnder, stationsOf, sweep, tube, vault, type Ax, type Station } from './worksMesh'
 import { gate, gateHalf } from './gates'
 
 /** 构筑物的上下文：在建筑的上下文之外，另带聚落本身、到水距离与路网查询 */
@@ -65,21 +65,6 @@ export function roadIndex(st: Settlement): WCtx['road'] {
   }
 }
 
-/** 到水距离场的双线性取样 */
-export function waterSampler(t: Settlement['terrain']): Height {
-  const { W, H, cell, water } = t
-  return (x, z) => {
-    const fx = Math.min(W - 1.001, Math.max(0, x / cell))
-    const fz = Math.min(H - 1.001, Math.max(0, z / cell))
-    const i = Math.floor(fx)
-    const j = Math.floor(fz)
-    const u = fx - i
-    const v = fz - j
-    const k = j * W + i
-    return (water[k] * (1 - u) + water[k + 1] * u) * (1 - v) + (water[k + W] * (1 - u) + water[k + W + 1] * u) * v
-  }
-}
-
 /** 一道墙的形制：按文明与墙厚定 */
 export interface WallLook {
   culture: Culture
@@ -116,10 +101,10 @@ export function wallLook(culture: Culture, wall: Wall): WallLook {
   const k = Math.max(0.72, Math.min(1.05, 0.55 + th * 0.1))
   const base = { culture, stone, half: th / 2, s, pT: 0.5, mCap: 'flat' as const }
   if (!stone) return { ...base, hgt: 4.2, col: TIMBER, face: MAT.board, batter: 0, parapet: 0, merlon: 0, mLen: 0, mGap: 0, inner: 0, pave: TIMBER }
-  if (culture === 'eastern') return { ...base, hgt: 11 * k, col: BRICK_GREY, face: MAT.brick, batter: 1.0 * k, parapet: 0.9, merlon: 0.8, mLen: 1.5, mGap: 0.55, inner: 1.0, pave: tint(STONE_EAST, 0.95) }
+  if (culture === 'eastern') return { ...base, hgt: 11 * k, col: BRICK_GREY, face: MAT.brick, batter: 1.0 * k, parapet: 0.9, merlon: 0.8, mLen: 1.5, mGap: 0.55, inner: 1.0, pave: shade(STONE_EAST, 0.95) }
   if (culture === 'wa') return { ...base, hgt: 4.6 * k, col: WA_STONE, face: MAT.stone, batter: 1.3 * k, parapet: 0, merlon: 0, mLen: 0, mGap: 0, inner: 0, pave: hex('#9a927c') }
-  if (culture === 'islamic') return { ...base, hgt: 9.5 * k, col: ADOBE, face: MAT.plaster, batter: 0.5, parapet: 0.8, merlon: 0.85, mLen: 0.95, mGap: 0.7, mCap: 'point', inner: 0.75, pave: tint(ADOBE, 0.88) }
-  return { ...base, hgt: 9 * k, col: STONE, face: MAT.stone, batter: 0.35, parapet: 1.0, merlon: 0.9, mLen: 1.35, mGap: 0.9, inner: 0.9, pave: tint(STONE, 0.9) }
+  if (culture === 'islamic') return { ...base, hgt: 9.5 * k, col: ADOBE, face: MAT.plaster, batter: 0.5, parapet: 0.8, merlon: 0.85, mLen: 0.95, mGap: 0.7, mCap: 'point', inner: 0.75, pave: shade(ADOBE, 0.88) }
+  return { ...base, hgt: 9 * k, col: STONE, face: MAT.stone, batter: 0.35, parapet: 1.0, merlon: 0.9, mLen: 1.35, mGap: 0.9, inner: 0.9, pave: shade(STONE, 0.9) }
 }
 
 /** 一段连续的墙（开口的折线，或整圈闭合）；g0 / g1：起点、终点是城门 */
@@ -339,7 +324,7 @@ function stoneRun(c: WCtx, look: WallLook, pts: P[], closed: boolean) {
   if (look.inner > 0) sweep(w, sts, [[-half + 0.32, hgt], [-half + 0.32, hgt + look.inner], [-half, hgt + look.inner], [-half, hgt]], { caps })
   // 东方城墙：墙顶外沿一道挑出的砖檐
   if (look.culture === 'eastern') {
-    w.c = tint(look.col, 0.86)
+    w.c = shade(look.col, 0.86)
     sweep(w, sts, [[half + 0.12, hgt - 0.28], [half + 0.12, hgt], [half, hgt]], { faces: [MAT.brick, MAT.plain], caps: false })
     sweep(w, sts, [[half, hgt - 0.28], [half + 0.12, hgt - 0.28]], { faces: [MAT.plain], caps: false })
   }
@@ -362,10 +347,10 @@ function palisadeRun(c: WCtx, pts: P[], closed: boolean, pitch: number) {
     const hsh = hash(x, z, 1)
     w.at(x, z)
     w.base = s.g - 0.6
-    w.c = tint(TIMBER, 0.82 + hash(x, z, 2) * 0.4)
+    w.c = shade(TIMBER, 0.82 + hash(x, z, 2) * 0.4)
     const top = s.g + 3.9 + hsh * 0.5
     tube(w, s.p, r, r * 0.92, s.lo, top, 4, { arc: [hsh * 6.28, hsh * 6.28 + Math.PI * 2] })
-    w.c = tint(TIMBER, 1.25)
+    w.c = shade(TIMBER, 1.25)
     tube(w, s.p, r * 0.92, 0, top, top + 0.5, 4, { arc: [hsh * 6.28, hsh * 6.28 + Math.PI * 2] })
   }
   // 内侧的横木
@@ -485,7 +470,7 @@ export function drum(c: Ctx, ctr: P, R: number, lo: number, g: number, top: numb
   tube(w, ctr, R, R, g + 2.6, top - 0.7, n)
   // 挑出的一圈（托着垛台）
   const Rc = R + 0.4
-  w.c = tint(look.col, 0.9)
+  w.c = shade(look.col, 0.9)
   tube(w, ctr, R, Rc, top - 0.7, top, n)
   w.c = look.col
   if (roofed) {
@@ -634,7 +619,7 @@ function tower(c: WCtx, look: WallLook, f: Ax, R: number, roofed: boolean) {
   if (hash(t[0], t[1], 5) < 0.5) {
     const a = ht * 0.62
     const b = hs * 0.55
-    w.c = mixC(look.col, hex('#6f6a64'), 0.3)
+    w.c = mixRGB(look.col, hex('#6f6a64'), 0.3)
     w.face = MAT.brick
     box(w, ff, -b, b, -a, a, top, top + 3.2, { top: false })
     w.roofFace = MAT.tileEast
@@ -779,12 +764,12 @@ export function enclosure(c: WCtx, ring: P[]) {
       }
     }
   } else if (kind === 'tall') {
-    const body = mixC(hex('#dccaa4'), hex('#e8dbbd'), hash(cx, cz, 9))
+    const body = mixRGB(hex('#dccaa4'), hex('#e8dbbd'), hash(cx, cz, 9))
     w.c = body
     sweep(w, sts, [[half + 0.06, LO], [half, hgt]], { faces: [MAT.plaster], caps: false })
     sweep(w, sts, [[-half, hgt], [-half - 0.06, LO]], { faces: [MAT.plaster], caps: false })
     // 墙顶一道略挑出的压顶
-    w.c = tint(body, 0.92)
+    w.c = shade(body, 0.92)
     sweep(w, sts, [[half + 0.06, hgt], [half + 0.06, hgt + 0.16], [-half - 0.06, hgt + 0.16], [-half - 0.06, hgt]], { faces: [MAT.plain, MAT.plain, MAT.plain], caps })
   } else if (kind === 'hedge') {
     // 树篱：修剪成梯形截面的一道绿篱
@@ -812,10 +797,10 @@ export function enclosure(c: WCtx, ring: P[]) {
     }
   } else {
     // 西式的石墙：毛石墙身、挑出的压顶石
-    w.c = tint(STONE, 0.92 + hash(cx, cz, 9) * 0.14)
+    w.c = shade(STONE, 0.92 + hash(cx, cz, 9) * 0.14)
     sweep(w, sts, [[half + 0.04, LO], [half, hgt]], { faces: [MAT.stone], caps: false })
     sweep(w, sts, [[-half, hgt], [-half - 0.04, LO]], { faces: [MAT.stone], caps: false })
-    w.c = tint(STONE, 1.08)
+    w.c = shade(STONE, 1.08)
     sweep(w, sts, [[half + 0.07, hgt - 0.02], [half + 0.07, hgt + 0.08], [0, hgt + 0.2], [-half - 0.07, hgt + 0.08], [-half - 0.07, hgt - 0.02]], { faces: [MAT.plain, MAT.plain, MAT.plain, MAT.plain], caps })
   }
   if (gf) fenceGate(c, gf, gw, hgt, half, kind, big)
@@ -888,7 +873,7 @@ function fenceGate(c: WCtx, f: Ax, gw: number, hgt: number, half: number, kind: 
     return
   }
   // 石墙的门：方石门柱（柱帽），一半的院子装着木门
-  w.c = tint(STONE, 1.05)
+  w.c = shade(STONE, 1.05)
   w.face = MAT.stone
   for (const sg of [-1, 1]) {
     const pf = { o: lp(f, 0, sg * gw), u: f.u, v: f.v }

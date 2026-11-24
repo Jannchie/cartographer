@@ -11,15 +11,13 @@ import type { Settlement, Wall } from '../../settlement/types'
 import { NEVER, Writer, type TownChunk } from './mesh'
 import { facades } from './facade'
 import { building } from './buildings'
-import { cityWall, enclosure, roadIndex, waterSampler, type WCtx } from './works'
+import { cityWall, enclosure, roadIndex, type WCtx } from './works'
 import { crossing, moatBridge } from './bridges'
 import { boat, pier } from './harbor'
 import { fieldProps, landmarkProp, propBuilding, propIndex, rock, wonder } from './props'
-import { heightSampler, hex } from './shared'
+import { heightSampler, hex, waterSampler } from './shared'
 import { treeInstances, type TreeBuild } from './vegetation'
 import { terrainMesh, type TerrainMesh } from './relief'
-
-export { heightSampler }
 
 /** Worker 回传的沙盘数据（数组均可转移） */
 export interface TownBuild {

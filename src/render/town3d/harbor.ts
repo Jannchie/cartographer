@@ -7,9 +7,9 @@
  * 阿拉伯三角帆船（斜桁三角帆、前倾的艏柱）。帆或张或收，按位置哈希。纯函数，在 Worker 中运行。
  */
 import { obb, type P } from '../../settlement/geom'
-import { MAT, type RGB, type V3 } from './mesh'
+import { MAT, shade, type RGB, type V3 } from './mesh'
 import { STONE, STONE_EAST, TIMBER, TIMBER_DARK, hex } from './shared'
-import { axUV, axOf, beam, box, hash, l3, loft, lp, stationsOf, sweep, tint, tube, type Ax } from './worksMesh'
+import { axUV, axOf, beam, box, hash, l3, loft, lp, stationsOf, sweep, tube, type Ax } from './worksMesh'
 import type { WCtx } from './works'
 
 /** 码头面的高度（水面在 0 附近） */
@@ -25,7 +25,7 @@ export function jetty(c: WCtx, poly: P[], top = DECK) {
   w.at(o.center[0], o.center[1])
   w.base = -1
   // 桥板：板缝横穿栈桥
-  w.c = tint(TIMBER, 1.3)
+  w.c = shade(TIMBER, 1.3)
   w.face = MAT.plank
   w.uvOf = (p) => [(p[0] - f.o[0]) * f.u[0] + (p[2] - f.o[1]) * f.u[1], 0, 0]
   box(w, f, -hs, hs, -ht, ht, top - 0.12, top, { bottom: true })
@@ -41,7 +41,7 @@ export function jetty(c: WCtx, poly: P[], top = DECK) {
     for (const sg of [-1, 1]) {
       const q = lp(f, s, sg * (ht - 0.02))
       const moor = (i + (sg > 0 ? 0 : 1)) % 2 === 0 && c.water(q[0], q[1]) < 1
-      w.c = tint(TIMBER_DARK, 0.9 + hash(q[0], q[1], 1) * 0.3)
+      w.c = shade(TIMBER_DARK, 0.9 + hash(q[0], q[1], 1) * 0.3)
       tube(w, q, 0.15, 0.13, -3, top + (moor ? 0.6 : -0.1), 6, { cap: true })
     }
     // 桩间的横梁
@@ -59,7 +59,7 @@ function platform(c: WCtx, poly: P[], top: number) {
   const { w } = c
   const ring = orient(poly)
   const o = obb(poly)
-  w.c = tint(TIMBER, 1.3)
+  w.c = shade(TIMBER, 1.3)
   w.face = MAT.plank
   w.uvOf = (p) => [(p[0] - o.center[0]) * o.axis[0] + (p[2] - o.center[1]) * o.axis[1], 0, 0]
   for (let i = 1; i + 1 < ring.length; i++) w.triOut([ring[0][0], top, ring[0][1]], [ring[i][0], top, ring[i][1]], [ring[i + 1][0], top, ring[i + 1][1]], [0, 1, 0])
@@ -106,11 +106,11 @@ function quay(c: WCtx, poly: P[], top: number, col: RGB) {
   w.c = col
   w.face = MAT.stone
   sweep(w, sts, [[0.12, -4], [0, 0]], { chunk: false })
-  w.c = tint(col, 0.92)
+  w.c = shade(col, 0.92)
   w.face = MAT.paving
   for (let i = 1; i + 1 < ring.length; i++) w.triOut([ring[0][0], top, ring[0][1]], [ring[i][0], top, ring[i][1]], [ring[i + 1][0], top, ring[i + 1][1]], [0, 1, 0])
   // 压顶石：略高出台面的一圈
-  w.c = tint(col, 1.1)
+  w.c = shade(col, 1.1)
   w.face = MAT.plain
   sweep(w, sts, [[0.06, -0.16], [0.06, 0.1], [-0.42, 0.1], [-0.42, 0]], { chunk: false })
   sweep(w, sts, [[0, -0.16], [0.06, -0.16]], { chunk: false })
@@ -143,7 +143,7 @@ export function pier(c: WCtx, poly: P[]) {
   w.base = -1
   if (poly.length === 4 && o.wid <= 5.2 && o.len >= o.wid * 2.2) return jetty(c, poly)
   if (culture === 'wa') return platform(c, poly, DECK)
-  quay(c, poly, DECK, culture === 'eastern' ? tint(STONE_EAST, 1.1) : culture === 'islamic' ? hex('#bfae90') : STONE)
+  quay(c, poly, DECK, culture === 'eastern' ? shade(STONE_EAST, 1.1) : culture === 'islamic' ? hex('#bfae90') : STONE)
 }
 
 // —————————————————————— 船 ——————————————————————
@@ -220,10 +220,10 @@ function hull(c: WCtx, f: Ax, h: HullSpec): Hull {
     const s0 = sheer(u0)
     const s1 = sheer(u1)
     for (const sg of [-1, 1]) {
-      w.c = tint(h.col, 0.7)
+      w.c = shade(h.col, 0.7)
       w.face = MAT.plain
       w.quadOut(at(u0, sg * b0, s0), at(u1, sg * b1, s1), at(u1, sg * d1, s1), at(u0, sg * d0, s0), [0, 1, 0])
-      w.c = tint(h.col, 1.15)
+      w.c = shade(h.col, 1.15)
       w.face = MAT.board
       w.quadOut(at(u0, sg * d0, deckY(u0)), at(u1, sg * d1, deckY(u1)), at(u1, sg * d1, s1), at(u0, sg * d0, s0), [-f.v[0] * sg, 0, -f.v[1] * sg])
     }
@@ -240,7 +240,7 @@ function hull(c: WCtx, f: Ax, h: HullSpec): Hull {
   // 艉端的舷墙内面（封板内侧）
   if (h.sternW > 0) {
     const d = Math.max(0, hb(0) - rim)
-    w.c = tint(h.col, 1.15)
+    w.c = shade(h.col, 1.15)
     w.face = MAT.board
     w.quadOut(at(0, -d, deckY(0)), at(0, d, deckY(0)), at(0, d, sheer(0)), at(0, -d, sheer(0)), [f.u[0], 0, f.u[1]])
   }
@@ -356,13 +356,13 @@ export function boat(c: WCtx, b: { p: P; angle: number; len: number }, kind?: 'f
   const hs = hash(b.p[0], b.p[1], 1)
   const hs2 = hash(b.p[0], b.p[1], 2)
   const tar = culture === 'islamic' ? hex('#6f5237') : culture === 'eastern' ? hex('#5b4130') : culture === 'wa' ? hex('#7a6248') : hex('#4b3a2b')
-  const col = tint(tar, 0.88 + hs * 0.3)
-  const deckCol = tint(hex('#a58a62'), 0.9 + hs2 * 0.2)
+  const col = shade(tar, 0.88 + hs * 0.3)
+  const deckCol = shade(hex('#a58a62'), 0.9 + hs2 * 0.2)
 
   if (kind === 'ferry') {
     // 渡船：平底方头，船上横几块坐板
     const h = hull(c, f, { L, beam: L * 0.34, fb: 0.5, draft: 0.25, bow: 0.18, stern: 0.12, sternW: 0.8, bowP: 5, well: 0.4, col, deck: deckCol })
-    w.c = tint(col, 1.2)
+    w.c = shade(col, 1.2)
     w.face = MAT.board
     for (const u of [0.3, 0.5, 0.7]) {
       const bb = h.halfBeam(u) - 0.1
@@ -376,7 +376,7 @@ export function boat(c: WCtx, b: { p: P; angle: number; len: number }, kind?: 'f
     // 小艇、舢板：敞口，坐板；东方的舢板带一段席篷
     const blunt = culture === 'eastern' || culture === 'wa'
     const h = hull(c, f, { L, beam: L * (blunt ? 0.27 : 0.3), fb: 0.48, draft: 0.3, bow: blunt ? 0.2 : 0.32, stern: 0.14, sternW: blunt ? 0.75 : 0.5, bowP: blunt ? 3.2 : 2, well: 0.42, col, deck: deckCol })
-    w.c = tint(col, 1.25)
+    w.c = shade(col, 1.25)
     w.face = MAT.board
     for (const u of culture === 'eastern' ? [0.22, 0.82] : [0.25, 0.5, 0.74]) {
       const bb = h.halfBeam(u) - 0.1
@@ -432,7 +432,7 @@ export function boat(c: WCtx, b: { p: P; angle: number; len: number }, kind?: 'f
     w.c = hex('#7a4a34')
     w.face = MAT.board
     for (const s of [-L * 0.1, L * 0.1]) w.triOut(l3(cf, s, -cb, cy + 1.5), l3(cf, s, cb, cy + 1.5), l3(cf, s, 0, cy + 1.85), [f.u[0] * s, 0, f.u[1] * s])
-    const sailCol = tint(hex('#8a4f36'), 0.9 + hs2 * 0.25)
+    const sailCol = shade(hex('#8a4f36'), 0.9 + hs2 * 0.25)
     const masts: [number, number, number][] = big ? [[0.5, L * 0.78, L * 0.36], [0.76, L * 0.55, L * 0.26]] : [[0.52, L * 0.72, L * 0.34]]
     for (const [u, mh, sw] of masts) {
       const foot = h.at(u, 0, h.deckY(u))
@@ -458,9 +458,9 @@ export function boat(c: WCtx, b: { p: P; angle: number; len: number }, kind?: 'f
     const cb = h.halfBeam(cu) - 0.2
     const cy = h.deckY(cu)
     const cf = { o: lp(f, (cu - 0.5) * L, 0), u: f.u, v: f.v }
-    w.c = tint(TIMBER, 1.2)
+    w.c = shade(TIMBER, 1.2)
     w.face = MAT.board
-    box(w, cf, -L * 0.09, L * 0.09, -cb, cb, cy, cy + 1.1, { topFace: MAT.plank, topCol: tint(TIMBER, 1.4) })
+    box(w, cf, -L * 0.09, L * 0.09, -cb, cb, cy, cy + 1.1, { topFace: MAT.plank, topCol: shade(TIMBER, 1.4) })
     const u = 0.47
     const foot = h.at(u, 0, h.deckY(u))
     const mh = L * 0.8
@@ -501,7 +501,7 @@ export function boat(c: WCtx, b: { p: P; angle: number; len: number }, kind?: 'f
       const y = h.sheer(um) + 0.75
       const cf = { o: lp(f, (um - 0.5) * L, 0), u: f.u, v: f.v }
       const hl = ((u1 - u0) * L) / 2
-      w.c = tint(col, 1.25)
+      w.c = shade(col, 1.25)
       w.face = MAT.board
       box(w, cf, -hl, hl, -cb, cb, h.deckY(um) + 0.02, y, { topFace: MAT.plank, topCol: deckCol })
       for (const sg of [-1, 1]) {
@@ -515,10 +515,10 @@ export function boat(c: WCtx, b: { p: P; angle: number; len: number }, kind?: 'f
   const mh = L * (big ? 0.82 : 0.7)
   const top: V3 = [foot[0], foot[1] + mh, foot[2]]
   mast(c, foot, top, L * 0.013 + 0.07)
-  squareSail(c, f, [foot[0], foot[1] + mh * 0.86, foot[2]], L * 0.27, mh * 0.6, set, tint(CANVAS, 0.92 + hs2 * 0.12), hs < 0.3 ? L * 0.04 : 0)
+  squareSail(c, f, [foot[0], foot[1] + mh * 0.86, foot[2]], L * 0.27, mh * 0.6, set, shade(CANVAS, 0.92 + hs2 * 0.12), hs < 0.3 ? L * 0.04 : 0)
   if (big) {
     // 桅顶的瞭望斗
-    w.c = tint(col, 1.2)
+    w.c = shade(col, 1.2)
     w.face = MAT.board
     tube(w, [foot[0], foot[2]], 0.38, 0.5, foot[1] + mh * 0.9, foot[1] + mh * 0.9 + 0.55, 8, { cap: true })
   }

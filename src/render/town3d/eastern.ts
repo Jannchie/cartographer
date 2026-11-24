@@ -4,14 +4,13 @@
  * 生成器的平面是示意性的（正殿可以长达两百米）：过长的殿按"当中正殿、两侧朵殿、其间廊庑"分段，各段各有合乎比例的屋顶。
  * 纯函数，在 Worker 中运行。
  */
+import { clamp } from '../../gen/util'
 import { centroid } from '../../settlement/geom'
 import { DOOR, MAT, STYLE, WIN, annulus, block, cap, circle, crenels, gable, hip, irimoya, parapet, prism, rectOf, ridgeBar, shade, skirt, sub, taper, tent, tube, turned, walls, type Frame, type RGB, type WallFac } from './mesh'
 import { finial, hashOf, peristyle, terrace, type Site } from './kit'
-import type { Group } from './groups'
-import { edgeFacing } from './western'
+import { edgeFacing, type Group } from './groups'
 import { GILT, GREY_BRICK, LACQUER, MARBLE, PALACE_RED, ROOF, STONE_EAST, WHITEWASH, hex, pick, type Ctx } from './shared'
 
-const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x))
 /** 民居与一般厅堂的木色（门窗、柱） */
 const WOOD = hex('#5e4334')
 /** 寺观的黄墙 */

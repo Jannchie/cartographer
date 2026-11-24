@@ -3,6 +3,7 @@
  * 神社的本殿（高床、桧皮葺的切妻顶、千木与鲣木）与拜殿，天守（石垣、层层收分的白壁与出檐、千鸟破风、鯱）、
  * 橹、五重塔与鸟居。纯函数，在 Worker 中运行。
  */
+import { clamp } from '../../gen/util'
 import { centroid, type P } from '../../settlement/geom'
 import { DOOR, MAT, STYLE, WIN, at, block, cap, circle, gable, hip, irimoya, lathe, prism, rectOf, shade, skirt, slab, strip, sub, taper, tent, tube, walls, type Frame, type RGB } from './mesh'
 import { finial, hashOf, pent, type Site } from './kit'
@@ -10,7 +11,6 @@ import { hallEA, podium } from './eastern'
 import { mid, type Group } from './groups'
 import { GILT, PLASTER, ROOF, STONE, TIMBER_DARK, VERMILION, WALL, WOOD_DARK, WOOD_WA, hex, pick, type Ctx } from './shared'
 
-const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x))
 /** 石垣的石色 */
 const ISHIGAKI = hex('#8c877c')
 /** 天守的下见板（黑漆的木板壁） */

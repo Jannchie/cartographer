@@ -8,9 +8,9 @@
  * 门道都是贯通的空洞（墙面开洞、内壁与拱顶另做），从门洞里能看穿。纯函数，在 Worker 中运行。
  */
 import type { P } from '../../settlement/geom'
-import { MAT, hip, irimoya, shade, type RGB } from './mesh'
+import { MAT, hip, irimoya, mixRGB, shade, type RGB } from './mesh'
 import { LACQUER, PLASTER, TILE_DARK, TIMBER, TIMBER_DARK, hex } from './shared'
-import { archFace, archOutline, archRing, axUV, beam, box, l3, lp, mixC, placeArch, tint, tube, vault, type ArchShape, type Ax, type Opening } from './worksMesh'
+import { archFace, archOutline, archRing, axUV, beam, box, l3, lp, placeArch, tube, vault, type ArchShape, type Ax, type Opening } from './worksMesh'
 import { bastion, battlement, drum, outRing, roofFrame, type WCtx, type WallLook } from './works'
 
 /** 城门沿墙的半宽：墙段在离门心这么远处收住（略伸进门楼里） */
@@ -119,17 +119,17 @@ export function gate(c: WCtx, look: WallLook, f: Ax) {
     const spring = 3.0 * s
     const hole = archBlock(c, f, hwB, hd, yb, top, 'pointed', phw, g, spring, { topCol: look.pave })
     // 拱圈：门洞内外口各一圈浅色的券石
-    w.c = tint(look.col, 1.12)
+    w.c = shade(look.col, 1.12)
     w.face = MAT.plain
     for (const sg of [1, -1]) archRing(w, lp(f, sg * hd, 0), f.v, [f.u[0] * sg, f.u[1] * sg], hole, 0.42, 0.1)
     w.c = look.col
     w.face = look.face
     // 门楼顶的女墙与垛；外口上方一道挑出的线脚
     battlement(c, outRing(f, hd, hwB), top, look)
-    w.c = tint(look.col, 0.88)
+    w.c = shade(look.col, 0.88)
     box(w, f, hd, hd + 0.14, -hwB, hwB, top - 0.5, top - 0.2, { bottom: true })
     // 外口上方的徽板
-    w.c = tint(look.col, 1.15)
+    w.c = shade(look.col, 1.15)
     w.face = MAT.plain
     box(w, f, hd, hd + 0.08, -0.55 * s, 0.55 * s, g + spring + phw * 1.22 + 0.9 * s, g + spring + phw * 1.22 + 2.3 * s, { bottom: true })
     // 两座圆塔
@@ -291,7 +291,7 @@ export function gate(c: WCtx, look: WallLook, f: Ax) {
   const spring = 3.2 * s
   const fo = { o: lp(f, 1.2 * s, 0), u: f.u, v: f.v }
   const hole = archBlock(c, fo, hwB, hd, yb, top, 'horseshoe', phw, g, spring, { topCol: look.pave })
-  const light = mixC(look.col, hex('#efe6d0'), 0.75)
+  const light = mixRGB(look.col, hex('#efe6d0'), 0.75)
   const tile = hex('#3d7f86')
   for (const sg of [1, -1]) {
     const o = lp(fo, sg * hd, 0)
@@ -359,7 +359,7 @@ function timberGate(c: WCtx, f: Ax, g: number, yb: number) {
   for (const sg of [-1, 1]) {
     for (let k = 0; k < 2; k++) {
       const q = lp(f, 0, sg * (phw + 0.25 + 0.38 * (k + 0.2)))
-      w.c = tint(TIMBER, 0.9 + k * 0.15)
+      w.c = shade(TIMBER, 0.9 + k * 0.15)
       w.face = MAT.plain
       tube(w, q, 0.21, 0.19, yb, g + 4.1, 4)
       tube(w, q, 0.19, 0, g + 4.1, g + 4.6, 4)
