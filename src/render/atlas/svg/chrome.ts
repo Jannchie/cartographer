@@ -4,7 +4,8 @@ import { compassSpot, marginOf } from '../index'
 import { themeById, themeCjk, type StyleId, type Theme } from '../styles'
 import { DisplayList } from './displayList'
 import { Recorder } from './recorder'
-import type { Box, Inset } from './viewer'
+import { chromeFit, chromeTop, type InsetOf } from './inset'
+import type { Box } from './viewer'
 
 /**
  * 世界纸图在浏览器里的图廓层（AtlasViewer 的图框模式）：纸边、图框与经纬刻度、标题、指北针、比例尺、图例、悬停读数
@@ -13,13 +14,18 @@ import type { Box, Inset } from './viewer'
 
 /** 图廓件的尺寸倍率（相当于整页排版里的 S；k = S / 2 是线宽字号的倍率） */
 const CHROME_S = 2
-/** 纸边宽：比整页排版的留白略窄（舞台上寸土寸金），仍放得下经纬度边注 */
-const rimOf = (theme: Theme) => marginOf(theme, 1.6)
+/** 纸边宽：比整页排版的留白略窄（舞台上寸土寸金），仍放得下经纬度边注；窄舞台上再收紧 */
+const rimOf = (theme: Theme, w: number) => Math.round(marginOf(theme, 1.6) * chromeFit(w))
 
-/** 图框内框离舞台四边的最小距离：外面一圈纸边，上边让出视图切换的纸签，下边让出操作提示 */
-export function atlasFrameInset(style: StyleId): Inset {
-  const R = rimOf(themeById(style))
-  return { t: 34 + R, r: 22 + R, b: 46 + R, l: 22 + R }
+/** 图框内框离舞台四边的最小距离：外面一圈纸边，上边让出视图切换的纸签，下边让出操作提示（窄屏不显示提示） */
+export function atlasFrameInset(style: StyleId): InsetOf {
+  const theme = themeById(style)
+  return (w) => {
+    const R = rimOf(theme, w)
+    const f = chromeFit(w)
+    const side = Math.round(8 + 14 * f) + R
+    return { t: chromeTop(w) + R, r: side, b: Math.round(20 + 26 * f) + R, l: side }
+  }
 }
 
 /** 图框里、地图范围以外的底色 */
@@ -67,7 +73,7 @@ export function buildAtlasChrome(
   const k = S / 2
   const paper = atlasBackdrop(style)
   // 纸：内框外的一圈
-  const R = rimOf(theme)
+  const R = rimOf(theme, w)
   if (R > 0) {
     const band = (a: number, b: number, c: number, d: number) => `M${a} ${b}H${c}V${d}H${a}Z`
     const [x0, y0, x1, y1] = [X - R, Y - R, X + FW + R, Y + FH + R]

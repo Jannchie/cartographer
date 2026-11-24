@@ -75,8 +75,8 @@ const hint = computed(() =>
     <div ref="ve" class="view edit-view" :class="{ hidden: ws.mode !== 'edit' }"></div>
     <div class="neatline" aria-hidden="true"></div>
     <nav class="tabs" role="tablist">
-      <button v-for="m in MODES" :key="m.id" type="button" role="tab" :aria-selected="stageTab === m.id" :class="{ on: stageTab === m.id }" @click="setMode(m.id)">
-        <Icon :icon="m.icon" :size="16" />{{ t(m.label) }}
+      <button v-for="m in MODES" :key="m.id" type="button" role="tab" :aria-selected="stageTab === m.id" :class="{ on: stageTab === m.id }" :title="t(m.label)" @click="setMode(m.id)">
+        <Icon :icon="m.icon" :size="16" /><span>{{ t(m.label) }}</span>
       </button>
     </nav>
     <Transition name="fade">
