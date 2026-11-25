@@ -43,7 +43,8 @@ export async function readPublicGz(path: string): Promise<ArrayBuffer> {
   if (typeof window === 'undefined' && nodeProcess?.versions?.node) {
     const fs = 'node:fs/promises'
     const { readFile } = (await import(/* @vite-ignore */ fs)) as { readFile: (u: URL) => Promise<Uint8Array> }
-    body = new Uint8Array(await readFile(new URL(`../../../public/${path}`, import.meta.url)))
+    // 只在 Node 下走到这里。不加 @vite-ignore 的话，Vite 会把带模板的 new URL 展开成对 public/ 全部文件的 ?url 导入
+    body = new Uint8Array(await readFile(new URL(/* @vite-ignore */ `../../../public/${path}`, import.meta.url)))
   } else {
     const res = await fetch(`${import.meta.env.BASE_URL}${path}`)
     if (!res.ok) throw new Error(`真实地球数据加载失败：${path}（${res.status}）`)
