@@ -1,5 +1,5 @@
 import { Biome, reliefKm, type World } from '../../gen/types'
-import { sampleField, smoothstep } from '../../gen/util'
+import { blur, sampleField, smoothstep } from '../../gen/util'
 import type { RGB } from '../palette'
 
 export function hash(x: number, y: number) {
@@ -114,17 +114,35 @@ export class Fields {
     const r = new Float32Array(N)
     const g = new Float32Array(N)
     const b = new Float32Array(N)
-    const bio = this.world.biome
+    const { biome: bio, temperature: T, elevation: e } = this.world
+    const cold = palette[Biome.ColdDesert]
+    const hot = palette[Biome.HotDesert]
+    // 群系沿气候带的等值线划分，平原上常是近乎笔直的长线：取色时把陆地格的取样位置低频扰动几格，边界随之弯曲
+    const amp = ecotoneRadius(W) * 4
+    const cell = ecotoneRadius(W) * 10
+    const warpable = (k: number) => e[k] > 0 && bio[k] !== Biome.Lake && bio[k] !== Biome.Beach
     for (let i = 0; i < N; i++) {
-      let col = palette[bio[i]]
+      let src = i
+      if (warpable(i)) {
+        const x = i % W
+        const y = (i - x) / W
+        const sx = Math.round(x + (fnoise(x, y, cell) - 0.5) * 2 * amp)
+        const sy = Math.round(y + (fnoise(x + 1931, y - 777, cell) - 0.5) * 2 * amp)
+        const j = sy * W + sx
+        if (sx >= 0 && sx < W && sy >= 0 && sy < H && warpable(j)) src = j
+      }
+      let col = palette[bio[src]]
+      // 冷、热沙漠按年均温阈值划分，平原上等温线近乎纬线：按温度连续插值，免得出现一条笔直的色带接缝
+      if (bio[src] === Biome.ColdDesert || bio[src] === Biome.HotDesert) {
+        const k = smoothstep(7, 17, T[src])
+        col = [cold[0] + (hot[0] - cold[0]) * k, cold[1] + (hot[1] - cold[1]) * k, cold[2] + (hot[2] - cold[2]) * k]
+      }
       if (tweak) col = tweak(col, i)
       r[i] = col[0]
       g[i] = col[1]
       b[i] = col[2]
     }
-    feather(r, W, H)
-    feather(g, W, H)
-    feather(b, W, H)
+    featherBiomes([r, g, b], this.world)
     c = [r, g, b]
     this.colorCache.set(key, c)
     return c
@@ -187,20 +205,32 @@ export class Fields {
   }
 }
 
-export function feather(a: Float32Array, W: number, H: number) {
-  const t = new Float32Array(a.length)
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = y * W + x
-      t[i] = a[i] * 0.5 + ((x > 0 ? a[i - 1] : a[i]) + (x < W - 1 ? a[i + 1] : a[i])) * 0.25
-    }
-  }
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = y * W + x
-      a[i] = t[i] * 0.5 + ((y > 0 ? t[i - W] : t[i]) + (y < H - 1 ? t[i + W] : t[i])) * 0.25
-    }
-  }
+/** 群系过渡带的羽化半径（格）：群系由气候阈值逐格判定，不羽化时相邻群系之间是硬边 */
+export const ecotoneRadius = (W: number) => Math.max(1, Math.round(W / 512))
+
+/**
+ * 归一化卷积：只在 mask 为 1 的格之间模糊，mask 两侧的颜色互不渗透。
+ * 返回新数组；mask 外、但在半径内的格得到 mask 内颜色的外推值（供岸线处双线性采样），更远的格保留原值。
+ */
+export function maskedBlur(ch: Float32Array[], mask: Float32Array, W: number, H: number, radius: number, passes = 2): Float32Array[] {
+  const den = blur(Float32Array.from(mask), W, H, radius, passes)
+  return ch.map((c) => {
+    const num = blur(c.map((v, i) => v * mask[i]), W, H, radius, passes)
+    return num.map((v, i) => (den[i] > 1e-4 ? v / den[i] : c[i]))
+  })
+}
+
+/** 陆地与水域分开羽化后按格拼回：岸线两侧颜色互不渗透，群系之间渐变 */
+export function featherBiomes(ch: Float32Array[], world: World) {
+  const { W, H, elevation: e, biome } = world
+  const land = new Float32Array(W * H)
+  for (let i = 0; i < land.length; i++) land[i] = e[i] > 0 && biome[i] !== Biome.Lake ? 1 : 0
+  const r = ecotoneRadius(W)
+  const onLand = maskedBlur(ch, land, W, H, r)
+  const onWater = maskedBlur(ch, land.map((v) => 1 - v), W, H, r)
+  ch.forEach((c, k) => {
+    for (let i = 0; i < c.length; i++) c[i] = land[i] ? onLand[k][i] : onWater[k][i]
+  })
 }
 
 /** 纸张纹理：细颗粒 + 大块晕染 */

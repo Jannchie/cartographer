@@ -1,6 +1,6 @@
 import { Biome, reliefKm, type World } from '../gen/types'
 import { smoothstep } from '../gen/util'
-import { hash } from './atlas/fields'
+import { ecotoneRadius, hash, maskedBlur } from './atlas/fields'
 import { PHYSICAL, seabed } from './palette'
 import { drawRivers, type SmoothRiver } from './rivers'
 
@@ -63,9 +63,10 @@ export function physicalTexturePixels(world: World, scale = 2): TexturePixels {
   // 陆、海分开羽化（归一化卷积），岸线两侧的颜色互不渗透
   const isLand = new Float32Array(N)
   for (let i = 0; i < N; i++) isLand[i] = e[i] > 0 ? 1 : 0
-  const [lr, lg, lb] = maskedBlur([cr, cg, cb], isLand, W, H)
+  const radius = ecotoneRadius(W)
+  const [lr, lg, lb] = maskedBlur([cr, cg, cb], isLand, W, H, radius)
   const isSea = isLand.map((v) => 1 - v)
-  const [sr, sg, sb] = maskedBlur([cr, cg, cb], isSea, W, H)
+  const [sr, sg, sb] = maskedBlur([cr, cg, cb], isSea, W, H, radius)
 
   const TW = W * scale
   const TH = H * scale
@@ -129,34 +130,4 @@ export function physicalTexturePixels(world: World, scale = 2): TexturePixels {
     }
   }
   return { width: TW, height: TH, color: d, roughness: rd }
-}
-
-/** 归一化卷积：只用 mask=1 的格求加权平均，并外推到 mask=0 的格 */
-function maskedBlur(ch: Float32Array[], mask: Float32Array, W: number, H: number): Float32Array[] {
-  const den = Float32Array.from(mask)
-  const nums = ch.map((c) => c.map((v, i) => v * mask[i]))
-  for (let pass = 0; pass < 3; pass++) {
-    for (const a of [den, ...nums]) box3(a, W, H)
-  }
-  return nums.map((n, k) => n.map((v, i) => (den[i] > 1e-4 ? v / den[i] : ch[k][i])))
-}
-
-function box3(a: Float32Array, W: number, H: number) {
-  const t = new Float32Array(a.length)
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = y * W + x
-      const l = x > 0 ? a[i - 1] : a[i]
-      const r = x < W - 1 ? a[i + 1] : a[i]
-      t[i] = a[i] * 0.5 + (l + r) * 0.25
-    }
-  }
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = y * W + x
-      const u = y > 0 ? t[i - W] : t[i]
-      const d = y < H - 1 ? t[i + W] : t[i]
-      a[i] = t[i] * 0.5 + (u + d) * 0.25
-    }
-  }
 }
