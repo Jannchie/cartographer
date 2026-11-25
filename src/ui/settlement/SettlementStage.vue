@@ -64,6 +64,7 @@ const hint = computed(() =>
     <SettlementTimeline />
     <!-- 地图的悬停读数画在图廓里（见 settlement.ts 的 probeCard），沙盘用浮层 -->
     <Probe :data="ss.mode === 'sandbox' ? ss.probe : null" />
+    <button v-if="ss.notice" type="button" class="notice" :title="t('点击关闭')" @click="ss.notice = null">{{ t(ss.notice.text, { id: ss.notice.id }) }}</button>
     <div class="hint">{{ t(hint) }}</div>
     <Loading :show="ss.loading.show" title="正在营建" :stage="ss.loading.stage" />
   </main>

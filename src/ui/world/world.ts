@@ -1,7 +1,7 @@
 import { markRaw, reactive, toRaw, watch } from 'vue'
 import { latitudeOf } from '../../gen/climate'
 import { regionProjection } from '../../gen/earth/region'
-import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits } from '../../app/project'
+import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits, worldRequires } from '../../app/project'
 import { deleteWorld, getMeta, getWorld as getEntry, listWorlds, newWorldId, putMeta, putWorld, renameWorld, type LibraryMeta } from '../../app/library'
 import { EditorView, isSketchTool, type EditTool, type EditView } from '../../editor/editor'
 import { bumpSketch, sketchFromWorld } from '../../gen/sketch'
@@ -24,11 +24,13 @@ import { HOLO_PALETTES } from '../../render/holo/palettes'
 import { LOOKS, QUALITIES, type Look, type QualityId } from '../../render/aerial/looks'
 import { DEFAULT_TIME } from '../../render/aerial/daylight'
 import { buildPhysicalTexture, textureCanvases } from '../../render/texture'
-import type { WorkerIn, WorkerOut } from '../../worker'
+import type { WorkerIn, WorkerInit, WorkerOut } from '../../worker'
 import GenWorker from '../../worker?worker'
 import { defineStrings, lang, onLang, placeName, worldTitle } from '../../i18n'
 import { app, download, initialQuery, registerRoute, paramSig, storeGet, storeSet, syncRoute } from '../app'
 import { t } from '../i18n'
+import { activePlugins } from '../../kernel'
+import { ensurePlugins } from '../plugins'
 import { isTypingTarget } from '../keys'
 import { mapFontsReady } from '../fonts'
 import { bindPanZoom, fitInto } from '../panZoom'
@@ -560,6 +562,8 @@ export function setMode(m: Mode) {
 
 // —— 生成 ——
 const worker = new GenWorker()
+// 第一条消息：启用的插件（线程只建这一次；启用清单改了会重新载入页面）
+worker.postMessage({ init: { plugins: [...activePlugins()] } } satisfies WorkerInit)
 let jobId = 0
 let quietJob = false
 /** Worker 正在算的任务：算完前不再投递（Worker 同步执行，排队的旧任务只会白算一遍） */
@@ -1083,7 +1087,7 @@ function thumbnail(): string {
 
 /** 存进世界库的数据（IndexedDB 的 put 会结构化克隆，存不了响应式代理：参数取原对象） */
 function storable() {
-  return { params: { ...toRaw(ws.params) }, edits, world: world! }
+  return { params: { ...toRaw(ws.params) }, edits, world: world!, requires: worldRequires(world!) }
 }
 
 let flashTimer = 0
@@ -1115,6 +1119,8 @@ export async function saveWorld(asNew = false) {
 export async function openEntry(id: string) {
   const [e, m] = await Promise.all([getEntry(id), getMeta(id)])
   if (!e || !m) return
+  // 用到了没有启用的插件：询问后启用并重新载入，不换成默认内容打开
+  if (!ensurePlugins(e.requires)) return
   loadWorldData(e.params, e.edits, e.world)
   ws.entry = { id, name: m.name }
   ws.library.open = false
@@ -1162,7 +1168,7 @@ const fileName = (name: string) => `${name.replace(/[\\/:*?"<>|\s]+/g, '-').toLo
 export async function exportEntry(id: string) {
   const [e, m] = await Promise.all([getEntry(id), getMeta(id)])
   if (!e || !m) return
-  const text = await serializeProject(e.params, e.edits, e.world, m.name)
+  const text = await serializeProject(e.params, e.edits, e.world, m.name, e.requires ?? worldRequires(e.world))
   download(new Blob([text], { type: 'application/json' }), fileName(m.name))
 }
 
@@ -1170,7 +1176,7 @@ export async function exportEntry(id: string) {
 export async function exportWorldFile() {
   if (!world || ws.busy) return
   const name = ws.entry?.name ?? worldTitle(world)
-  const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world), name)
+  const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world), name, worldRequires(toRaw(world)))
   download(new Blob([text], { type: 'application/json' }), fileName(name))
 }
 
@@ -1182,7 +1188,12 @@ export async function openProject(f: File) {
       const id = newWorldId()
       const name = doc.name ?? worldTitle(doc.world)
       // 先存库再打开（打开时场数据转移给 Worker）；缩略图等贴图画好后再补
-      await putWorld({ id, name, savedAt: Date.now(), thumb: '', seed: doc.params.seed, W: doc.world.W, H: doc.world.H }, { params: doc.params, edits: doc.edits, world: doc.world })
+      await putWorld({ id, name, savedAt: Date.now(), thumb: '', seed: doc.params.seed, W: doc.world.W, H: doc.world.H }, { params: doc.params, edits: doc.edits, world: doc.world, requires: doc.requires })
+      // 用到了没有启用的插件：世界已经存进世界库，启用并重新载入之后从那里打开
+      if (!ensurePlugins(doc.requires)) {
+        if (ws.library.open) await refreshLibrary()
+        return
+      }
       loadWorldData(doc.params, doc.edits, doc.world)
       ws.entry = { id, name }
       pendingThumb = id

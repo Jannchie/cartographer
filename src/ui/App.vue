@@ -8,6 +8,7 @@ import Icon from './kit/Icon.vue'
 import PanelTabs from './kit/PanelTabs.vue'
 import Home from './Home.vue'
 import LangSelect from './LangSelect.vue'
+import Plugins from './Plugins.vue'
 import SettlementPanel from './settlement/SettlementPanel.vue'
 import SettlementStage from './settlement/SettlementStage.vue'
 import * as S from './settlement/settlement'
@@ -121,6 +122,7 @@ watchEffect(() => {
 <template>
   <Home v-show="app.module === 'home'" @open="openLibrary" />
   <Library @import="openFile" />
+  <Plugins />
   <div v-show="app.module !== 'home'" class="app" :class="{ resizing, [`sheet-${sheet.snap.value}`]: narrow, 'sheet-drag': sheet.dragging.value }" :style="appStyle">
     <aside ref="panel" class="panel">
       <!-- 窄屏抽屉的把手：拖动换档，轻点开合 -->

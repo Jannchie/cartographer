@@ -6,6 +6,8 @@
 // - orphan：无因消失——消失时下一帧没有新出现的东西压在它的位置上（房子凭空没了、跑到别处去了）
 // 相邻帧指标：keepB（建筑）、keepR（道路）、keepF（田块）、keepT（树）留下来的比例
 import './lib/canvas'
+// 先启动插件（文明、沙盘套件、城镇文明规则由插件登记，见 src/packs/boot.ts）
+import '../src/packs/all'
 const G: any = await import('../src/settlement/generate')
 const H: any = await import('../src/settlement/history')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')

@@ -6,6 +6,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCanvas, GlobalFonts, loadImage, type Canvas, type Image, type SKRSContext2D } from '@napi-rs/canvas'
 import './lib/canvas'
+// 先启动插件（文明、沙盘套件、城镇文明规则由插件登记，见 src/packs/boot.ts）
+import '../src/packs/all'
 
 const args = process.argv.slice(2)
 const flag = (k: string) => args.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3)

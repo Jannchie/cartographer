@@ -28,6 +28,8 @@ import { writeFileSync } from 'node:fs'
 import type { Building, Road, Settlement, SettlementParams, Tree, Wall } from '../src/settlement/types'
 import type { Life } from '../src/settlement/history'
 import type { P, Poly } from '../src/settlement/geom'
+// 先启动插件（文明、沙盘套件、城镇文明规则由插件登记，见 src/packs/boot.ts）
+import '../src/packs/all'
 
 const { generateHistory } = await import('../src/settlement/generate')
 const { snapshot } = await import('../src/settlement/history')

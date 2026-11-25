@@ -1,6 +1,8 @@
 // 离线预览：node 下跑完整生成流水线，输出简易 PNG 与统计，便于调参
 import { writeFileSync } from 'node:fs'
 import { PNG } from 'pngjs'
+// 先启动插件（文明、沙盘套件、城镇文明规则由插件登记，见 src/packs/boot.ts）
+import '../src/packs/all'
 import { generateWorld } from '../src/gen/world'
 import { DEFAULT_PARAMS, Biome } from '../src/gen/types'
 

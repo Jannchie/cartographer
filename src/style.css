@@ -3088,3 +3088,108 @@ select.lang:hover {
   opacity: 0.4;
   pointer-events: none;
 }
+
+/* ———————————————————— 插件 ———————————————————— */
+.plugins-sheet {
+  width: min(640px, 100%);
+}
+.plugins-note {
+  margin: 14px 0 4px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.plugins-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+.plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.plugin-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.plugin-text strong {
+  font-family: var(--cjk-serif);
+  font-size: 14px;
+  font-weight: 600;
+}
+.plugin-text span {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.plugin-row.off .plugin-text {
+  opacity: 0.55;
+}
+.plugin-warn {
+  font-size: 11.5px;
+  color: #a3412c;
+}
+.plugin-locked,
+.plugin-switch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.plugin-switch {
+  cursor: pointer;
+}
+.plugin-switch input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.plugins-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  padding-top: 16px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.plugins-apply {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: auto;
+  padding: 9px 18px;
+  letter-spacing: 0.08em;
+}
+.plugins-apply:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+/* 舞台上的提示（地址里引用了没有启用的内容）：点一下收起 */
+.notice {
+  position: absolute;
+  left: 50%;
+  top: 52px;
+  z-index: 5;
+  max-width: min(560px, calc(100% - 60px));
+  padding: 8px 14px;
+  background: var(--paper);
+  border: 1px solid #a3412c;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.55;
+  text-align: left;
+  transform: translateX(-50%);
+}

@@ -1,7 +1,6 @@
 import { FEATURE, FUNCTIONS, type FeatureId } from '../../settlement/features'
 import { MOTIF_INFO } from '../../settlement/tensor'
 import { cultureIds, planIds } from '../../settlement/culture'
-import '../../packs'
 import { SETTLE_THEMES, type SettleStyleId } from '../../settlement/themes'
 import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
 
@@ -13,15 +12,15 @@ import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/type
  * 规模档位 size 由人口推出，不写。
  */
 const SKIP = new Set<keyof SettlementParams>(['size', 'counts', 'climate'])
-/** 各参数允许的取值；文明与形制来自注册表（上面导入 packs 时已注册） */
-const ENUMS: Partial<Record<keyof SettlementParams, readonly unknown[]>> = {
+/** 各参数允许的取值；文明与形制来自注册表，解析时现取（启用了哪些插件就有哪些） */
+const enums = (): Partial<Record<keyof SettlementParams, readonly unknown[]>> => ({
   culture: cultureIds(),
   magic: [0, 1, 2],
   walls: ['auto', 'none', 'palisade', 'stone'],
   function: FUNCTIONS.map((f) => f.id),
   plan: planIds(),
   motif: MOTIF_INFO.map((f) => f.id),
-}
+})
 const DEF = DEFAULT_SETTLEMENT as unknown as Record<string, unknown>
 
 /** 数值保留到四位小数（气候两位）：写进地址的值与生成用的值完全一致，刷新得到同一座聚落 */
@@ -58,9 +57,15 @@ export function encodeSettlement(p: SettlementParams, style: SettleStyleId) {
   return q
 }
 
-/** 解析查询串：只返回合法的参数，缺的由调用方用默认值补 */
-export function decodeSettlement(q: URLSearchParams): { params: Partial<SettlementParams>; style?: SettleStyleId } {
+/**
+ * 解析查询串：只返回合法的参数，缺的由调用方用默认值补。
+ * rejected 是取值不在允许范围里而被丢掉的参数（原样的键与值）：文明、形制来自没有启用的插件时，调用方据此提示，
+ * 而不是不声不响地换成默认值
+ */
+export function decodeSettlement(q: URLSearchParams): { params: Partial<SettlementParams>; style?: SettleStyleId; rejected: { key: string; value: string }[] } {
   const out: Record<string, unknown> = {}
+  const rejected: { key: string; value: string }[] = []
+  const ENUMS = enums()
   const counts: Partial<Record<FeatureId, number>> = {}
   let style: SettleStyleId | undefined
   for (const [k, v] of q) {
@@ -86,7 +91,10 @@ export function decodeSettlement(q: URLSearchParams): { params: Partial<Settleme
       if (v === '' || !Number.isFinite(x)) continue
     } else if (typeof d === 'boolean') x = v === '1' || v === 'true'
     const allowed = ENUMS[k as keyof SettlementParams]
-    if (allowed && !allowed.includes(x)) continue
+    if (allowed && !allowed.includes(x)) {
+      rejected.push({ key: k, value: v })
+      continue
+    }
     out[k] = x
   }
   const temp = Number(q.get('temp'))
@@ -97,5 +105,5 @@ export function decodeSettlement(q: URLSearchParams): { params: Partial<Settleme
   if (out.seed === undefined) delete out.seed
   if (typeof out.population === 'number') out.population = Math.max(1, Math.round(out.population))
   out.counts = counts
-  return { params: out as Partial<SettlementParams>, style }
+  return { params: out as Partial<SettlementParams>, style, rejected }
 }

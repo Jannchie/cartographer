@@ -24,8 +24,6 @@ import { SunShadows } from './sunShadows'
 import { TownLabels } from './labels'
 import { createTownLights } from './townLights'
 import { townKit } from './kits'
-// 内置文化包的沙盘套件：模块导入时静态注册
-import '../../packs/town3d'
 
 /**
  * 聚落沙盘：成长史中出现过的全部体块与树一次建好（见 massing.ts，在 Worker 里构建），

@@ -1,6 +1,6 @@
 import { Biome, type Label, type World } from '../gen/types'
 import { resolveNaming } from '../gen/naming'
-import { townCulture } from '../packs/world'
+import { townCulture } from '../gen/townCulture'
 import type { SettlementParams } from './types'
 import * as dmath from '../gen/dmath'
 
@@ -25,7 +25,7 @@ export function fromWorld(w: World, l: Label): Partial<SettlementParams> {
     climate: { temp: w.temperature[i], rain: w.precipitation[i], biome: w.biome[i] },
     capital: l.kind === 'capital',
   }
-  // 文明：有政区层时跟着城所在伯爵领的文化；否则按世界的命名世界观，由文化包的规则定（见 packs/world.ts）
+  // 文明：有政区层时跟着城所在伯爵领的文化；否则按世界的命名世界观，由插件登记的规则定（见 gen/townCulture.ts）
   const pl = w.political
   const county = pl ? pl.county[i] : -1
   if (pl && county >= 0) out.culture = pl.cultures[pl.counties[county].culture].town

@@ -1,6 +1,7 @@
 import type { SettlementHistory } from '../../settlement/history'
 import type { SettlementParams } from '../../settlement/types'
 import type { TownBuild } from '../../render/town3d/massing'
+import { activePlugins } from '../../kernel'
 import type { HistoryRequest } from './history.worker'
 
 /** 推演被更新的请求取代（拖动参数时）：调用方忽略即可 */
@@ -21,6 +22,8 @@ const seqOf = new WeakMap<SettlementHistory, number>()
 
 function spawn() {
   const w = new Worker(new URL('./history.worker.ts', import.meta.url), { type: 'module' })
+  // 线程每次重建都要先告诉它启用了哪些插件
+  w.postMessage({ kind: 'init', plugins: [...activePlugins()] } satisfies HistoryRequest)
   w.onmessage = (e: MessageEvent<Reply>) => {
     const m = e.data
     if (m.kind === 'history') {

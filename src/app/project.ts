@@ -1,6 +1,8 @@
 import type { Area } from '../gen/areas'
 import { bumpSketch } from '../gen/sketch'
 import type { Label, Realm, River, Road, SketchRange, World, WorldEdits, WorldParams } from '../gen/types'
+import { registryOf } from '../kernel'
+import { Cultures } from '../settlement/culture'
 
 /**
  * 项目文档：一份可保存、可重放的世界——种子与参数 + 用户的全部编辑。
@@ -12,6 +14,8 @@ export interface ProjectDoc {
   version: 1 | 2
   /** 世界库里的名字 */
   name?: string
+  /** 世界引用的内容来自哪些插件（见 worldRequires）：打开时核对是否都已启用。旧文件没有，按只用内置内容处理 */
+  requires?: string[]
   world: {
     params: WorldParams
     edits: {
@@ -157,10 +161,25 @@ async function unpackWorld(p: PackedWorld, params: WorldParams): Promise<World> 
   }
 }
 
-/** world 给了就连同整个世界的数据一起存（第 2 版） */
-export async function serializeProject(params: WorldParams, edits: WorldEdits, world?: World, name?: string): Promise<string> {
+/**
+ * 一个世界引用的内容来自哪些插件：存档时记下，打开时核对（缺了就提示启用，而不是换成默认内容）。
+ * 目前世界里对插件内容的引用只有各文化的城镇形制（聚落层的文明 id）；没有登记的 id 查不到所属，不计入
+ */
+export function worldRequires(world: World): string[] {
+  const cultures = registryOf(Cultures)
+  const ids = new Set<string>()
+  for (const c of world.political?.cultures ?? []) {
+    const owner = cultures.owner(c.town)
+    if (owner) ids.add(owner)
+  }
+  return [...ids]
+}
+
+/** world 给了就连同整个世界的数据一起存（第 2 版）；requires 是它引用的插件（见 worldRequires） */
+export async function serializeProject(params: WorldParams, edits: WorldEdits, world?: World, name?: string, requires?: string[]): Promise<string> {
   const doc: ProjectDoc = { app: 'cartographer', version: world || edits.frozen ? 2 : 1, world: { params: { ...params }, edits: {} } }
   if (name) doc.name = name
+  if (requires?.length) doc.requires = requires
   const e = doc.world.edits
   if (edits.terrain) e.terrain = await packF32(edits.terrain)
   if (edits.temp) e.temp = await packF32(edits.temp)
@@ -180,7 +199,7 @@ export async function serializeProject(params: WorldParams, edits: WorldEdits, w
   return JSON.stringify(doc)
 }
 
-export async function parseProject(text: string): Promise<{ params: WorldParams; edits: WorldEdits; world?: World; name?: string }> {
+export async function parseProject(text: string): Promise<{ params: WorldParams; edits: WorldEdits; world?: World; name?: string; requires?: string[] }> {
   const doc = JSON.parse(text) as ProjectDoc
   if (doc.app !== 'cartographer' || !doc.world?.params) throw new Error('不是 Cartographer 项目文件')
   const e = doc.world.edits ?? {}
@@ -210,7 +229,8 @@ export async function parseProject(text: string): Promise<{ params: WorldParams;
   if (e.realmNames) edits.realmNames = e.realmNames
   const params = doc.world.params
   const world = doc.world.snapshot ? await unpackWorld(doc.world.snapshot, params) : undefined
-  return { params, edits, world, name: doc.name }
+  const requires = Array.isArray(doc.requires) ? doc.requires.filter((x): x is string => typeof x === 'string') : undefined
+  return { params, edits, world, name: doc.name, requires }
 }
 
 /** 分辨率变了：增量图双线性重采样，地点坐标等比缩放 */

@@ -2,6 +2,8 @@
 import { writeFileSync } from 'node:fs'
 import { createCanvas } from '@napi-rs/canvas'
 import './lib/canvas'
+// 先启动插件（文明、沙盘套件、城镇文明规则由插件登记，见 src/packs/boot.ts）
+import '../src/packs/all'
 const { generateSettlement } = await import('../src/settlement/generate')
 const { buildSettlementVector } = await import('../src/settlement/render')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')

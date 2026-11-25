@@ -18,8 +18,6 @@ import { heightSampler, hex, waterSampler } from './shared'
 import { treeInstances, type TreeBuild } from './vegetation'
 import { terrainMesh, type TerrainMesh } from './relief'
 import { townKit } from './kits'
-// 内置文化包的沙盘套件：模块导入时静态注册（主线程与 Worker 各自生效）
-import '../../packs/town3d'
 
 /** Worker 回传的沙盘数据（数组均可转移） */
 export interface TownBuild {

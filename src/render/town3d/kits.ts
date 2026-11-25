@@ -2,10 +2,11 @@
  * 沙盘的文明套件注册表：文明 id → 这种文明在沙盘上的做法（建筑体块、城防、院墙、桥、码头与船、小品、植被）。
  * 沙盘层的各模块只读套件的字段、调用套件的钩子，不判断文明 id；新增一种文明 = 注册一套 TownKit。
  *
- * 本模块只做注册与查询，不导入任何具体文明的代码。内置文明的套件在 src/packs/ 下，
- * 由沙盘层的入口模块（massing.ts、townScene.ts）经 src/packs/town3d 在模块导入时静态注册，
- * 主线程与 Worker 各自生效。与聚落层的文明定义（src/settlement/culture.ts）分开：聚落生成不引入渲染代码。
+ * 本模块只声明扩展点（TownKits）与查询，不导入任何具体文明的代码。内置文明的套件在 src/packs/ 下，
+ * 由插件的 town3d 层入口登记；各入口（main.ts、聚落 Worker、离线脚本）先启动插件（packs/boot.ts）再构建沙盘。
+ * 与聚落层的文明定义（src/settlement/culture.ts）分开：聚落生成不引入渲染代码。
  */
+import { defineSlot, registryOf } from '../../kernel'
 import type { Group } from './groups'
 import type { Site } from './kit'
 import type { RGB } from './mesh'
@@ -156,16 +157,10 @@ export interface TownKit {
   flora: FloraKit
 }
 
-const kits = new Map<string, TownKit>()
+/** 扩展点：沙盘套件，按文明 id 登记（同一个 id 重复登记视为错误） */
+export const TownKits = defineSlot<TownKit>('townKit')
 
-/** 注册一种文明的沙盘套件（同一 id 后注册的覆盖先注册的） */
-export function registerTownKit(culture: string, kit: TownKit) {
-  kits.set(culture, kit)
-}
+const kits = registryOf(TownKits)
 
-/** 某种文明的沙盘套件；没有注册时抛出 */
-export function townKit(culture: string): TownKit {
-  const kit = kits.get(culture)
-  if (!kit) throw new Error(`文明 "${culture}" 没有注册沙盘套件（registerTownKit）：入口模块需要导入 src/packs/town3d`)
-  return kit
-}
+/** 某种文明的沙盘套件；没有登记时抛 MissingContent */
+export const townKit = (culture: string): TownKit => kits.get(culture)

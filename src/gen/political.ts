@@ -1,6 +1,6 @@
 import { Noise } from './noise'
 import { RNG } from './rng'
-import { townCulture } from '../packs/world'
+import { townCulture } from './townCulture'
 import { Biome, isSettlement, type Label, type NamingStyle, type Realm, type TownCulture } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
 import * as dmath from './dmath'

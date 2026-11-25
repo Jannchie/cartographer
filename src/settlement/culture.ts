@@ -1,3 +1,4 @@
+import { defineSlot, registryOf } from '../kernel'
 import type { Ctx } from './ctx'
 import type { CultureLexicon } from './describe'
 import type { FeatureId } from './features'
@@ -18,14 +19,14 @@ import type { Culture, Ward, WardType } from './types'
  * 它是一个字符串 id，对应一份 CultureDef。聚落生成的各个环节不按 id 分支，而是读这份定义里的
  * 能力标记、数据表，或调用它的钩子——新增一种文明只需要写一份 CultureDef 并注册，不需要改生成器。
  *
- * 文明按"文化包"（CulturePack）成组注册：一个文化包是一组相互配套的文明（内置的 classic 包含
- * 西式、东方、和风、伊斯兰）。文化包与世界层的"命名世界观"（gen/naming.ts 的 NamingStyle）是两回事：
- * 命名世界观决定世界地图上的地名怎么起，文化包提供聚落的建法；两者由文化包的一条规则对应起来
- *（见 packs/world.ts）。
+ * 文明由插件登记（扩展点 Cultures）：一个插件带一组相互配套的文明（内置的 classic 包含西式、东方、和风、伊斯兰），
+ * 在它的 settlement 层入口里用 register.ts 的 registerCultures 登记。文明与世界层的"命名世界观"
+ *（gen/naming.ts 的 NamingStyle）是两回事：命名世界观决定世界地图上的地名怎么起，文明提供聚落的建法；
+ * 两者由插件的一条规则对应起来（gen/townCulture.ts）。
  *
- * 本模块只有类型导入，不依赖任何具体的文明。注册在模块加载时静态完成：聚落生成的入口
- *（generate.ts）导入 packs/ 的入口模块，主线程与 Worker 都由此完成注册，不依赖运行时状态。
- * 沙盘（render/town3d）的建筑套件另有自己的注册表（render/town3d/kits.ts），按同一个文明 id 对应。
+ * 本模块除内核外只有类型导入，不依赖任何具体的文明，也不导入插件：各入口（main.ts、两个 Worker、离线脚本）
+ * 先启动插件（packs/boot.ts）再调用生成器。文明的 id 写在聚落的种子里（generate.ts），登记后不能改名。
+ * 沙盘（render/town3d）的建筑套件是另一个扩展点（render/town3d/kits.ts），按同一个文明 id 对应。
  */
 
 /** 能力标记与基本参数：生成器里按文明分支的地方读这里 */
@@ -112,36 +113,16 @@ export interface CultureDef {
   ground?: Partial<DioramaGround>
 }
 
-/** 文化包：一组配套的文明，注册的单位 */
-export interface CulturePack {
-  id: string
-  cultures: CultureDef[]
-  /** 包自己的界面词条（中、英、日）：在各文明的职业名之前登记，同一个中文键先登记的为准 */
-  strings?: [zh: string, en: string, ja: string][]
-}
+/** 扩展点：文明，按文明 id 登记（界面上的选项按登记顺序） */
+export const Cultures = defineSlot<CultureDef>('culture')
 
-const defs = new Map<Culture, CultureDef>()
-const packIds = new Set<string>()
+const defs = registryOf(Cultures)
 
-/** 注册一个文化包：包里的文明按顺序登记（界面上的选项也按这个顺序）。重复的 id 视为错误 */
-export function registerPack(pack: CulturePack) {
-  if (packIds.has(pack.id)) throw new Error(`文化包 ${pack.id} 重复注册`)
-  packIds.add(pack.id)
-  for (const c of pack.cultures) {
-    if (defs.has(c.id)) throw new Error(`文明 ${c.id} 重复注册（文化包 ${pack.id}）`)
-    defs.set(c.id, c)
-  }
-}
+/** 已登记的文明 id（按登记顺序） */
+export const cultureIds = (): Culture[] => defs.ids()
 
-/** 已注册的文明 id（按注册顺序） */
-export const cultureIds = (): Culture[] => [...defs.keys()]
-
-/** 文明的定义；没有注册的 id 视为错误（入口模块没有导入 packs/，或存档里的文明来自没有加载的文化包） */
-export function cultureOf(c: Culture): CultureDef {
-  const d = defs.get(c)
-  if (!d) throw new Error(`文明 ${c} 没有注册`)
-  return d
-}
+/** 文明的定义；没有登记的 id 抛 MissingContent（入口没有先启动插件，或参数里的文明来自没有启用的插件） */
+export const cultureOf = (c: Culture): CultureDef => defs.get(c)
 
 /** 文明的能力标记与基本参数 */
 export const traitsOf = (c: Culture): CultureTraits => cultureOf(c).traits
@@ -163,7 +144,7 @@ export const planChoices = (c: Culture): { id: PlanId; name: string; desc: strin
 /** 按 id 找形制，不看文明：参数里写着某种形制时，它自带的属性（如 eliteShare）照它的算 */
 export function planById(id: PlanId | undefined): CityPlan | undefined {
   if (!id || id === 'organic') return undefined
-  for (const d of defs.values()) {
+  for (const d of defs.all()) {
     const p = d.plans.find((p) => p.id === id)
     if (p) return p
   }
@@ -171,4 +152,4 @@ export function planById(id: PlanId | undefined): CityPlan | undefined {
 }
 
 /** 全部形制的 id（含有机生长） */
-export const planIds = (): PlanId[] => [...new Set<PlanId>(['organic', ...[...defs.values()].flatMap((d) => d.plans.map((p) => p.id))])]
+export const planIds = (): PlanId[] => [...new Set<PlanId>(['organic', ...defs.all().flatMap((d) => d.plans.map((p) => p.id))])]

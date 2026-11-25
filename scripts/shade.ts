@@ -1,5 +1,7 @@
 import { writeFileSync } from 'node:fs'
 import { PNG } from 'pngjs'
+// 先启动插件（文明、沙盘套件、城镇文明规则由插件登记，见 src/packs/boot.ts）
+import '../src/packs/all'
 import { generateWorld, TUNE } from '../src/gen/world'
 import { DEFAULT_PARAMS } from '../src/gen/types'
 const seed = process.argv[2] ?? DEFAULT_PARAMS.seed

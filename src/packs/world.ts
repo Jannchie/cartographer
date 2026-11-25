@@ -1,6 +1,9 @@
+import type { LayerTable } from '../kernel'
+
 /**
- * 世界层入口：世界上的文化建哪种文明的城（规则的类型见 gen/townCulture.ts）。
- * 目前一个世界只用内置文化包的规则。只引入文化包的 world.ts，不引入聚落的生成器：
- * 世界生成的 Worker 只载入这一条规则。
+ * world 层的入口表：世界生成用到的插件内容。世界生成的 Worker 只导入这一张表（见 src/worker.ts），
+ * 它的构建里没有聚落与沙盘的代码。本表与清单、各插件的 world 层一起计入世界缓存的版本号。
  */
-export { townCulture } from './classic/world'
+export const WORLD: LayerTable = {
+  classic: () => import('./classic/world'),
+}

@@ -17,12 +17,12 @@ import { mapFontsReady } from '../fonts'
 import { bindPanZoom, fitInto } from '../panZoom'
 import { syllableSeed } from '../seed'
 import { t } from '../i18n'
-import { lang, onLang, settlementTitle } from '../../i18n'
+import { defineStrings, lang, onLang, settlementTitle } from '../../i18n'
 import { isTypingTarget } from '../keys'
 import { decodeSettlement, encodeSettlement, roundParams } from './route'
 import { describeAt } from '../../settlement/describe'
 import { terrainKey } from '../../settlement/terrain'
-import { cultureIds, planFits } from '../../settlement/culture'
+import { cultureIds, planFits, planIds } from '../../settlement/culture'
 import { LAND_USES, landUseOf, landUseStats, type LandUse, type LandUseStat } from '../../settlement/landuse'
 import { peopleStats, type PeopleStat } from '../../settlement/people'
 import { defaultRegions, type SettleRegion } from '../../settlement/regions'
@@ -55,6 +55,22 @@ const legacyCounts = Object.fromEntries(
     .map(([k]) => [k === 'tower' ? 'magic' : k, 0]),
 ) as Partial<Record<FeatureId, number>>
 delete saved.features
+// 上次存下的文明、形制来自现在没有启用的插件：回到默认（存下的是本机的工作状态，不是分享出去的链接，不必提示）
+if (saved.culture !== undefined && !cultureIds().includes(saved.culture)) delete saved.culture
+if (saved.plan !== undefined && !planIds().includes(saved.plan)) delete saved.plan
+
+/**
+ * 地址里的文明、形制没有登记（所属的插件没有启用）：解析时已经丢掉、换成默认值，这里给出要显示的提示。
+ * 别的参数取值不合法时照旧不提示
+ */
+function rejectedNotice(rejected: { key: string; value: string }[]): { text: string; id: string } | null {
+  const r = rejected.find((x) => x.key === 'culture') ?? rejected.find((x) => x.key === 'plan')
+  if (!r) return null
+  return {
+    text: r.key === 'culture' ? '链接里的文明「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的文明。' : '链接里的城市形制「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的形制。',
+    id: r.value,
+  }
+}
 
 /** 从世界地点继承来的字段：名字与气候（不存档、换地址时清掉） */
 const INHERITED = { name: undefined, nameZh: undefined, nameJa: undefined, climate: undefined }
@@ -110,6 +126,8 @@ export const ss = reactive({
   /** 世界地图上的城镇（地名按界面语言显示，见 SettlementPanel） */
   places: [] as { i: number; capital: boolean; name: string; zh: string; ja?: string }[],
   loading: { show: false, stage: '…' },
+  /** 舞台上的提示（地址里引用了没有启用的内容）：text 是词条的中文键，点一下收起 */
+  notice: (fromUrl ? rejectedNotice(fromUrl.rejected) : null) as { text: string; id: string } | null,
   info: null as { title: string; sub: string; tiles: [string, string][] } | null,
   probe: null as { title: string; rows: [string, string][] } | null,
   /** 当前这座城生成时所用的参数（滑杆双击回到这里；与 params 不同即有待生成的改动） */
@@ -930,6 +948,7 @@ registerRoute('settlement', {
   apply(q) {
     if (![...q.keys()].length) return
     const d = decodeSettlement(q)
+    ss.notice = rejectedNotice(d.rejected)
     ss.from = -1
     Object.assign(ss.params, { ...DEFAULT_SETTLEMENT, ...INHERITED, ...d.params })
     ss.style = d.style ?? 'parchment'
@@ -949,3 +968,9 @@ onLang(() => {
   cache.clear()
   if (app.module === 'settlement') refresh(false, true)
 })
+
+defineStrings([
+  ['链接里的文明「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的文明。', 'The culture "{id}" in this link is not enabled (its plugin is disabled or not part of this version); the default culture is used instead.', 'リンクにある文明「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定の文明を使います。'],
+  ['链接里的城市形制「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的形制。', 'The city plan "{id}" in this link is not enabled (its plugin is disabled or not part of this version); the default plan is used instead.', 'リンクにある都市形制「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定の形制を使います。'],
+  ['点击关闭', 'Click to dismiss', 'クリックで閉じる'],
+])

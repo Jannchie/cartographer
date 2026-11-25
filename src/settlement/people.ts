@@ -55,7 +55,7 @@ export const tradeDef = (group: string, id: string, zh: string, en: string, ja: 
 
 const schemeOf = (c: Culture) => cultureOf(c).people.scheme
 
-/** 职业名的三语写法（文化包注册时登记给界面，见 packs/） */
+/** 职业名的三语写法（文明登记时一并登记给界面，见 register.ts） */
 export const schemeStrings = (s: Scheme): Tri[] => [...s.groups, ...s.trades].map((x) => x.name)
 
 /** 各职业表的行当 → 行当与所属大类（每户都要查：第一次用到时建好） */

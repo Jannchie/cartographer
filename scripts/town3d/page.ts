@@ -6,6 +6,8 @@
  * 截图脚本经 window.__shot 摆镜头、取画面、测帧耗时。
  */
 import '../../src/style.css'
+// 先启动插件（文明与沙盘套件由插件登记，见 src/packs/boot.ts）
+import '../../src/packs/all'
 import { generateHistory } from '../../src/settlement/generate'
 import { snapshot } from '../../src/settlement/history'
 import { scaleOf } from '../../src/settlement/scale'

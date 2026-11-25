@@ -34,8 +34,6 @@ import {
 import { addWall, bastioned, cleanLoop, fromF32, gateStreets, insetLoop, simplifyLoop, smoothRoute, toF32, wallFromLoop } from './walls'
 import { fixWet, nearestRoad, roadCorridor, through, tidyRoads, trimDangling, wetRuns } from './roads'
 import { cultureOf, planOf, traitsOf } from './culture'
-// 内置文化包在模块加载时注册：主线程与 Worker 都经由本模块进入聚落生成
-import '../packs'
 import { ruralExtras } from './rural'
 import { tierReserve, wardExtras } from './tiers'
 import { checkpoint, demolish, drop, rollback } from './undo'

@@ -9,6 +9,9 @@ import { earthAreas, earthResOf } from './gen/earth/realWorld'
 import { inferAreas, type Area } from './gen/areas'
 import { smoothRivers, type SmoothRiver } from './render/rivers'
 import { physicalTexturePixels, type TexturePixels } from './render/texture'
+import { boot } from './kernel'
+import { PLUGINS } from './packs/manifest'
+import { WORLD } from './packs/world'
 
 /**
  * ground：主线程已有贴图的地面版本；与这次相同时不再算贴图。
@@ -16,6 +19,8 @@ import { physicalTexturePixels, type TexturePixels } from './render/texture'
  * want 为 stage：只要当前世界侵蚀结束时的地形（定稿用），没有缓存就先演算一遍
  */
 export type WorkerIn = { id: number; params: WorldParams; edits?: WorldEdits; ground?: string; world?: World; want?: 'stage' }
+/** 第一条消息：主线程启用的插件。本线程只载入它们的 world 层，之后的请求等启动完成再处理 */
+export type WorkerInit = { init: { plugins: string[] } }
 export type WorkerOut =
   | { id: number; type: 'progress'; stage: string; frac: number }
   | { id: number; type: 'stage'; elev: Float32Array; basins: { x: number; y: number; r: number }[] }
@@ -37,10 +42,22 @@ const cache: WorldCache = {}
 /** 没有任何编辑：结果只由参数决定，可以整份缓存 */
 const pristine = (e?: WorldEdits) => !e || Object.values(e).every((v) => v === undefined)
 
-self.onmessage = async (ev: MessageEvent<WorkerIn>) => {
+/** 插件的启动（收到 init 消息时开始）；null 为还没有收到 */
+let ready: Promise<void> | null = null
+
+self.onmessage = async (ev: MessageEvent<WorkerIn | WorkerInit>) => {
+  if ('init' in ev.data) {
+    // 只导入、只载入 world 层的入口表：本线程的构建里没有聚落与沙盘的代码
+    ready = boot({ manifests: PLUGINS, enabled: ev.data.init.plugins, layers: { world: WORLD } })
+    // 失败留给之后的请求报告（每个请求都会等它）
+    ready.catch(() => {})
+    return
+  }
   const { id, params, edits, ground: have, world: opened, want } = ev.data
   const post = (m: WorkerOut, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer)
   try {
+    if (!ready) throw new Error('世界生成线程还没有收到插件清单（init 消息）')
+    await ready
     if (want === 'stage') {
       const tk = terrainKey(params, edits)
       if (cache.stage?.key !== tk) generateWorld(params, (stage, frac) => post({ id, type: 'progress', stage, frac }), edits ?? {}, cache)
