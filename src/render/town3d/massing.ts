@@ -5,7 +5,7 @@
  */
 import { centroid, clipConvex, type P } from '../../settlement/geom'
 import type { Life } from '../../settlement/history'
-import { settleTheme } from '../../settlement/themes'
+import { DIORAMA_STYLE, settleTheme } from '../../settlement/themes'
 import type { Settlement, Wall } from '../../settlement/types'
 import { NEVER, Writer, type TownChunk } from './mesh'
 import { facades } from './facade'
@@ -46,7 +46,7 @@ export function buildTown(st: Settlement, life: Map<object, Life>): TownBuild {
   const c: WCtx = {
     w,
     kit,
-    pal: settleTheme('color').buildings(culture),
+    pal: settleTheme(DIORAMA_STYLE).buildings(culture),
     H: heightSampler(st.terrain),
     capital: !!st.params.capital,
     st,
@@ -115,7 +115,7 @@ export function buildTown(st: Settlement, life: Map<object, Life>): TownBuild {
     setLife(q)
     rock(c, q)
   }
-  const magic = hex(settleTheme('color').magic)
+  const magic = hex(settleTheme(DIORAMA_STYLE).magic)
   for (const x of st.wonders) {
     if (x.kind !== 'leyline' && !inside(x.p, x.r * 1.3 + 3)) continue
     setLife(x)

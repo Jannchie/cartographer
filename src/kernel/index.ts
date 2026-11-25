@@ -50,11 +50,12 @@ export class MissingContent extends Error {
 
 /**
  * 插件的层：按运行环境划分的入口。
- * world 世界生成（世界 Worker 只载入这一层）；settlement 聚落生成；town3d 沙盘；ui 只在主线程用的界面内容
+ * world 世界生成（世界 Worker 只载入这一层）；settlement 聚落生成与聚落图；town3d 沙盘；
+ * paper 世界纸图（主线程与离线脚本载入，Worker 不载入）；ui 只在主线程用的界面内容
  */
-export type Layer = 'world' | 'settlement' | 'town3d' | 'ui'
+export type Layer = 'world' | 'settlement' | 'town3d' | 'paper' | 'ui'
 /** 各层入口的执行顺序（同一个插件里） */
-const LAYER_ORDER: readonly Layer[] = ['world', 'settlement', 'town3d', 'ui']
+const LAYER_ORDER: readonly Layer[] = ['world', 'settlement', 'town3d', 'paper', 'ui']
 
 /** 入口函数拿到的宿主：只负责登记。插件与应用一起编译，需要核心的其他功能时直接导入核心模块 */
 export interface Host {

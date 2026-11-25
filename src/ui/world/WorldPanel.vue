@@ -33,7 +33,7 @@ import type { Label, WorldParams } from '../../gen/types'
 import type { EarthRes } from '../../gen/earth/real'
 import { isGlobe, SHAPE_PARAMS } from '../../gen/types'
 import { DEFAULT_SETTING } from '../../gen/setting'
-import { THEMES } from '../../render/atlas'
+import { atlasStyles } from '../../render/atlas'
 import { FONT_PRESETS, themeById } from '../../render/atlas/styles'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
 import { HOLO_PALETTES } from '../../render/holo/palettes'
@@ -123,7 +123,7 @@ const holoKeys = ['labels', 'hud'] as const
 const holoSwatches = HOLO_PALETTES.map((p) => ({ value: p.id, label: p.name }))
 const lookBase = computed(() => LOOKS.find((l) => l.id === ws.lookId)?.look ?? LOOKS[0].look)
 
-const atlasSwatches = THEMES.map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: `rgb(${th.paper.join(',')})`, ink: th.ink }))
+const atlasSwatches = atlasStyles().map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: `rgb(${th.paper.join(',')})`, ink: th.ink }))
 const atlasToggles = computed(() => [
   { label: '注记', on: ws.atlasOpts.labels },
   { label: '等高线', on: ws.atlasOpts.contours },

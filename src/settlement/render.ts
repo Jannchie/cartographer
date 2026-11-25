@@ -3,7 +3,7 @@ import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
 import { DisplayList, rasterArea, rasterPoly, type BBox, type Fill, type Item, type LabelArea, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
 import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, signedArea, type P, type Poly } from './geom'
-import { dioramaGround, settleTheme, type SettleStyleId, type SettleTheme } from './themes'
+import { DIORAMA_STYLE, dioramaGround, settleTheme, type SettleStyleId, type SettleTheme } from './themes'
 import type { BuildingKind, Field, MapLabel, Road, Settlement, SettlementSize } from './types'
 import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type LandUse } from './landuse'
 import { settlementTitle, tr } from '../i18n'
@@ -1180,7 +1180,7 @@ class GroundPen {
     readonly mask: DisplayList,
     readonly S: number,
   ) {
-    this.R = new Painter(color, S, settleTheme('color'))
+    this.R = new Painter(color, S, settleTheme(DIORAMA_STYLE))
   }
 
   /** 一条路径写进两张表（paint、mat 各自可缺） */
@@ -1240,7 +1240,7 @@ class GroundPen {
 }
 
 export function buildGroundVector(st: Settlement, style: SettleStyleId, measurer: CanvasRenderingContext2D): GroundVector {
-  if (style !== 'color') return { color: buildSettlementVector(st, style, { labels: false, contours: false, ground3d: true }, measurer), mask: null }
+  if (style !== DIORAMA_STYLE) return { color: buildSettlementVector(st, style, { labels: false, contours: false, ground3d: true }, measurer), mask: null }
   const S = settlePageScale(st)
   const M = 44
   const MW = Math.round(st.width * S)

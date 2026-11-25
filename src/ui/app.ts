@@ -19,6 +19,35 @@ export function storeSet(k: string, v: string) {
   }
 }
 
+/** 舞台上的提示（地址、存下的选择引用了没有启用的内容）：text 是词条的中文键，id 填进其中的 {id}；点一下收起 */
+export interface Notice {
+  text: string
+  id: string
+  /**
+   * 存下的选择不可用时：收起提示时把 value 写回存储的 key（换成默认的选择，之后不再提示）。没收起就一直留着——重新启用插件后原来的选择还在。
+   * stale 是提示产生时存储里的原值：收起时存储已经不是它（期间用户另选了别的）就不写
+   */
+  store?: { key: string; value: string; stale: string }
+}
+
+/**
+ * 读存下的内容 id（纸图风格、聚落图主题这类由插件登记的内容）：还可用就用它，没存过用 fallback。
+ * 存下的 id 不可用（所属的插件停用了，或已经不在这个版本里）时回到 fallback，往 notices 里记一条提示（text 为词条）；
+ * 存储里的值等提示被收起时才改（见 dismissNotices）
+ */
+export function storedContent(key: string, has: (id: string) => boolean, fallback: string, notices: Notice[], text: string): string {
+  const v = storeGet(key)
+  if (!v) return fallback
+  if (has(v)) return v
+  notices.push({ text, id: v, store: { key, value: fallback, stale: v } })
+  return fallback
+}
+
+/** 收起提示：其中"存下的选择不可用"的那几条，把默认的选择写回存储 */
+export function dismissNotices(notices: readonly Notice[]) {
+  for (const n of notices) if (n.store && storeGet(n.store.key) === n.store.stale) storeSet(n.store.key, n.store.value)
+}
+
 // —— 路由：hash 里写明模块与参数 ——
 // #/            首页
 // #/world?...   世界地图（查询串是与默认值不同的世界参数）

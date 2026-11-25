@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { P } from '../../settlement/geom'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
-import type { SettleStyleId } from '../../settlement/themes'
+import { DIORAMA_STYLE, type SettleStyleId } from '../../settlement/themes'
 import type { MapLabel, Settlement } from '../../settlement/types'
 import { isTypingTarget } from '../../ui/keys'
 import { PostPipeline } from '../aerial/post'
@@ -111,7 +111,7 @@ export class TownScene {
   /** 地面：贴图、高清块与每座城的地形、水面网格 */
   private ground: TownGround
   private trees: TreeLayer | null = null
-  private style: SettleStyleId = 'color'
+  private style: SettleStyleId = DIORAMA_STYLE
   /** 指针按着（拖动中，即使这一帧没动也不算停下） */
   private held = false
   /** 共享的 uniform：成长与夜里的窗灯 */

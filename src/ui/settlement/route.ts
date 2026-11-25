@@ -1,7 +1,7 @@
 import { FEATURE, FUNCTIONS, type FeatureId } from '../../settlement/features'
 import { MOTIF_INFO } from '../../settlement/tensor'
 import { cultureIds, planIds } from '../../settlement/culture'
-import { SETTLE_THEMES, type SettleStyleId } from '../../settlement/themes'
+import { DEFAULT_SETTLE_STYLE, hasSettleTheme, type SettleStyleId } from '../../settlement/themes'
 import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
 
 /**
@@ -53,13 +53,13 @@ export function encodeSettlement(p: SettlementParams, style: SettleStyleId) {
     q.set('biome', String(p.climate.biome))
   }
   for (const [id, n] of Object.entries(p.counts)) if (n !== null && n !== undefined) q.set(`n.${id}`, String(n))
-  if (style !== 'parchment') q.set('style', style)
+  if (style !== DEFAULT_SETTLE_STYLE) q.set('style', style)
   return q
 }
 
 /**
  * 解析查询串：只返回合法的参数，缺的由调用方用默认值补。
- * rejected 是取值不在允许范围里而被丢掉的参数（原样的键与值）：文明、形制来自没有启用的插件时，调用方据此提示，
+ * rejected 是取值不在允许范围里而被丢掉的参数（原样的键与值）：文明、形制、绘图风格来自没有启用的插件时，调用方据此提示，
  * 而不是不声不响地换成默认值
  */
 export function decodeSettlement(q: URLSearchParams): { params: Partial<SettlementParams>; style?: SettleStyleId; rejected: { key: string; value: string }[] } {
@@ -76,7 +76,9 @@ export function decodeSettlement(q: URLSearchParams): { params: Partial<Settleme
       continue
     }
     if (k === 'style') {
-      if (SETTLE_THEMES.some((th) => th.id === v)) style = v as SettleStyleId
+      // 绘图风格没有登记（所属的插件没有启用）：丢掉，记进 rejected
+      if (hasSettleTheme(v)) style = v
+      else if (v) rejected.push({ key: k, value: v })
       continue
     }
     if (k === 'name' || k === 'nameZh' || k === 'nameJa') {

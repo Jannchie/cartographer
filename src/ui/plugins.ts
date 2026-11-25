@@ -131,15 +131,21 @@ defineStrings([
     'The built-in "Classical" setting: four naming styles (Fantasy, Epic, Eastern, Japanese), three polities (feudal, commandery, ritsuryō) and four urban civilizations (Western, Eastern, Japanese, Islamic)',
     '組み込みの世界観「古典」：命名スタイル四種（ファンタジー・叙事詩・中華風・和風）、制度三種（封建・郡県・令制）、都市文明四種（西洋・東方・和風・イスラム）',
   ],
+  ['制图风格', 'Map styles', '地図のスタイル'],
+  [
+    '内置的八种纸图风格（自然地理、奇幻羊皮、航海图、提瓦特、水墨、等高线、政区地图集、战略图）与八种聚落图主题',
+    'The eight built-in map styles (Physical, Fantasy parchment, Nautical chart, Teyvat, Ink wash, Contours, Political atlas, Strategy) and the eight town-map themes',
+    '組み込みの紙地図スタイル八種（自然地理・ファンタジー羊皮紙・海図・テイワット・水墨・等高線・政区地図帳・戦略図）と、集落図のテーマ八種',
+  ],
 ])
 // 示例插件只在开发构建里出现，它的名称与说明也只在开发构建里登记
 if (import.meta.env?.DEV) {
   defineStrings([
     ['示例插件', 'Sample plugin', 'サンプルプラグイン'],
     [
-      '一个示例世界观：一种命名风格和一种与西式相同的"示例文明"，用来验证插件的启停（只在开发构建里出现）',
-      'A sample setting: one naming style and a "Sample" culture identical to the Western one, for checking that plugins can be switched on and off (development builds only)',
-      'サンプルの世界観：命名スタイル一種と、西洋式と同じ「サンプル」文明。プラグインの有効・無効を確認するためのもの（開発ビルドのみ）',
+      '一个示例世界观（一种命名风格和一种与西式相同的"示例文明"）、一种纸图风格与一种聚落图主题，用来验证插件的启停（只在开发构建里出现）',
+      'A sample setting (one naming style and a "Sample" culture identical to the Western one), one map style and one town-map theme, for checking that plugins can be switched on and off (development builds only)',
+      'サンプルの世界観（命名スタイル一種と、西洋式と同じ「サンプル」文明）、紙地図のスタイル一種、集落図のテーマ一種。プラグインの有効・無効を確認するためのもの（開発ビルドのみ）',
     ],
   ])
 }

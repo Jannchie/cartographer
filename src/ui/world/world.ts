@@ -9,11 +9,11 @@ import { autoContinents, floodLand, regionAnchor } from '../../editor/layers'
 import { BIOME_NAMES, DEFAULT_PARAMS as GEN_DEFAULTS, isSettlement, normalizeParams, type County, type Label, type PoliticalLayer, type World, type WorldEdits, type WorldParams } from '../../gen/types'
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
 import { earthAreas } from '../../gen/earth/realWorld'
-import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
+import { ensureFonts, type StyleId } from '../../render/atlas'
 import { polityDef, polityIds, realmPolity, type Polity, type PolityDef } from '../../gen/polity'
 import { DEFAULT_SETTING, defaultPolity, settingIds, settingOf } from '../../gen/setting'
 import { namingChoices } from '../../gen/naming'
-import { FONT_PRESETS, setFontPreset, themeById } from '../../render/atlas/styles'
+import { DEFAULT_ATLAS_STYLE, FONT_PRESETS, hasAtlasStyle, setFontPreset, themeById } from '../../render/atlas/styles'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
 import type { PoliticalMode } from '../../render/atlas/political'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
@@ -29,7 +29,7 @@ import { buildPhysicalTexture, textureCanvases } from '../../render/texture'
 import type { WorkerIn, WorkerInit, WorkerOut } from '../../worker'
 import GenWorker from '../../worker?worker'
 import { defineStrings, lang, onLang, placeName, worldTitle } from '../../i18n'
-import { app, download, initialQuery, registerRoute, paramSig, storeGet, storeSet, syncRoute } from '../app'
+import { app, dismissNotices, download, initialQuery, registerRoute, paramSig, storedContent, storeGet, storeSet, syncRoute, type Notice } from '../app'
 import { t } from '../i18n'
 import { activePlugins } from '../../kernel'
 import { ensurePlugins } from '../plugins'
@@ -126,10 +126,15 @@ function storedEnum<T extends string>(key: string, allowed: readonly string[], f
 // 地址里的世界观没有登记（所属的插件没有启用）时给出提示；存下的参数是本机的工作状态，不必提示
 const urlQuery = initialQuery('world')
 const urlRejected: Rejected[] = []
+const startParams = { ...UI_DEFAULTS, ...readQuery(urlQuery ?? new URLSearchParams(storeGet('worldQuery') ?? ''), urlQuery ? urlRejected : undefined) } as WorldParams
+/** 打开页面时要显示的提示：地址里的世界观、上次选用的纸图风格不可用 */
+const startNotices: Notice[] = rejectedNotices(urlRejected)
+// 上次选用的纸图风格来自现在没有启用的插件：回到默认风格并提示
+const startStyle = storedContent('atlasStyle', hasAtlasStyle, DEFAULT_ATLAS_STYLE, startNotices, '上次选用的纸图风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。')
 export const ws = reactive({
-  params: { ...UI_DEFAULTS, ...readQuery(urlQuery ?? new URLSearchParams(storeGet('worldQuery') ?? ''), urlQuery ? urlRejected : undefined) } as WorldParams,
-  /** 舞台上的提示（地址里引用了没有启用的内容）：text 是词条的中文键，点一下收起 */
-  notice: rejectedNotice(urlRejected),
+  params: startParams,
+  /** 舞台上的提示（地址、存下的选择引用了没有启用的内容），点一下全部收起 */
+  notices: startNotices,
   view3d: {
     exaggeration: 28,
     labels: true,
@@ -149,7 +154,7 @@ export const ws = reactive({
   lookId: storeGet('lookId') ?? LOOKS[0].id,
   /** 全息沙盘的选项 */
   holo: loadHolo(),
-  atlasStyle: storedEnum<StyleId>('atlasStyle', THEMES.map((th) => th.id), 'physical'),
+  atlasStyle: startStyle as StyleId,
   atlasOpts: { labels: true, contours: true, graticule: true },
   /** 纸图的政区图：按国家或文化着色、画伯爵领界与国界 */
   political: storedEnum<'off' | PoliticalMode>('atlasPolitical', ['realms', 'cultures'], 'off'),
@@ -845,7 +850,7 @@ async function refreshAtlas(quiet = false) {
   const job = ++atlasJob
   takeStale()
   if (!atlasCache.has(atlasKey(w, style)) && !quiet) {
-    Object.assign(ws.loading, { show: true, frac: 1, stage: t('矢量绘制{style}', { style: t(THEMES.find((th) => th.id === style)!.name) }) })
+    Object.assign(ws.loading, { show: true, frac: 1, stage: t('矢量绘制{style}', { style: t(themeById(style).name) }) })
     await mapFontsReady()
     await ensureFonts(w, style)
     await new Promise((r) => setTimeout(r, 20))
@@ -1032,10 +1037,15 @@ function readQuery(q: URLSearchParams, rejected?: Rejected[]): Partial<WorldPara
   if (p.naming !== undefined && !namingChoices(p).some((n) => n.id === p.naming)) p.naming = 'auto'
   return p
 }
+/** 收起舞台上的提示 */
+export function closeNotices() {
+  dismissNotices(ws.notices)
+  ws.notices = []
+}
 /** 地址里的世界观没有登记：解析时已经丢掉、换成默认的，这里给出要显示的提示 */
-function rejectedNotice(rejected: Rejected[]): { text: string; id: string } | null {
+function rejectedNotices(rejected: Rejected[]): Notice[] {
   const r = rejected.find((x) => x.key === 'setting')
-  return r ? { text: '链接里的世界观「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的世界观。', id: r.value } : null
+  return r ? [{ text: '链接里的世界观「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的世界观。', id: r.value }] : []
 }
 // 地址被外部改动（前进后退、手改地址栏）：换成地址里的参数重新生成
 registerRoute('world', {
@@ -1043,7 +1053,7 @@ registerRoute('world', {
   apply(q) {
     const rejected: Rejected[] = []
     Object.assign(ws.params, { ...UI_DEFAULTS, ...readQuery(q, rejected) })
-    ws.notice = rejectedNotice(rejected)
+    ws.notices = rejectedNotices(rejected)
     ws.preset = -1
     generate()
   },
@@ -1991,4 +2001,5 @@ defineStrings([
   ],
   ['链接里的世界观「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的世界观。', 'The setting "{id}" in this link is not enabled (its plugin is disabled or not part of this version); the default setting is used instead.', 'リンクにある世界観「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定の世界観を使います。'],
   ['无法打开：这个世界的世界观「{id}」没有启用。', 'Cannot open: the setting "{id}" of this world is not enabled.', '開けません：この世界の世界観「{id}」は有効になっていません。'],
+  ['上次选用的纸图风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。', 'The map style "{id}" you used last time is not enabled (its plugin is disabled or not part of this version); the default style is used instead.', '前回選んだ紙地図のスタイル「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定のスタイルを使います。'],
 ])

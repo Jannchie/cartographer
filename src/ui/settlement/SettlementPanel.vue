@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { IconDices } from '@jannchie/icons'
 import { computed } from 'vue'
-import { SETTLE_THEMES } from '../../settlement/themes'
+import { settleThemes } from '../../settlement/themes'
 import { FEATURES, FUNCTIONS, GROUPS, featureEnv, featureName as nameOf, resolveCounts, type FeatureDef } from '../../settlement/features'
 import { MOTIF_INFO } from '../../settlement/tensor'
 import { cultureIds, cultureOf, planChoices } from '../../settlement/culture'
@@ -74,7 +74,7 @@ const places = computed(() => [
     return { value: pl.i, label: `${pl.capital ? '★ ' : ''}${name}${name !== pl.name ? ` · ${pl.name}` : ''}` }
   }),
 ])
-const swatches = SETTLE_THEMES.map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: th.ground, ink: th.ink }))
+const swatches = settleThemes().map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: th.ground, ink: th.ink }))
 const RANDOM_MODE = [
   { value: 'all', label: '全部参数', title: '种子、规模、文明、功效、布局与环境都随机' },
   { value: 'keep', label: '保留配置', title: '只换种子，其余参数不变' },

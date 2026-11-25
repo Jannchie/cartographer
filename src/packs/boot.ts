@@ -1,5 +1,6 @@
 import { boot } from '../kernel'
 import { PLUGINS } from './manifest'
+import { PAPER } from './paper'
 import { SETTLEMENT } from './settlement'
 import { TOWN3D } from './town3d'
 import { UI } from './ui'
@@ -10,10 +11,10 @@ import { WORLD } from './world'
  * - 主线程（main.ts）：bootPlugins，启用的插件按本机的停用清单算出（ui/plugins.ts）；
  * - 离线脚本：导入 ./all（即 bootAll）。
  * 两个 Worker 不导入本模块：它们只导入自己用到的入口表，直接调用内核的 boot
- *（src/worker.ts 只有 world 层，ui/settlement/history.worker.ts 是 settlement 与 town3d 层），
+ *（src/worker.ts 只有 world 层，ui/settlement/history.worker.ts 是 settlement 与 town3d 层；两者都不载入 paper 层），
  * 启用的插件由主线程在第一条消息里给出。
  */
-const LAYERS = { world: WORLD, settlement: SETTLEMENT, town3d: TOWN3D }
+const LAYERS = { world: WORLD, settlement: SETTLEMENT, town3d: TOWN3D, paper: PAPER }
 
 /** 主线程用：另外载入 ui 层（界面词条） */
 export function bootPlugins(enabled: readonly string[]) {

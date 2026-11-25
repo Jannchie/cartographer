@@ -3,7 +3,7 @@ import { regionProjection } from '../../gen/earth/region'
 import { lang, placeName, t, worldTitle } from '../../i18n'
 import { ramp } from '../palette'
 import { hash, type Fields } from './fields'
-import { HYPSO_STOPS, themeCjk, type Theme } from './styles'
+import { themeCjk, type Theme } from './styles'
 import { labelCtx } from './svg/recorder'
 
 const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
@@ -428,15 +428,12 @@ export function drawCartouche(ctx: CanvasRenderingContext2D, world: World, theme
       ctx.strokeRect(0, 0, w, h)
       ctx.strokeRect(4 * k, 4 * k, w - 8 * k, h - 8 * k)
       ctx.fillStyle = theme.ink
-      const sans = theme.id === 'topo'
+      const sans = !!theme.titleBox?.sans
       ctx.font = `${sans ? 700 : 600} ${(sans ? 26 : 32) * k}px ${theme.labels.display}, ${themeCjk(theme)}`
       spaced(ctx, title, w / 2, 44 * k, (sans ? 5 : 9.6) * k)
       ctx.font = `${sans ? '' : 'italic'} 500 ${13 * k}px ${theme.labels.text}, ${themeCjk(theme)}`
       ctx.textAlign = 'center'
-      const sub =
-        theme.id === 'topo'
-            ? t('地形测量图 · 等高距 100 米')
-            : t('已知世界自然地理图 · 种子「{seed}」', { seed: world.params.seed })
+      const sub = theme.titleBox?.subtitle ? t(theme.titleBox.subtitle) : t('已知世界自然地理图 · 种子「{seed}」', { seed: world.params.seed })
       ctx.fillText(sub, w / 2, 66 * k)
       box = { x0: 0, y0: 0, x1: x + w + 20 * k, y1: y + h + 20 * k }
     }
@@ -484,6 +481,9 @@ function seal(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, te
 export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: Theme, S: number, MH: number) {
   const k = S / 2
   if (!theme.legend) return null
+  // 分层设色图例要风格给出色标
+  const stops = theme.hypsometric
+  if (theme.legend === 'hypsometric' && !stops) return null
   ctx.save()
   const x = 28 * k
   let box = null
@@ -530,7 +530,7 @@ export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: T
     const bw = w - 28 * k
     const maxH = 5
     for (let t = 0; t < bw; t++) {
-      ctx.fillStyle = rgb(ramp(HYPSO_STOPS, (t / bw) * maxH))
+      ctx.fillStyle = rgb(ramp(stops!, (t / bw) * maxH))
       ctx.fillRect(bx + t, y + 14 * k, 1.5, 12 * k)
     }
     ctx.strokeRect(bx, y + 14 * k, bw, 12 * k)

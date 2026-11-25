@@ -3193,3 +3193,10 @@ select.lang:hover {
   text-align: left;
   transform: translateX(-50%);
 }
+/* 一条提示一行 */
+.notice span {
+  display: block;
+}
+.notice span + span {
+  margin-top: 4px;
+}

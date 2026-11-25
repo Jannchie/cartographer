@@ -9,7 +9,7 @@ import Loading from '../kit/Loading.vue'
 import Probe from '../kit/Probe.vue'
 import RegionOverlay from '../kit/RegionOverlay.vue'
 import SettlementTimeline from './SettlementTimeline.vue'
-import { commitRegions, mountSettlement, regionCheckpoint, selectRegion, setMode, ss, type SettleMode } from './settlement'
+import { closeNotices, commitRegions, mountSettlement, regionCheckpoint, selectRegion, setMode, ss, type SettleMode } from './settlement'
 
 const host = ref<HTMLElement>()
 const town = ref<HTMLElement>()
@@ -64,7 +64,9 @@ const hint = computed(() =>
     <SettlementTimeline />
     <!-- 地图的悬停读数画在图廓里（见 settlement.ts 的 probeCard），沙盘用浮层 -->
     <Probe :data="ss.mode === 'sandbox' ? ss.probe : null" />
-    <button v-if="ss.notice" type="button" class="notice" :title="t('点击关闭')" @click="ss.notice = null">{{ t(ss.notice.text, { id: ss.notice.id }) }}</button>
+    <button v-if="ss.notices.length" type="button" class="notice" :title="t('点击关闭')" @click="closeNotices()">
+      <span v-for="n in ss.notices" :key="n.text + n.id">{{ t(n.text, { id: n.id }) }}</span>
+    </button>
     <div class="hint">{{ t(hint) }}</div>
     <Loading :show="ss.loading.show" title="正在营建" :stage="ss.loading.stage" />
   </main>

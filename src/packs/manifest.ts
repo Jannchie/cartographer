@@ -3,9 +3,9 @@ import type { PluginManifest } from '../kernel'
 /**
  * 插件清单：随应用一起构建的全部插件。数组的顺序就是启动与登记的顺序（界面选项的顺序、先登记为准的词条都取决于它），
  * 依赖必须排在前面；用户只能启停，不能调整顺序。清单不引用插件的代码：各层的入口在同目录的入口表里
- *（world.ts、settlement.ts、town3d.ts、ui.ts），启用时才载入。
+ *（world.ts、settlement.ts、town3d.ts、paper.ts、ui.ts），启用时才载入。
  *
- * 新增插件：在本目录下建一个目录，按层写入口模块（world.ts、settlement.ts、town3d.ts、ui.ts，默认导出 LayerSetup），
+ * 新增插件：在本目录下建一个目录，按层写入口模块（world.ts、settlement.ts、town3d.ts、paper.ts、ui.ts，默认导出 LayerSetup），
  * 列进下面的清单，并把各层的入口列进对应的入口表。world 层的代码只放在插件目录的 world.ts 与 world/ 里
  *（世界缓存的版本号按这两处计算，见 vite.config.ts 的 gen-hash）。
  */
@@ -18,14 +18,22 @@ const classic: PluginManifest = {
   required: true,
 }
 
+/** 内置的制图风格：默认的纸图风格、聚落图主题与沙盘的配色都在这里，不可停用 */
+const cartography: PluginManifest = {
+  id: 'cartography',
+  name: '制图风格',
+  desc: '内置的八种纸图风格（自然地理、奇幻羊皮、航海图、提瓦特、水墨、等高线、政区地图集、战略图）与八种聚落图主题',
+  required: true,
+}
+
 /** 示例插件：只在开发构建里出现，用来验证启停与缺失引用的处理 */
 const sample: PluginManifest = {
   id: 'sample',
   name: '示例插件',
-  desc: '一个示例世界观：一种命名风格和一种与西式相同的"示例文明"，用来验证插件的启停（只在开发构建里出现）',
-  requires: ['classic'],
+  desc: '一个示例世界观（一种命名风格和一种与西式相同的"示例文明"）、一种纸图风格与一种聚落图主题，用来验证插件的启停（只在开发构建里出现）',
+  requires: ['classic', 'cartography'],
   dev: true,
 }
 
 // 离线脚本（Node）里没有 import.meta.env：按非开发构建处理
-export const PLUGINS: readonly PluginManifest[] = [classic, ...(import.meta.env?.DEV ? [sample] : [])]
+export const PLUGINS: readonly PluginManifest[] = [classic, cartography, ...(import.meta.env?.DEV ? [sample] : [])]
