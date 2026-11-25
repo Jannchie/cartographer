@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { World } from '../../gen/types'
+import { sampleField, smoothstep } from '../../gen/util'
 import { riverThreshold } from '../../gen/world'
 import type { SmoothRiver } from '../rivers'
 
@@ -60,7 +61,7 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
       cDepth.push(cd, cd)
       // 河口：进入水域后按水深渐隐、向水色过渡；河带贴在水面上（湖面或海面）
       const wd = waterDepth(world, r.xs[k], r.ys[k])
-      const m = Math.max(smooth01((wd.depth - 0.01) / 0.025), coastal ? 1 - smooth01(toEnd[k] / 1.5) : 0)
+      const m = Math.max(smoothstep(0, 1, (wd.depth - 0.01) / 0.025), coastal ? 1 - smoothstep(0, 1, toEnd[k] / 1.5) : 0)
       mouth.push(m, m)
       floorY.push(wd.level, wd.level)
       if (k < n - 1) {
@@ -185,12 +186,7 @@ function extendToWater(world: World, r: SmoothRiver): SmoothRiver {
     // 河道坐标以格左上角为原点，格心在 +0.5
     const fx = Math.min(W - 1.001, Math.max(0, x - 0.5))
     const fy = Math.min(H - 1.001, Math.max(0, y - 0.5))
-    const x0 = Math.floor(fx)
-    const y0 = Math.floor(fy)
-    const tx = fx - x0
-    const ty = fy - y0
-    const i = y0 * W + x0
-    const h = (e[i] * (1 - tx) + e[i + 1] * tx) * (1 - ty) + (e[i + W] * (1 - tx) + e[i + W + 1] * tx) * ty
+    const h = sampleField(e, W, H, fx, fy)
     const lake = !Number.isNaN(water[Math.round(fy) * W + Math.round(fx)]) && h > 0
     return h < -0.022 || (lake && water[Math.round(fy) * W + Math.round(fx)] - h > 0.012)
   }
@@ -263,22 +259,12 @@ function extendToWater(world: World, r: SmoothRiver): SmoothRiver {
   return { xs: ox, ys: oy, fl: of }
 }
 
-function smooth01(t: number) {
-  const x = Math.min(1, Math.max(0, t))
-  return x * x * (3 - 2 * x)
-}
-
 /** 某点的水深（km，陆地为负）与水面高度（海 0 / 湖面 / 陆地取海平面以下占位） */
 function waterDepth(world: World, x: number, y: number) {
   const { W, H, elevation: e, water } = world
   const fx = Math.min(W - 1.001, Math.max(0, x - 0.5))
   const fy = Math.min(H - 1.001, Math.max(0, y - 0.5))
-  const x0 = Math.floor(fx)
-  const y0 = Math.floor(fy)
-  const tx = fx - x0
-  const ty = fy - y0
-  const i = y0 * W + x0
-  const h = (e[i] * (1 - tx) + e[i + 1] * tx) * (1 - ty) + (e[i + W] * (1 - tx) + e[i + W + 1] * tx) * ty
+  const h = sampleField(e, W, H, fx, fy)
   const lv = water[Math.round(fy) * W + Math.round(fx)]
   if (!Number.isNaN(lv) && lv > 0) return { depth: lv - h, level: lv }
   return { depth: -h, level: 0 }

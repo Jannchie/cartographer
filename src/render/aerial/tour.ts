@@ -46,7 +46,7 @@ interface Shot {
 }
 
 const TAU = Math.PI * 2
-const smoother = (x: number) => x * x * x * (x * (x * 6 - 15) + 10)
+export const smoother = (x: number) => x * x * x * (x * (x * 6 - 15) + 10)
 /** 梯形速度曲线：两端各 ramp 的时间缓入缓出，中段匀速 */
 function trapezoid(t: number, ramp = 0.18) {
   const v = 1 / (1 - ramp)

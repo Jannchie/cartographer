@@ -693,7 +693,4 @@ function gridPts(ctx: Ctx, step: number, margin: number): P[] {
   return out
 }
 
-const unitOf = (a: P, b: P): P => {
-  const L = dist(a, b) || 1
-  return [(a[0] - b[0]) / L, (a[1] - b[1]) / L]
-}
+const unitOf = (a: P, b: P): P => unit(sub(a, b))

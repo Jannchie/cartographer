@@ -1,6 +1,6 @@
 import { RNG } from '../../gen/rng'
 import type { Ctx } from '../ctx'
-import { add, area, cbox, centroid, chaikin, circlePoly, dist, frameAt, inscribedRect, insetConvex, lerpP, neg, obb, perp, pointInPoly, resample, segDist, sub, unit, at, type P, type Poly, type RectFrame } from '../geom'
+import { add, area, cbox, centroid, chaikin, circlePoly, dist, frameAt, inscribedRect, insetConvex, lerpP, neg, obb, perp, edgeDist, pointInPoly, resample, segDist, sub, unit, at, type P, type Poly, type RectFrame } from '../geom'
 import type { BuildingKind, Building, Culture, ParkPart } from '../types'
 import { inside, place, plantTree } from '../wards'
 import type { Composer, Preset } from '../compose/core'
@@ -117,13 +117,6 @@ export function rectIn(K: Garden, margin: number, min: number, u: P = K.f): Rect
 }
 
 // —————————————————————— 几何小工具 ——————————————————————
-
-/** 点到多边形边界的距离 */
-export function edgeDist(p: P, q: Poly) {
-  let d = Infinity
-  for (let i = 0; i < q.length; i++) d = Math.min(d, segDist(p, q[i], q[(i + 1) % q.length]).d)
-  return d
-}
 
 /** 从 c 沿 d 出发到多边形边界的距离（c 在多边形里） */
 export function reach(q: Poly, c: P, d: P) {
@@ -413,4 +406,4 @@ export function farCorner(K: Garden, p: P, back: number): P {
   return add(far, unit(sub(p, far)), back)
 }
 
-export { circlePoly, insetConvex, pointInPoly, dist, area, centroid, clipHalf } from '../geom'
+export { circlePoly, edgeDist, insetConvex, pointInPoly, dist, area, centroid, clipHalf } from '../geom'

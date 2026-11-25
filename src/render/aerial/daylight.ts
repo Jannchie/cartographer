@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { smoothstep } from '../../gen/util'
 
 /**
  * 昼夜：时刻 → 太阳 / 月亮的方向与整套光照参数（纯函数，不碰场景）。
@@ -54,10 +55,6 @@ export interface Daylight {
 }
 
 const clamp = (x: number, a = 0, b = 1) => Math.min(b, Math.max(a, x))
-const smooth = (a: number, b: number, x: number) => {
-  const t = clamp((x - a) / (b - a))
-  return t * t * (3 - 2 * t)
-}
 const lin = (r: number, g: number, b: number) => new THREE.Color().setRGB(r, g, b)
 
 const SKY_TOP = new THREE.Color('#3b6ea8')
@@ -113,18 +110,18 @@ export function daylight(hours: number, azDeg: number, noonDeg: number): Dayligh
   const warm = 1 - clamp((el - 4) / 40)
   const sunColor = lin(1, 0.95 - 0.2 * warm, 0.86 - 0.36 * warm)
   // 贴着地平线时再红一些
-  sunColor.lerp(SUN_LOW, Math.max(1 - smooth(-2, 3, el), 0.35 * smooth(14, 2, el)))
+  sunColor.lerp(SUN_LOW, Math.max(1 - smoothstep(-2, 3, el), 0.35 * smoothstep(14, 2, el)))
   const k = clamp(Math.sin((Math.max(el, 0) * Math.PI) / 180) * 2.2, 0.15, 1)
   // 太阳落到地平线下 3° 时直射光熄灭
-  const sunFade = smooth(-3, 2, el)
+  const sunFade = smoothstep(-3, 2, el)
   const ks = k * sunFade
   // 白天的比例：1 = 白天，0 = 夜
-  const day = smooth(-12, 2, el)
+  const day = smoothstep(-12, 2, el)
   // 月亮升到 3° 起亮，14° 全亮
-  const moonUp = smooth(3, 14, moonEl)
-  const twilight = smooth(7, 0, el) * smooth(-12, -3, el)
+  const moonUp = smoothstep(3, 14, moonEl)
+  const twilight = smoothstep(7, 0, el) * smoothstep(-12, -3, el)
   // 黄金时刻：太阳低于 14° 起天光转暖、变弱，暖色的直射光占上风
-  const golden = smooth(14, 2, el) * smooth(-3, 1, el)
+  const golden = smoothstep(14, 2, el) * smoothstep(-3, 1, el)
 
   // —— 主光 ——
   const moonKey = el <= -3
@@ -141,7 +138,7 @@ export function daylight(hours: number, azDeg: number, noonDeg: number): Dayligh
     let e0 = 0
     for (const [e1, top1, hor1] of DUSK) {
       if (el >= e1) {
-        const f = smooth(0, 1, (e0 - el) / (e0 - e1))
+        const f = smoothstep(0, 1, (e0 - el) / (e0 - e1))
         skyTop.copy(top0).lerp(top1, f)
         skyHorizon.copy(hor0).lerp(hor1, f)
         break
@@ -195,11 +192,11 @@ export function daylight(hours: number, azDeg: number, noonDeg: number): Dayligh
     light,
     cloudSun,
     hazeSun,
-    cityLights: 1 - smooth(-6, 3, el),
-    stars: 1 - smooth(-14, -5, el),
+    cityLights: 1 - smoothstep(-6, 3, el),
+    stars: 1 - smoothstep(-14, -5, el),
     moonUp,
     twilight,
-    exposure: 1 + (NIGHT_EXPOSURE - 1) * (1 - smooth(-12, 0, el)),
+    exposure: 1 + (NIGHT_EXPOSURE - 1) * (1 - smoothstep(-12, 0, el)),
     shadowSoft: moonKey ? 1.8 : 1,
   }
 }

@@ -1181,7 +1181,6 @@ export function siheyuan(ctx: Ctx, lot: Poly) {
 }
 
 /** 东式大型院落群（宫城、寺观、宗门）：按骨架与元素池拼，见 compose/chinese.ts */
-export { eastCompound }
 
 /** 东式里坊：坊内十字街分成四块，每块排布院落 */
 export function eastWard(ctx: Ctx, block: Poly, rich: boolean, nearRoad = Infinity) {
@@ -1325,5 +1324,3 @@ export function eastMarket(ctx: Ctx, block: Poly) {
       }
     }
 }
-
-export { DENS }

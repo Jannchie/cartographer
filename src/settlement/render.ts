@@ -2,11 +2,11 @@ import { eastAsian } from './culture'
 import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
 import { DisplayList, rasterArea, rasterPoly, type BBox, type Fill, type Item, type LabelArea, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
-import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, type P, type Poly } from './geom'
+import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, signedArea, type P, type Poly } from './geom'
 import { dioramaGround, settleTheme, type SettleStyleId, type SettleTheme } from './themes'
 import type { BuildingKind, Field, MapLabel, Road, Settlement, SettlementSize } from './types'
 import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type LandUse } from './landuse'
-import { tr } from '../i18n'
+import { settlementTitle, tr } from '../i18n'
 import { regionShown, type SettleRegion } from './regions'
 import * as dmath from '../gen/dmath'
 import { GLYPH_R, HALO_RATIO, LABEL_PAD, labelPx } from '../render/atlas/labelSize'
@@ -246,47 +246,51 @@ function ringsD(rings: Ring[], k: number, closed: boolean, smooth: boolean) {
   return parts.join('')
 }
 
+/** 斜纹图案（底色 + 45° 细线；给出 crossWidth 时再加一道反向的交叉线），返回 url(#id) 形式的填充色 */
+function stripes(list: DisplayList, id: string, bg: string, color: string, width: number, step = 3.2, crossWidth?: number) {
+  const s = step
+  const cross = crossWidth !== undefined
+  const svg =
+    `<rect width="${s}" height="${s}" fill="${bg}"/>` +
+    `<path d="M0 ${s}L${s} 0M${-s / 2} ${s / 2}L${s / 2} ${-s / 2}M${s / 2} ${s * 1.5}L${s * 1.5} ${s / 2}" stroke="${color}" stroke-width="${width}"/>` +
+    (cross ? `<path d="M0 0L${s} ${s}" stroke="${color}" stroke-width="${crossWidth}"/>` : '')
+  list.patterns.set(id, {
+    w: s,
+    h: s,
+    svg,
+    tile: () => {
+      const c = document.createElement('canvas')
+      const k = 4
+      c.width = c.height = Math.round(s * k)
+      const g = c.getContext('2d')!
+      g.fillStyle = bg
+      g.fillRect(0, 0, c.width, c.height)
+      g.strokeStyle = color
+      g.lineWidth = width * k
+      g.beginPath()
+      g.moveTo(0, s * k)
+      g.lineTo(s * k, 0)
+      g.moveTo((-s / 2) * k, (s / 2) * k)
+      g.lineTo((s / 2) * k, (-s / 2) * k)
+      g.moveTo((s / 2) * k, s * 1.5 * k)
+      g.lineTo(s * 1.5 * k, (s / 2) * k)
+      if (cross) {
+        g.moveTo(0, 0)
+        g.lineTo(s * k, s * k)
+      }
+      g.stroke()
+      return c
+    },
+  })
+  return `url(#${id})`
+}
+
 function hatchPatterns(list: DisplayList, th: SettleTheme) {
-  const make = (id: string, step: number, cross: boolean, color = th.hatch!, bg = th.ground, width = 0.7, crossWidth = 0.6) => {
-    const s = step
-    const svg =
-      `<rect width="${s}" height="${s}" fill="${bg}"/>` +
-      `<path d="M0 ${s}L${s} 0M${-s / 2} ${s / 2}L${s / 2} ${-s / 2}M${s / 2} ${s * 1.5}L${s * 1.5} ${s / 2}" stroke="${color}" stroke-width="${width}"/>` +
-      (cross ? `<path d="M0 0L${s} ${s}" stroke="${color}" stroke-width="${crossWidth}"/>` : '')
-    list.patterns.set(id, {
-      w: s,
-      h: s,
-      svg,
-      tile: () => {
-        const c = document.createElement('canvas')
-        const k = 4
-        c.width = c.height = Math.round(s * k)
-        const g = c.getContext('2d')!
-        g.fillStyle = bg
-        g.fillRect(0, 0, c.width, c.height)
-        g.strokeStyle = color
-        g.lineWidth = width * k
-        g.beginPath()
-        g.moveTo(0, s * k)
-        g.lineTo(s * k, 0)
-        g.moveTo((-s / 2) * k, (s / 2) * k)
-        g.lineTo((s / 2) * k, (-s / 2) * k)
-        g.moveTo((s / 2) * k, s * 1.5 * k)
-        g.lineTo(s * 1.5 * k, (s / 2) * k)
-        if (cross) {
-          g.moveTo(0, 0)
-          g.lineTo(s * k, s * k)
-        }
-        g.stroke()
-        return c
-      },
-    })
-  }
   if (th.hatch) {
-    make('hatch', 2.6, false)
-    make('hatch2', 2.2, true)
+    stripes(list, 'hatch', th.ground, th.hatch, 0.7, 2.6)
+    stripes(list, 'hatch2', th.ground, th.hatch, 0.7, 2.2, 0.6)
   }
-  for (const p of th.patterns ?? []) make(p.id, p.step, p.cross, p.color, p.bg, p.width, p.width * 0.85)
+  for (const p of th.patterns ?? []) stripes(list, p.id, p.bg, p.color, p.width, p.step, p.cross ? p.width * 0.85 : undefined)
 }
 
 // —————————————————————— 地形与水 ——————————————————————
@@ -513,7 +517,19 @@ const CHUNK = 250
 const CHUNK_KEEP = 4
 const objIds = new WeakMap<object, number>()
 let objNext = 0
+/** 一组对象的指纹：按各自的编号（首次见到时分配）依次哈希 */
+function groupPrint(group: object[]) {
+  let h = 2166136261
+  for (const t of group) {
+    let id = objIds.get(t)
+    if (id === undefined) objIds.set(t, (id = objNext++))
+    h = Math.imul(h ^ id, 16777619)
+  }
+  return h >>> 0
+}
 const chunkMemo = new Map<string, { key: string; layers: (PathItem | undefined)[] }[]>()
+/** 换了一座城：旧城的分块不会再命中，放掉 */
+export const clearVectorChunks = () => chunkMemo.clear()
 function chunked<T extends object>(R: Painter, tag: string, things: T[], at: (t: T) => P | undefined, make: (group: T[]) => (PathItem | undefined)[]) {
   const byChunk = new Map<string, T[]>()
   for (const t of things) {
@@ -526,13 +542,7 @@ function chunked<T extends object>(R: Painter, tag: string, things: T[], at: (t:
   }
   const layers: PathItem[][] = []
   for (const [cell, group] of byChunk) {
-    let h = 2166136261
-    for (const t of group) {
-      let id = objIds.get(t)
-      if (id === undefined) objIds.set(t, (id = objNext++))
-      h = Math.imul(h ^ id, 16777619)
-    }
-    const key = `${R.S}|${group.length}|${h >>> 0}`
+    const key = `${R.S}|${group.length}|${groupPrint(group)}`
     let slots = chunkMemo.get(cell)
     if (!slots) chunkMemo.set(cell, (slots = []))
     let hit = slots.find((x) => x.key === key)
@@ -611,7 +621,7 @@ function flock(st: Settlement): P[] {
   const out: P[] = []
   for (const f of st.fields) {
     if (f.kind !== 'pasture') continue
-    const a = areaOf(f.poly)
+    const a = signedArea(f.poly)
     if (Math.abs(a) < 1500) continue
     // 由田块自身的色调取确定的随机：同一块地总是同样的羊群
     let h = Math.floor(f.tone * 1e9) >>> 0
@@ -915,7 +925,7 @@ function buildingLayers(R: Painter, st: Settlement, th: SettleTheme) {
   // 塔与法师塔：同心圆
   for (const b of st.buildings.filter((b) => b.kind === 'magic' || b.kind === 'pagoda')) {
     const c = centroid(b.poly)
-    const r = Math.sqrt(Math.abs(areaOf(b.poly)) / Math.PI)
+    const r = Math.sqrt(Math.abs(signedArea(b.poly)) / Math.PI)
     R.list.path('map', R.circleD(c, r * 0.55) + R.circleD(c, r * 0.22), { stroke: { color: th.buildingStroke.color, alpha: 0.8, width: sw * 0.8 } })
   }
 }
@@ -937,15 +947,6 @@ function toriiLayer(R: Painter, st: Settlement, th: SettleTheme) {
     { color: vermilion(th), alpha: 1 },
     { color: '#6b1d10', alpha: 0.7, width: sw, join: 'round' },
   )
-}
-
-function areaOf(p: Poly) {
-  let a = 0
-  for (let i = 0; i < p.length; i++) {
-    const q = p[(i + 1) % p.length]
-    a += p[i][0] * q[1] - q[0] * p[i][1]
-  }
-  return a / 2
 }
 
 /** 护城河：岸线、水面、一道水线；城门外的桥压在上面（沙盘的地面层不画桥，桥另建实体） */
@@ -1209,13 +1210,7 @@ class GroundPen {
     const cl: PathItem[][] = []
     const ml: PathItem[][] = []
     for (const [cell, group] of groups) {
-      let h = 2166136261
-      for (const t of group) {
-        let id = objIds.get(t)
-        if (id === undefined) objIds.set(t, (id = objNext++))
-        h = Math.imul(h ^ id, 16777619)
-      }
-      const key = `${S}|${group.length}|${h >>> 0}`
+      const key = `${S}|${group.length}|${groupPrint(group)}`
       let slots = tileMemo.get(cell)
       if (!slots) tileMemo.set(cell, (slots = []))
       let hit = slots.find((x) => x.key === key)
@@ -1718,36 +1713,6 @@ function mix(a: string, b: string, t: number) {
   return '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('')
 }
 
-/** 斜纹图案（底色 + 45° 细线），返回 url(#id) 形式的填充色 */
-function stripes(list: DisplayList, id: string, bg: string, color: string, width: number, step = 3.2) {
-  const s = step
-  list.patterns.set(id, {
-    w: s,
-    h: s,
-    svg: `<rect width="${s}" height="${s}" fill="${bg}"/><path d="M0 ${s}L${s} 0M${-s / 2} ${s / 2}L${s / 2} ${-s / 2}M${s / 2} ${s * 1.5}L${s * 1.5} ${s / 2}" stroke="${color}" stroke-width="${width}"/>`,
-    tile: () => {
-      const c = document.createElement('canvas')
-      const k = 4
-      c.width = c.height = Math.round(s * k)
-      const g = c.getContext('2d')!
-      g.fillStyle = bg
-      g.fillRect(0, 0, c.width, c.height)
-      g.strokeStyle = color
-      g.lineWidth = width * k
-      g.beginPath()
-      g.moveTo(0, s * k)
-      g.lineTo(s * k, 0)
-      g.moveTo((-s / 2) * k, (s / 2) * k)
-      g.lineTo((s / 2) * k, (-s / 2) * k)
-      g.moveTo((s / 2) * k, s * 1.5 * k)
-      g.lineTo(s * 1.5 * k, (s / 2) * k)
-      g.stroke()
-      return c
-    },
-  })
-  return `url(#${id})`
-}
-
 /**
  * 区划图：片区按用地性质（landuse.ts）着色，城郊与农田淡一些；街道、道路、水系、城墙、注记照常，
  * 房屋、树木、田块只留淡淡的轮廓，认得出是哪座城。左下角是图例（各类占城区面积的比例）。
@@ -1894,7 +1859,7 @@ function titleBlock(list: DisplayList, st: Settlement, th: SettleTheme, X: numbe
   const tx = X + 22
   const ty = Y + 22
   // 东式城名用毛笔字（中文）；英文用标题字体
-  const title = lg === 'zh' ? st.nameZh : lg === 'ja' ? st.nameJa : st.name
+  const title = settlementTitle(st, lg)
   const zhFont = lg === 'en' ? `600 40px ${th.font.title}` : eastAsian(st.params.culture) && th.brushTitle !== false && lg === 'zh' ? `400 44px "Ma Shan Zheng", ${th.font.label}` : `600 40px ${th.font.label}`
   measurer.font = zhFont
   const tw = Math.max(measurer.measureText(title).width, 200)

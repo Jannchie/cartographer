@@ -26,8 +26,6 @@ export async function loadEarth(): Promise<void> {
   grid = g
 }
 
-export const earthLoaded = () => grid !== null
-
 /**
  * 经纬度处的高程（公里，海面以下为负）：双线性插值，经度首尾相接。
  * 网格格心在纬度 89.75 − 0.5j、经度 −179.75 + 0.5i

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { isTypingTarget } from '../../ui/keys'
+import { isTypingTarget, navKey } from '../../ui/keys'
+import { smoother } from '../aerial/tour'
 import type { HeightField } from './heightField'
 
 /**
@@ -50,26 +51,6 @@ const MIN_POLAR = 0.02
 /** 镜头前方这段距离（米）内的视线不得被挡 */
 const BLOCK_NEAR = 30
 
-const NAV_KEYS: Record<string, string> = {
-  ArrowUp: 'forward',
-  w: 'forward',
-  ArrowDown: 'back',
-  s: 'back',
-  ArrowLeft: 'left',
-  a: 'left',
-  ArrowRight: 'right',
-  d: 'right',
-  q: 'turnLeft',
-  e: 'turnRight',
-  PageUp: 'tiltUp',
-  PageDown: 'tiltDown',
-  '+': 'zoomIn',
-  '=': 'zoomIn',
-  '-': 'zoomOut',
-  _: 'zoomOut',
-}
-const navKey = (e: KeyboardEvent): string | undefined => NAV_KEYS[e.key.length === 1 ? e.key.toLowerCase() : e.key]
-const smoother = (x: number) => x * x * x * (x * (x * 6 - 15) + 10)
 
 export class CameraRig {
   readonly controls: OrbitControls

@@ -1,17 +1,8 @@
 import { Biome, reliefKm, type World } from '../gen/types'
+import { smoothstep } from '../gen/util'
+import { hash } from './atlas/fields'
 import { PHYSICAL, seabed } from './palette'
 import { drawRivers, type SmoothRiver } from './rivers'
-
-function smooth(a: number, b: number, x: number) {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
-  return t * t * (3 - 2 * t)
-}
-
-function hash(x: number, y: number) {
-  let h = (x * 374761393 + y * 668265263) | 0
-  h = Math.imul(h ^ (h >>> 13), 1274126177)
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296
-}
 
 /** 地表贴图的像素（RGBA）：不依赖 DOM，可在生成 Worker 里算好再转移给主线程 */
 export interface TexturePixels {
@@ -62,7 +53,7 @@ export function physicalTexturePixels(world: World, scale = 2): TexturePixels {
     } else {
       const base = PHYSICAL[biome[i]]
       // 高处略偏灰褐，低处略偏暖
-      const hi = smooth(0.4, 2.8, h)
+      const hi = smoothstep(0.4, 2.8, h)
       c = [base[0] * (1 - hi * 0.12) + 128 * hi * 0.12, base[1] * (1 - hi * 0.16) + 118 * hi * 0.16, base[2] * (1 - hi * 0.1) + 104 * hi * 0.1]
     }
     cr[i] = c[0]
@@ -110,13 +101,13 @@ export function physicalTexturePixels(world: World, scale = 2): TexturePixels {
         const gyv = (e[yp * W + x0] - e[ym * W + x0]) / ((yp - ym) * km)
         const slope = Math.hypot(gxv, gyv)
         // 裸岩：陡坡
-        const rock = smooth(0.16, 0.36, slope) * 0.45
+        const rock = smoothstep(0.16, 0.36, slope) * 0.45
         r += (122 - r) * rock
         g += (113 - g) * rock
         b += (102 - b) * rock
         // 积雪：随温度与海拔，陡坡上积不住
         const t = bil(T, x0, y0, fx, fy)
-        const snow = smooth(-1.5, -6, t) * (1 - smooth(0.25, 0.5, slope) * 0.55)
+        const snow = smoothstep(-1.5, -6, t) * (1 - smoothstep(0.25, 0.5, slope) * 0.55)
         r += (242 - r) * snow
         g += (245 - g) * snow
         b += (248 - b) * snow

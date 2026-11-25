@@ -11,7 +11,7 @@ import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
 import { realEarthWorld } from './earth/realWorld'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
 import { Biome, EQUATOR_KM, isGlobe, isSettlement, MAP_KM, reliefKm, type County, type Label, type PoliticalLayer, type Province, type Realm, type River, type World, type WorldCulture, type WorldEdits, type WorldParams } from './types'
-import { blur, neighbors8, signedDistance } from './util'
+import { blur, clampAngle, neighbors8, signedDistance } from './util'
 import * as dmath from './dmath'
 
 export type Progress = (stage: string, frac: number) => void
@@ -729,12 +729,6 @@ function makeLabels(
     return { mx, my, ang, major: Math.sqrt(l1) * 2, minor: Math.sqrt(Math.max(0, l2)) * 2 }
   }
 
-  const clampAngle = (a: number) => {
-    while (a > Math.PI / 2) a -= Math.PI
-    while (a < -Math.PI / 2) a += Math.PI
-    return a
-  }
-
   // —— 陆块：大陆 / 岛屿 ——
   const lands = components((i) => elev[i] > 0)
   lands.sort((a, b) => b.length - a.length)
@@ -802,15 +796,7 @@ function makeLabels(
     if (cells.length < 180) break
     const { mx, my, ang, major } = pca(cells)
     // 找离质心最近的属于该山脉的格
-    let best = cells[0]
-    let bd = Infinity
-    for (const c of cells) {
-      const d = dmath.pow(c % W - mx, 2) + dmath.pow(Math.floor(c / W) - my, 2)
-      if (d < bd) {
-        bd = d
-        best = c
-      }
-    }
+    const best = nearestIn(cells, mx, my, W)
     labels.push({ kind: 'range',
       ...tri(namer.name('range', rng.next())),
       x: best % W,

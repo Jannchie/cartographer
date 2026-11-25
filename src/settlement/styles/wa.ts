@@ -8,7 +8,8 @@ import { buke, jiin, machiya, put, rampart, tenshu } from '../plans/jokamachi-bu
 import { connectGates } from '../walls'
 import { isVillage } from '../scale'
 import type { BuildingKind, Road, Ward } from '../types'
-import { addBuilding, addGroup, eastCompound, inside, place, plantTree, scatterTrees, urban } from '../wards'
+import { eastCompound } from '../compose/chinese'
+import { addBuilding, addGroup, inside, place, plantTree, scatterTrees, urban } from '../wards'
 import { drop } from '../undo'
 import * as dmath from '../../gen/dmath'
 

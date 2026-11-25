@@ -159,12 +159,6 @@ const ringOf = (K: Garden, s: Spot, inset: number): Poly => (s.F ? box(s.F, -s.F
 function ringRows(K: Garden, q: Poly, step: number, r: number, any = false) {
   for (let i = 0; i < q.length; i++) row(K, q[i], q[(i + 1) % q.length], step, r, any)
 }
-/** 池岸上离 p 最近的一点 */
-function nearShore(q: Poly, p: P): P {
-  let best = q[0]
-  for (const v of q) if (dist(v, p) < dist(best, p)) best = v
-  return best
-}
 /** 最窄处横过池面的一条线（在池心附近的几条平行线与几个方向里取最短、又不碰岛的） */
 function narrowest(K: Garden, q: Poly, minW = 6): [P, P] | null {
   const c = centroid(q)
@@ -1925,5 +1919,3 @@ export function bySlot(flat: Record<string, number>): Record<string, Record<stri
   }
   return out
 }
-
-export { nearShore, pavilion }

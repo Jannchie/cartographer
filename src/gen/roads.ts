@@ -1,4 +1,4 @@
-import { Biome, type Label, type Road } from './types'
+import { Biome, isSettlement, type Label, type Road } from './types'
 import { simplifyLine } from './util'
 import * as dmath from './dmath'
 
@@ -39,7 +39,7 @@ export function buildRoads(
   const { CW, CH, r } = g
   const toC = (x: number, y: number) => Math.min(CH - 1, Math.max(0, Math.round(y / r))) * CW + Math.min(CW - 1, Math.max(0, Math.round(x / r)))
   const cities = labels
-    .filter((l) => l.kind === 'city' || l.kind === 'capital')
+    .filter(isSettlement)
     .map((l) => ({ capital: l.kind === 'capital', cell: nearest(g.land, CW, CH, toC(l.x, l.y), 4) }))
     .filter((c) => c.cell >= 0)
   if (cities.length < 2) return []

@@ -13,6 +13,7 @@ import { riverThreshold, signedCoastDist, slopeField } from '../world'
 import { outline, type Area, type AreaKind } from '../areas'
 import { RNG, hashString } from '../rng'
 import * as dmath from '../dmath'
+import { clampAngle } from '../util'
 import { COVER, earthFeatures, earthFeaturesLoaded, earthGrid, type EarthPlaceKind, type EarthRes } from './real'
 import { fillRings, type LonLatGrid } from './raster'
 import { regionProjection, REGION_INFO, type MapProjection, type RegionId } from './region'
@@ -444,12 +445,6 @@ function pca(cells: number[], W: number) {
   const det = (sxx * syy - sxy * sxy) / (cells.length * cells.length)
   const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - det))
   return { mx, my, ang, major: 4 * Math.sqrt(tr / 2 + disc), minor: 4 * Math.sqrt(Math.max(0, tr / 2 - disc)) }
-}
-
-const clampAngle = (a: number) => {
-  while (a > Math.PI / 2) a -= Math.PI
-  while (a < -Math.PI / 2) a += Math.PI
-  return a
 }
 
 /** 区域里离边最远的一格（只在包围盒里算距离场） */

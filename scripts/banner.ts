@@ -2,11 +2,8 @@
 // 自然地理纸图满幅铺底，左侧压暗，放罗盘图标、标题与一行说明。字体目录里的 ttf/otf 会被注册（标题用 Cormorant Garamond）。
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createCanvas, DOMMatrix, GlobalFonts, ImageData, loadImage, Path2D, type Canvas } from '@napi-rs/canvas'
-;(globalThis as any).ImageData = ImageData
-;(globalThis as any).Path2D = Path2D
-;(globalThis as any).DOMMatrix = DOMMatrix
-;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
+import { createCanvas, GlobalFonts, loadImage, type Canvas } from '@napi-rs/canvas'
+import './lib/canvas'
 
 const FONTS = process.argv[2]
 if (FONTS && existsSync(FONTS)) for (const f of readdirSync(FONTS)) if (/\.(ttf|otf)$/i.test(f)) GlobalFonts.registerFromPath(join(FONTS, f))

@@ -5,13 +5,9 @@
 // - flicker：消失后又在原处出现的要素数（同一栋房子时有时无）
 // - orphan：无因消失——消失时下一帧没有新出现的东西压在它的位置上（房子凭空没了、跑到别处去了）
 // 相邻帧指标：keepB（建筑）、keepR（道路）、keepF（田块）、keepT（树）留下来的比例
-import { createCanvas, ImageData, Path2D, DOMMatrix } from '@napi-rs/canvas'
-;(globalThis as any).ImageData = ImageData
-;(globalThis as any).Path2D = Path2D
-;(globalThis as any).DOMMatrix = DOMMatrix
-;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
+import './lib/canvas'
 const G: any = await import('../src/settlement/generate')
-const H: any = await import('../src/settlement/history').catch(() => ({}))
+const H: any = await import('../src/settlement/history')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')
 
 const extra: Record<string, any> = {}
@@ -28,7 +24,7 @@ const target = take('target', 20000)
 const frames = take('frames', 48)
 const from = take('from', Math.min(30, target))
 const verbose = !!take('v', false)
-const legacy = !!take('legacy', false) || !G.generateHistory
+const legacy = !!take('legacy', false)
 const pops = Array.from({ length: frames + 1 }, (_, k) => Math.round(Math.exp(Math.log(from) + ((Math.log(target) - Math.log(from)) * k) / frames)))
 
 type P = [number, number]

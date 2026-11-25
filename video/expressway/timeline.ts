@@ -6,7 +6,6 @@ import { clamp01, ease, span } from '../shared/motion'
 
 export const FPS = 30
 export const DURATION = 180
-export const FRAMES = FPS * DURATION
 
 /** 演进（年份推进）的起止（秒） */
 export const T_START = 10.5

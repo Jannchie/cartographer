@@ -1,11 +1,11 @@
 import { Noise } from './noise'
 import { RNG } from './rng'
 import type { WorldParams, WorldSketch } from './types'
-import { edt, quantile, smoothstep, clamp } from './util'
+import { clamp, edt, lerp, quantile, sampleField, smoothstep } from './util'
 import * as dmath from './dmath'
 import { earthElevation } from './earth/index'
 import { latitudeOf } from './climate'
-import { sampleField, sketchFields } from './sketch'
+import { sketchFields } from './sketch'
 
 interface Plate {
   x: number
@@ -328,7 +328,7 @@ export function buildTerrain(p: WorldParams, rng: RNG, kmPerCell: number, sketch
     for (let k = 0; k < n; k++) {
       const age = k / n
       const rad = rng.range(2.5, 5.5) * (1 + age * 0.6)
-      const summit = lerpN(rng.range(0.4, 2.2), -0.6 - age * 1.2, dmath.pow(age, 0.9))
+      const summit = lerp(rng.range(0.4, 2.2), -0.6 - age * 1.2, dmath.pow(age, 0.9))
       const x0 = Math.max(0, Math.floor(px - rad * 3)), x1 = Math.min(W - 1, Math.ceil(px + rad * 3))
       const y0 = Math.max(0, Math.floor(py - rad * 3)), y1 = Math.min(H - 1, Math.ceil(py + rad * 3))
       for (let yy = y0; yy <= y1; yy++) {
@@ -412,6 +412,3 @@ function sketchSeaLevel(raw: Float32Array, land: Float32Array) {
   return quantile(raw, 1 - n / land.length)
 }
 
-function lerpN(a: number, b: number, t: number) {
-  return a + (b - a) * t
-}

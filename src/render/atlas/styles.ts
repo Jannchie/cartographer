@@ -2,9 +2,9 @@ import type { Area } from '../../gen/areas'
 import { cjkFont, lang } from '../../i18n'
 import type { PoliticalMode } from './political'
 import { Biome, type World } from '../../gen/types'
-import { blur, edt } from '../../gen/util'
-import { ATLAS, atlasSea, ramp, type RGB } from '../palette'
-import { Fields, fnoise, hash, line, mix, mixc, paperGrain, set, sm, vnoise, type Px } from './fields'
+import { blur, edt, smoothstep } from '../../gen/util'
+import { ATLAS, atlasSea, hex, ramp, type RGB } from '../palette'
+import { Fields, fnoise, hash, line, mix, mixc, paperGrain, set, vnoise, type Px } from './fields'
 
 export type StyleId = 'physical' | 'fantasy' | 'nautical' | 'teyvat' | 'ink' | 'topo' | 'political' | 'strategy'
 
@@ -110,8 +110,6 @@ export interface Theme {
   paperTexture?: boolean
   labels: LabelTheme
 }
-
-const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]
 
 const CORMORANT = '"Cormorant Garamond", Georgia, serif'
 const FELL = '"IM Fell English", "Cormorant Garamond", Georgia, serif'
@@ -219,12 +217,12 @@ function lakeFill(p: Px, o: Float32Array, fill: RGB, edge: RGB, w = 0.7) {
 
 // ————————————————————————————————— 自然地理 —————————————————————————————————
 const INK_PH = hex('#3a4246')
+const DEPTH_STEPS = [0, 0.2, 1, 2, 3.2, 4.2, 9]
 function stepDepth(d: number) {
-  const levels = [0, 0.2, 1, 2, 3.2, 4.2, 9]
-  for (let k = 0; k < levels.length - 1; k++) {
-    if (d < levels[k + 1]) {
-      const t = (d - levels[k]) / (levels[k + 1] - levels[k])
-      return levels[k] + (levels[k + 1] - levels[k]) * (0.25 + t * 0.35)
+  for (let k = 0; k < DEPTH_STEPS.length - 1; k++) {
+    if (d < DEPTH_STEPS[k + 1]) {
+      const t = (d - DEPTH_STEPS[k]) / (DEPTH_STEPS[k + 1] - DEPTH_STEPS[k])
+      return DEPTH_STEPS[k] + (DEPTH_STEPS[k + 1] - DEPTH_STEPS[k]) * (0.25 + t * 0.35)
     }
   }
   return d
@@ -239,10 +237,10 @@ function physicalPixel(p: Px, o: Float32Array, f: Fields, opts: AtlasOpts) {
     const dpx = -p.coast
     const rip = [4.5, 9.5, 16, 25]
     const ra = [0.34, 0.22, 0.13, 0.07]
-    for (let k = 0; k < 4; k++) mix(o, 70, 104, 120, (1 - sm(0.35, 1.05, Math.abs(dpx - rip[k] * (S / 2)))) * ra[k])
+    for (let k = 0; k < 4; k++) mix(o, 70, 104, 120, (1 - smoothstep(0.35, 1.05, Math.abs(dpx - rip[k] * (S / 2)))) * ra[k])
   } else {
     const [cr, cg, cb] = f.biomeColors('atlas', ATLAS, (c, i) => {
-      const hi = sm(1.2, 4, f.world.elevation[i]) * 0.5
+      const hi = smoothstep(1.2, 4, f.world.elevation[i]) * 0.5
       return [c[0] + (216 - c[0]) * hi, c[1] + (204 - c[1]) * hi, c[2] + (186 - c[2]) * hi]
     })
     o[0] = f.sample(cr, p.gx, p.gy)
@@ -264,7 +262,7 @@ function physicalPixel(p: Px, o: Float32Array, f: Fields, opts: AtlasOpts) {
 
 function seaIce(p: Px, o: Float32Array, c: RGB) {
   const t = p.T + (hash(p.px >> 3, p.py >> 3) - 0.5) * 2.5
-  mixc(o, c, sm(-6.5, -9.5, t))
+  mixc(o, c, smoothstep(-6.5, -9.5, t))
 }
 
 // ————————————————————————————————— 奇幻羊皮 —————————————————————————————————
@@ -323,13 +321,13 @@ function fantasyPixel(p: Px, o: Float32Array, f: Fields) {
     mixc(o, SEA_WASH, 0.56 * Math.exp(-d / (22 * f.S)) + 0.1 * Math.exp(-d / (60 * f.S)))
     seaIce(p, o, [240, 232, 210])
     const rip = [3.5, 7, 11, 16, 22]
-    for (let k = 0; k < rip.length; k++) mixc(o, SEPIA, (1 - sm(0.25, 0.85, Math.abs(d - rip[k] * (f.S / 2)))) * (0.34 - k * 0.06))
+    for (let k = 0; k < rip.length; k++) mixc(o, SEPIA, (1 - smoothstep(0.25, 0.85, Math.abs(d - rip[k] * (f.S / 2)))) * (0.34 - k * 0.06))
   } else {
     set(o, PARCH_LAND)
     const [cr, cg, cb] = f.biomeColors('fantasy', FANTASY_TINT)
     mix(o, f.sample(cr, p.gx, p.gy), f.sample(cg, p.gx, p.gy), f.sample(cb, p.gx, p.gy), 0.6)
     // 高地一层棕色晕染，沿岸一道赭石色带
-    mixc(o, MOUNTAIN_WASH, sm(1.1, 1.5, p.h) * 0.07 + sm(2.1, 2.5, p.h) * 0.06)
+    mixc(o, MOUNTAIN_WASH, smoothstep(1.1, 1.5, p.h) * 0.07 + smoothstep(2.1, 2.5, p.h) * 0.06)
     mixc(o, COAST_WASH, Math.exp(-p.coast / (3 * f.S)) * 0.34)
     const sh = 1 + (p.shade - 1) * 0.3
     o[0] *= sh
@@ -340,10 +338,10 @@ function fantasyPixel(p: Px, o: Float32Array, f: Fields) {
   coastInk(p, o, SEPIA, 1.3, 0.95)
   // 陈旧感：水渍与四周焦边
   const stain = fnoise(px, py, 110) * 0.65 + fnoise(px + 999, py, 28) * 0.35
-  mix(o, 170, 140, 95, sm(0.6, 0.88, stain) * 0.14)
+  mix(o, 170, 140, 95, smoothstep(0.6, 0.88, stain) * 0.14)
   const ex = Math.min(px, f.MW - px) / f.MW
   const ey = Math.min(py, f.MH - py) / f.MH
-  const edge = 1 - sm(0, 0.12, Math.min(ex, ey * 1.4) + (fnoise(px, py, 45) - 0.5) * 0.04)
+  const edge = 1 - smoothstep(0, 0.12, Math.min(ex, ey * 1.4) + (fnoise(px, py, 45) - 0.5) * 0.04)
   mix(o, 120, 82, 45, edge * 0.5)
   paperGrain(o, px, py, 1.2)
 }
@@ -351,11 +349,12 @@ function fantasyPixel(p: Px, o: Float32Array, f: Fields) {
 // ————————————————————————————————— 航海图 —————————————————————————————————
 const CHART_PAPER = hex('#f4f1e8')
 const CHART_LAND = hex('#ebdcb4')
+const CHART_SHOAL: [number, RGB][] = [[0, hex('#9fcbe0')], [0.02, hex('#b3d6e6')], [0.05, hex('#cde4ee')], [0.2, hex('#e3eff2')]]
 function nauticalPixel(p: Px, o: Float32Array) {
   if (p.h <= 0) {
     const d = -p.h
     set(o, CHART_PAPER)
-    if (d < 0.2) set(o, ramp([[0, hex('#9fcbe0')], [0.02, hex('#b3d6e6')], [0.05, hex('#cde4ee')], [0.2, hex('#e3eff2')]], d))
+    if (d < 0.2) set(o, ramp(CHART_SHOAL, d))
     // 等深线：10 m、20 m 虚线，50 m、200 m、1000 m 实线
     const dash = ((p.px + p.py) >> 2) & 1
     for (const lv of [0.01, 0.02]) mix(o, 60, 120, 170, line(Math.abs(d - lv) / p.gpx, 0.35) * 0.55 * dash)
@@ -469,7 +468,7 @@ function teyvatPixel(p: Px, o: Float32Array, f: Fields) {
       mixc(o, TEYVAT.sea, Math.exp(-d / (12 * S)) * 0.8)
       mixc(o, TEYVAT.shallow, Math.exp(-d / (3.5 * S)) * 0.6)
       // 内侧靠边界略暗
-      mixc(o, TEYVAT.void, sm(-6 * S, 0, bnd) * 0.25)
+      mixc(o, TEYVAT.void, smoothstep(-6 * S, 0, bnd) * 0.25)
       seaIce(p, o, TEYVAT.ice)
     }
     // 边界亮线
@@ -483,8 +482,8 @@ function teyvatPixel(p: Px, o: Float32Array, f: Fields) {
     const lv = p.h / TEYVAT_STEP
     const tier = Math.floor(lv)
     mixc(o, TEYVAT.plateau, Math.min(0.25, tier * 0.05))
-    mixc(o, TEYVAT.rock, sm(2.4, 3.4, p.h) * 0.7)
-    mixc(o, TEYVAT.snow, sm(-5, -7.5, p.T))
+    mixc(o, TEYVAT.rock, smoothstep(2.4, 3.4, p.h) * 0.7)
+    mixc(o, TEYVAT.snow, smoothstep(-5, -7.5, p.T))
     // 卡通分层的明暗：只分亮、中、暗三档
     const s = p.shade
     const toon = s > 1.04 ? 1.06 : s < 0.8 ? 0.8 : s < 0.92 ? 0.9 : 1
@@ -492,12 +491,12 @@ function teyvatPixel(p: Px, o: Float32Array, f: Fields) {
     o[1] *= toon
     o[2] *= toon
     // 台地边缘：只在陡处画——上沿一道深色崖线，崖下一小段阴影；缓坡上不画，免得像等高线图
-    const steep = sm(0.04, 0.12, p.gpx)
+    const steep = smoothstep(0.04, 0.12, p.gpx)
     if (steep > 0 && tier > 0) {
       const up = ((1 - (lv - tier)) * TEYVAT_STEP) / p.gpx
       const down = ((lv - tier) * TEYVAT_STEP) / p.gpx
       mixc(o, TEYVAT.cliff, line(down, 0.7) * 0.55 * steep)
-      mixc(o, TEYVAT.cliff, (1 - sm(0, 3.5 * S, up)) * 0.18 * steep)
+      mixc(o, TEYVAT.cliff, (1 - smoothstep(0, 3.5 * S, up)) * 0.18 * steep)
     }
     lakeFill(p, o, TEYVAT.lake, TEYVAT.coast, 0.8)
   }
@@ -532,15 +531,15 @@ function inkPixel(p: Px, o: Float32Array, f: Fields) {
     const [cr, cg, cb] = f.biomeColors('ink', INK_TINT)
     mix(o, f.sample(cr, p.gx, p.gy), f.sample(cg, p.gx, p.gy), f.sample(cb, p.gx, p.gy), 0.42)
     // 石青：只点染在高处的迎光面
-    mix(o, 110, 140, 138, sm(1.4, 3.8, p.h) * sm(0.9, 1.08, p.shade) * 0.3)
+    mix(o, 110, 140, 138, smoothstep(1.4, 3.8, p.h) * smoothstep(0.9, 1.08, p.shade) * 0.3)
     // 皴擦：背光坡用干笔，笔触沿斜向拉长；山脚淡、山顶浓
     const stroke = vnoise(px * 1.6 + py * 0.9, py * 0.5 - px * 0.3, 3)
-    const dry = sm(0.35, 0.8, stroke * 0.7 + fnoise(px, py, 14) * 0.5)
-    const dark = Math.max(0, 1 - p.shade) * 1.25 * sm(0.1, 1.4, p.h)
-    const mass = sm(0.8, 4.5, p.h) * 0.16
+    const dry = smoothstep(0.35, 0.8, stroke * 0.7 + fnoise(px, py, 14) * 0.5)
+    const dark = Math.max(0, 1 - p.shade) * 1.25 * smoothstep(0.1, 1.4, p.h)
+    const mass = smoothstep(0.8, 4.5, p.h) * 0.16
     let ink = dark * (0.35 + 0.9 * dry) + mass * (0.6 + 0.4 * dry)
     // 积雪处留白
-    ink *= 1 - sm(-4, -8, p.T) * 0.7
+    ink *= 1 - smoothstep(-4, -8, p.T) * 0.7
     mixc(o, INKC, Math.min(0.85, ink))
     lakeFill(p, o, [218, 216, 204], INKC, 0.6)
   }
@@ -579,7 +578,7 @@ function topoPixel(p: Px, o: Float32Array, f: Fields) {
     // 林地：绿色底纹
     const [wood] = f.biomeColors('wood', TOPO_WOOD)
     mix(o, 196, 222, 180, (f.sample(wood, p.gx, p.gy) / 255) * 0.7)
-    const glacier = sm(-6, -8, p.T)
+    const glacier = smoothstep(-6, -8, p.T)
     mix(o, 248, 250, 252, glacier)
     const sh = 1 + (p.shade - 1) * 0.45
     o[0] *= sh
@@ -610,12 +609,12 @@ function politicalPixel(p: Px, o: Float32Array, f: Fields) {
   const S = f.S
   if (p.h <= 0) {
     set(o, POLITICAL_SEA)
-    mix(o, 176, 204, 216, sm(0.3, 3, -p.h) * 0.6)
+    mix(o, 176, 204, 216, smoothstep(0.3, 3, -p.h) * 0.6)
     seaIce(p, o, [240, 244, 245])
     const dpx = -p.coast
     const rip = [2.5, 5.5, 9.5]
     const ra = [0.3, 0.18, 0.09]
-    for (let k = 0; k < 3; k++) mix(o, 80, 120, 140, (1 - sm(0.35, 1.05, Math.abs(dpx - rip[k] * (S / 2)))) * ra[k])
+    for (let k = 0; k < 3; k++) mix(o, 80, 120, 140, (1 - smoothstep(0.35, 1.05, Math.abs(dpx - rip[k] * (S / 2)))) * ra[k])
   } else {
     set(o, POLITICAL_LAND)
     const c = realmTint(p, f, POL_ATLAS)
@@ -635,7 +634,7 @@ export const STRATEGY_SHALLOW = hex('#2f6178')
 function strategyPixel(p: Px, o: Float32Array, f: Fields) {
   if (p.h <= 0) {
     set(o, STRATEGY_SEA)
-    mixc(o, STRATEGY_SHALLOW, 1 - sm(0, 30 * f.S, -p.coast))
+    mixc(o, STRATEGY_SHALLOW, 1 - smoothstep(0, 30 * f.S, -p.coast))
     seaIce(p, o, [214, 226, 232])
   } else {
     const [cr, cg, cb] = f.biomeColors('atlas', ATLAS)

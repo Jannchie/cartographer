@@ -7,12 +7,12 @@ export interface PanView {
   k: number
 }
 
-/** 把 size 大小的图居中放进 el：左右共留 mx、上下共留 my，再整体下移 dy */
-export function fitTo(el: HTMLElement, view: PanView, size: { width: number; height: number }, m: { mx: number; my: number; dy: number }) {
-  const k = Math.min((el.clientWidth - m.mx) / size.width, (el.clientHeight - m.my) / size.height)
+/** 把纸图的地图部分（MW × MH，四周另有 M 的页边）整个放进内框 r，四周留 pad */
+export function fitInto(view: PanView, r: { x: number; y: number; w: number; h: number }, page: { MW: number; MH: number; M: number }, pad = 12) {
+  const k = Math.min((r.w - pad * 2) / page.MW, (r.h - pad * 2) / page.MH)
   view.k = k
-  view.x = (el.clientWidth - size.width * k) / 2
-  view.y = (el.clientHeight - size.height * k) / 2 + m.dy
+  view.x = r.x + (r.w - page.MW * k) / 2 - page.M * k
+  view.y = r.y + (r.h - page.MH * k) / 2 - page.M * k
 }
 
 /** 在 el 上接好拖动与滚轮；view 原地修改，改完调用 apply。fit 给出时双击适配 */

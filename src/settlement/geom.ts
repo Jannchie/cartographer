@@ -58,12 +58,6 @@ export function centroid(poly: Poly): P {
   return [cx / (3 * a), cy / (3 * a)]
 }
 
-export function perimeter(poly: Poly) {
-  let s = 0
-  for (let i = 0; i < poly.length; i++) s += dist(poly[i], poly[(i + 1) % poly.length])
-  return s
-}
-
 /** 统一为有向面积为正的顶点顺序 */
 export function orient(poly: Poly): Poly {
   return signedArea(poly) < 0 ? poly.slice().reverse() : poly
@@ -213,6 +207,13 @@ function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by
   return ex * ex + ey * ey
 }
 
+export function edgeDist(p: P, poly: Poly) {
+  let d = Infinity
+  for (let i = 0; i < poly.length; i++) d = Math.min(d, segDist(p, poly[i], poly[(i + 1) % poly.length]).d)
+  return d
+}
+
+/** 点到折线的距离 */
 export function polylineDist(p: P, line: P[]) {
   let best = Infinity
   const px = p[0], py = p[1]
@@ -287,20 +288,6 @@ export function resample(line: P[], step: number): P[] {
     out.push(lerpP(line[k], line[k + 1], t))
   }
   return out
-}
-
-/** 最长边的序号 */
-export function longestEdge(poly: Poly) {
-  let best = 0
-  let bl = -1
-  for (let i = 0; i < poly.length; i++) {
-    const l = dist(poly[i], poly[(i + 1) % poly.length])
-    if (l > bl) {
-      bl = l
-      best = i
-    }
-  }
-  return best
 }
 
 /**

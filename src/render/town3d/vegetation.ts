@@ -10,6 +10,8 @@
  * 贴着房子的树收小树冠或换成窄冠的树种，免得枝叶穿墙。
  * 另外补上生成器里没有的矮植被（见 lowPlants）：林下与院角的灌木、水边的芦苇、田埂与园圃的绿篱、葡萄园的藤架。
  */
+import { hash3 } from '../../gen/rng'
+import { smoothstep } from '../../gen/util'
 import type { Life } from '../../settlement/history'
 import type { Culture, Settlement } from '../../settlement/types'
 import { NEVER } from './mesh'
@@ -187,13 +189,8 @@ function climate(k: VK, temp: number): number {
 }
 
 // —— 哈希与噪声（按位置，确定性） ——
-const ih = (x: number, y: number, s: number) => {
-  let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(s, 1274126177)
-  h = Math.imul(h ^ (h >>> 13), 1274126177)
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296
-}
 /** 一棵树的第 s 个随机数（位置取到 1/8 米） */
-const hashAt = (x: number, z: number, s: number) => ih(Math.round(x * 8), Math.round(z * 8), s)
+const hashAt = (x: number, z: number, s: number) => hash3(Math.round(x * 8), Math.round(z * 8), s)
 function vnoise(x: number, y: number, s: number) {
   const i = Math.floor(x)
   const j = Math.floor(y)
@@ -201,7 +198,7 @@ function vnoise(x: number, y: number, s: number) {
   const v = y - j
   const a = u * u * (3 - 2 * u)
   const b = v * v * (3 - 2 * v)
-  return (ih(i, j, s) * (1 - a) + ih(i + 1, j, s) * a) * (1 - b) + (ih(i, j + 1, s) * (1 - a) + ih(i + 1, j + 1, s) * a) * b
+  return (hash3(i, j, s) * (1 - a) + hash3(i + 1, j, s) * a) * (1 - b) + (hash3(i, j + 1, s) * (1 - a) + hash3(i + 1, j + 1, s) * a) * b
 }
 const strHash = (s: string) => {
   let h = 2166136261
@@ -219,10 +216,6 @@ const hexRGB = (s: string): [number, number, number] => {
   return c
 }
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
-const sstep = (a: number, b: number, x: number) => {
-  const t = clamp01((x - a) / (b - a))
-  return t * t * (3 - 2 * t)
-}
 
 type Pt = [number, number]
 /** 均匀网格上的空间索引：按包围盒登记，按点查候选 */
@@ -392,7 +385,7 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
   const temp = st.params.climate?.temp ?? TEMP[culture]
   const seed = strHash(st.params.seed) & 0xffff
   // 季相：东方与和式的城按种子定春、夏、秋（花色与秋色只是点缀：樱、梅、枫、银杏、柿），其余常夏
-  const sr = ih(seed, 7, 3)
+  const sr = hash3(seed, 7, 3)
   const season: Season = culture === 'wa' || culture === 'eastern' ? (sr < 0.36 ? 'spring' : sr < 0.66 ? 'summer' : 'autumn') : 'summer'
   const span = (o: object): Span => life.get(o) ?? ALWAYS
   const water = waterSampler(T)
@@ -563,7 +556,7 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
     if (field?.kind === 'orchard') {
       // 果园：整块田一个树种，大小一律
       const list = ORCHARD[culture].filter((k) => climate(k, temp) >= 1)
-      vk = list.length ? list[Math.floor(ih(field.id, seed, 5) * list.length)] : 'apple'
+      vk = list.length ? list[Math.floor(hash3(field.id, seed, 5) * list.length)] : 'apple'
       ctx = 'field'
       row = true
     } else if (green === 'cemetery' || ward === 'cemetery') {
@@ -572,7 +565,7 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
     } else if (avenue >= 0 && t.r < 3.2 && !green) {
       // 行道树：整条路一个树种
       const list = AVENUE[culture].filter((k) => climate(k, temp) >= 1)
-      vk = list.length ? list[Math.floor(ih(avenue, seed, 6) * list.length)] : 'linden'
+      vk = list.length ? list[Math.floor(hash3(avenue, seed, 6) * list.length)] : 'linden'
       ctx = 'yard'
       row = true
     } else {
@@ -583,7 +576,7 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
       else if (wd < 14 && !urban) ctx = 'water'
       else if (green === 'courtyard' || urban || paved) ctx = 'yard'
       else if (field || ward === 'farm') ctx = 'field'
-      else ctx = sstep(30, 90, y) + slope * 1.6 + (vnoise(x / 90, z / 90, seed + 91) - 0.5) * 0.5 > 0.55 ? 'upland' : 'wild'
+      else ctx = smoothstep(30, 90, y) + slope * 1.6 + (vnoise(x / 90, z / 90, seed + 91) - 0.5) * 0.5 > 0.55 ? 'upland' : 'wild'
       // 园林里靠水的多栽柳（东方）、樱（和式）
       if ((ctx === 'park' || ctx === 'court' || ctx === 'sacred') && wd < 9 && h4 < 0.6 && culture !== 'islamic') vk = culture === 'wa' ? (h1 < 0.5 ? 'sakura' : 'willow') : 'willow'
       else vk = pickMix(MIX[culture][ctx], x, z, h1, ctx === 'wild' || ctx === 'upland')
@@ -811,9 +804,9 @@ function lowPlants(st: Settlement, low: Bag, env: LowEnv) {
     return p < q ? p + '|' + q : q + '|' + p
   }
   st.fields.forEach((f, id) => {
-    const bocage = culture === 'western' && f.kind === 'pasture' && ih(id, seed, 41) < 0.7
+    const bocage = culture === 'western' && f.kind === 'pasture' && hash3(id, seed, 41) < 0.7
     // 菜园的矮篱只有西式与和式的城边有（东方、伊斯兰的菜园是土埂与土墙）
-    const kitchen = f.kind === 'garden' && (culture === 'western' || culture === 'wa') && ih(id, seed, 42) < 0.2
+    const kitchen = f.kind === 'garden' && (culture === 'western' || culture === 'wa') && hash3(id, seed, 42) < 0.2
     if (!bocage && !kitchen) return
     const v: Variety = bocage ? V.hedgerow : V.hedge
     const r = bocage ? 1.15 : 0.6

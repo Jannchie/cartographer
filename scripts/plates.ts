@@ -1,11 +1,8 @@
 // 首页封面图：pnpm plates → public/plates/{world,town}-{zh,en,ja}.webp（地名跟着语言，每种语言一套）
 // 世界地图用等高线皮肤（topo），聚落地图用彩绘皮肤（color）取主城区
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { createCanvas, DOMMatrix, ImageData, Path2D, type Canvas } from '@napi-rs/canvas'
-;(globalThis as any).ImageData = ImageData
-;(globalThis as any).Path2D = Path2D
-;(globalThis as any).DOMMatrix = DOMMatrix
-;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
+import { createCanvas, type Canvas } from '@napi-rs/canvas'
+import './lib/canvas'
 const { generateWorld } = await import('../src/gen/world')
 const { DEFAULT_PARAMS } = await import('../src/gen/types')
 const { drawOverlays, fieldsFor } = await import('../src/render/atlas/index')

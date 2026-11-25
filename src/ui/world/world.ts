@@ -31,7 +31,7 @@ import { app, download, initialQuery, registerRoute, paramSig, storeGet, storeSe
 import { t } from '../i18n'
 import { isTypingTarget } from '../keys'
 import { mapFontsReady } from '../fonts'
-import { bindPanZoom } from '../panZoom'
+import { bindPanZoom, fitInto } from '../panZoom'
 import { syllableSeed } from '../seed'
 
 export type Mode = '3d' | 'holo' | '2d' | 'edit' | 'areas'
@@ -848,12 +848,7 @@ function applyMap() {
 /** 把地图（不含整页排版的留白）整个放进图框内框，四周留一点空 */
 function fitMap() {
   if (!shown || !viewer || !els) return
-  const r = viewer.inner()
-  const pad = 12
-  const k = Math.min((r.w - pad * 2) / shown.MW, (r.h - pad * 2) / shown.MH)
-  map.k = k
-  map.x = r.x + (r.w - shown.MW * k) / 2 - shown.M * k
-  map.y = r.y + (r.h - shown.MH * k) / 2 - shown.M * k
+  fitInto(map, viewer.inner(), shown)
   applyMap()
 }
 

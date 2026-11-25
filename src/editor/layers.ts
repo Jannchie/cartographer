@@ -1,4 +1,4 @@
-import { contours, type Ring } from '../render/atlas/svg/contour'
+import { contourGrid, contours, type Ring } from '../render/atlas/svg/contour'
 
 /**
  * 编辑视图的专题底图：配色带、等值线、大洲区域划分。
@@ -85,6 +85,7 @@ export function isolines(field: Float32Array, W: number, H: number, levels: [num
   const h = Math.ceil(H / step)
   const f = new Float32Array(w * h)
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) f[y * w + x] = field[Math.min(H - 1, y * step) * W + Math.min(W - 1, x * step)]
+  const grid = contourGrid(f, w, h, false)
   const groups = new Map<string, IsoGroup>()
   for (const [lv, color, width] of levels) {
     const key = color + width
@@ -93,7 +94,7 @@ export function isolines(field: Float32Array, W: number, H: number, levels: [num
       g = { path: new Path2D(), color, width }
       groups.set(key, g)
     }
-    const rings: Ring[] = contours(f, w, h, lv, false)
+    const rings: Ring[] = contours(f, w, h, lv, false, grid)
     for (const r of rings) {
       if (r.length < 6) continue
       g.path.moveTo(r[0] * step, r[1] * step)

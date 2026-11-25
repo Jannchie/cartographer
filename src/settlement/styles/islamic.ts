@@ -5,6 +5,7 @@ import { add, area, axes, centroid, circlePoly, clipConvex, clipHalf, dist, insc
 import {
   fabric,
   FABRIC,
+  gateEdge,
   greatMosque,
   kasbah,
   khan,
@@ -223,25 +224,6 @@ function citadel(ctx: Ctx, block: Poly): boolean {
   return true
 }
 
-/** 幕墙上朝城心的那条边（开门处） */
-function gateEdge(ctx: Ctx, curtain: Poly, c: P) {
-  const toC: P = [ctx.center[0] - c[0], ctx.center[1] - c[1]]
-  let gi = 0
-  let gd = -Infinity
-  for (let i = 0; i < curtain.length; i++) {
-    const a = curtain[i]
-    const e = curtain[(i + 1) % curtain.length]
-    const m: P = [(a[0] + e[0]) / 2 - c[0], (a[1] + e[1]) / 2 - c[1]]
-    const s = (m[0] * toC[0] + m[1] * toC[1]) / (dmath.hypot(...m) || 1)
-    if (s > gd && dist(a, e) > 14) {
-      gd = s
-      gi = i
-    }
-  }
-  const L = dmath.hypot(...toC) || 1
-  return { gi, toC: [toC[0] / L, toC[1] / L] as P }
-}
-
 /**
  * 宫殿（qasr）：都城的王宫（仿阿尔罕布拉、托普卡帕、非斯与马拉喀什的王宫 Dar al-Makhzen）。
  * 一圈幕墙与方塔，朝城里一面是两座方塔夹着的宫门（Bab）；进门是校场（mechouar），沿门墙是卫队的营房。
@@ -268,7 +250,7 @@ function qasr(ctx: Ctx, block: Poly): boolean {
   curtain = dry(ctx, curtain)
   if (!curtain) return false
   const c = centroid(curtain)
-  const { gi } = gateEdge(ctx, curtain, c)
+  const { gi } = gateEdge(ctx, curtain, c, 14)
   const ga = curtain[gi]
   const gb = curtain[(gi + 1) % curtain.length]
   const gm: P = [(ga[0] + gb[0]) / 2, (ga[1] + gb[1]) / 2]

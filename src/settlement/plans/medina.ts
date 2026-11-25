@@ -745,19 +745,7 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
   const c = centroid(curtain)
   emitArea(ctx, 'plazas', curtain)
   // 门朝城里
-  const toC: P = [ctx.center[0] - c[0], ctx.center[1] - c[1]]
-  let gi = 0
-  let gd = -Infinity
-  for (let i = 0; i < curtain.length; i++) {
-    const a = curtain[i]
-    const e = curtain[(i + 1) % curtain.length]
-    const m: P = [(a[0] + e[0]) / 2 - c[0], (a[1] + e[1]) / 2 - c[1]]
-    const s = (m[0] * toC[0] + m[1] * toC[1]) / (dmath.hypot(...m) || 1)
-    if (s > gd && dist(a, e) > 12) {
-      gd = s
-      gi = i
-    }
-  }
+  const { gi, toC } = gateEdge(ctx, curtain, c, 12)
   const ga = curtain[gi]
   const gb = curtain[(gi + 1) % curtain.length]
   const towers: P[] = []
@@ -804,7 +792,7 @@ export function kasbah(ctx: Ctx, block: Poly): boolean {
   if (court.length < 3) return true
   const b = obb(court)
   // 总督府：离门远的一侧
-  const away: P = [-toC[0] / (dmath.hypot(...toC) || 1), -toC[1] / (dmath.hypot(...toC) || 1)]
+  const away: P = [-toC[0], -toC[1]]
   const ps = Math.min(34, Math.sqrt(area(court)) * 0.45)
   const pal = fit(
     court,
@@ -877,4 +865,23 @@ export function tannery(ctx: Ctx, block: Poly): Poly | null {
   ctx.occ.add(yard)
   poi(ctx, centroid(yard), ctx.namer.islamic('tannery'))
   return yard
+}
+
+/** 幕墙上朝城心的那条边（开门处，短于 minLen 的边不算）与指向城心的单位向量 */
+export function gateEdge(ctx: Ctx, curtain: Poly, c: P, minLen: number) {
+  const toC: P = [ctx.center[0] - c[0], ctx.center[1] - c[1]]
+  let gi = 0
+  let gd = -Infinity
+  for (let i = 0; i < curtain.length; i++) {
+    const a = curtain[i]
+    const e = curtain[(i + 1) % curtain.length]
+    const m: P = [(a[0] + e[0]) / 2 - c[0], (a[1] + e[1]) / 2 - c[1]]
+    const s = (m[0] * toC[0] + m[1] * toC[1]) / (dmath.hypot(...m) || 1)
+    if (s > gd && dist(a, e) > minLen) {
+      gd = s
+      gi = i
+    }
+  }
+  const L = dmath.hypot(...toC) || 1
+  return { gi, toC: [toC[0] / L, toC[1] / L] as P }
 }

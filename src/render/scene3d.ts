@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { reliefKm, type Label, type World } from '../gen/types'
+import { isSettlement, reliefKm, type Label, type World } from '../gen/types'
 import { buildDetailMask, buildMaterialMask } from './aerial/mask'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
@@ -16,7 +16,7 @@ import { placeName, t, worldTitle } from '../i18n'
 import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
 import { createRiverWaterMaterial, createWaterMaterial } from './water'
-import { isTypingTarget } from '../ui/keys'
+import { isTypingTarget, navKey } from '../ui/keys'
 import { daylight, type Daylight } from './aerial/daylight'
 import { CityLights } from './aerial/cityLights'
 
@@ -54,27 +54,6 @@ const CLOUD_FOG = 0.0036
 const SX = 100
 /** 昼夜循环中主光方向转过这么多（弧度）才重画阴影贴图（约 0.6°） */
 const SHADOW_STEP = 0.0105
-
-/** 3D 视图的导航键 → 动作（大小写、Shift 改出的 + / _ 都算同一个键） */
-const NAV_KEYS: Record<string, string> = {
-  ArrowUp: 'forward',
-  w: 'forward',
-  ArrowDown: 'back',
-  s: 'back',
-  ArrowLeft: 'left',
-  a: 'left',
-  ArrowRight: 'right',
-  d: 'right',
-  q: 'turnLeft',
-  e: 'turnRight',
-  PageUp: 'tiltUp',
-  PageDown: 'tiltDown',
-  '+': 'zoomIn',
-  '=': 'zoomIn',
-  '-': 'zoomOut',
-  _: 'zoomOut',
-}
-const navKey = (e: KeyboardEvent): string | undefined => NAV_KEYS[e.key.length === 1 ? e.key.toLowerCase() : e.key]
 
 /**
  * 3D 立体沙盘：地形网格 + 水面 + 河流 + 侧面剖面，
@@ -441,7 +420,7 @@ export class Scene3D {
     const toX = (x: number) => this.toX(x)
     const toZ = (y: number) => this.toZ(y)
     const out: TourPoi[] = []
-    const cities = w.labels.filter((l) => l.kind === 'capital' || l.kind === 'city').sort((a, b) => b.weight - a.weight)
+    const cities = w.labels.filter(isSettlement).sort((a, b) => b.weight - a.weight)
     for (const l of cities.slice(0, 10)) out.push({ x: toX(l.x), z: toZ(l.y), kind: l.kind, weight: l.kind === 'capital' ? 60 : 12 })
     for (const l of w.labels) {
       if (l.kind === 'range') out.push({ x: toX(l.x), z: toZ(l.y), kind: 'range', weight: 30, angle: l.angle })
@@ -859,7 +838,7 @@ export class Scene3D {
     const w = this.world!
     const vs = this.vScale
     this.terrain!.geometry.dispose()
-    this.terrain!.geometry = this.terrainGeometry(w, vs)
+    this.terrain!.geometry = this.terrainGeometry(w)
     // 烘焙高度/坡度/侵蚀（换世界或改垂直夸张时）
     const { GW, GH } = this.gridDims(w)
     if (!this.bake || this.bake.GW !== GW || this.bake.GH !== GH) {
@@ -1039,7 +1018,7 @@ export class Scene3D {
     return { GW: Math.round((GW - 1) / 2) + 1, GH: Math.round((GH - 1) / 2) + 1 }
   }
 
-  private terrainGeometry(w: World, _vs: number) {
+  private terrainGeometry(w: World) {
     const { W, H } = w
     const { GW, GH } = this.meshDims(w)
     const pos = new Float32Array(GW * GH * 3)

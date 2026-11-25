@@ -1,12 +1,12 @@
 import { computed, markRaw, reactive, toRaw, watch } from 'vue'
-import type { World } from '../../gen/types'
+import { isSettlement, type World } from '../../gen/types'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { fromWorld } from '../../settlement/fromWorld'
 import { computeHistory, computeTown, Superseded } from './historyWorker'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import { pointInPoly, type P } from '../../settlement/geom'
-import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
+import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, clearVectorChunks, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
 import { SETTLE_THEMES, type SettleStyleId } from '../../settlement/themes'
 import type { CityFunction, FeatureId } from '../../settlement/features'
 import { POP_OF_SIZE } from '../../settlement/scale'
@@ -14,10 +14,10 @@ import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, WARD_NAMES, type Culture, type Sett
 import { app, download, initialQuery, paramSig, registerRoute, storeGet, storeSet, syncRoute } from '../app'
 import { ensureWorld, getWorld, sameProbe } from '../world/world'
 import { mapFontsReady } from '../fonts'
-import { bindPanZoom } from '../panZoom'
+import { bindPanZoom, fitInto } from '../panZoom'
 import { syllableSeed } from '../seed'
 import { t } from '../i18n'
-import { lang, onLang } from '../../i18n'
+import { lang, onLang, settlementTitle } from '../../i18n'
 import { isTypingTarget } from '../keys'
 import { decodeSettlement, encodeSettlement, roundParams } from './route'
 import { describeAt } from '../../settlement/describe'
@@ -197,7 +197,7 @@ export function refreshPlaces(load = true) {
     ss.places = []
     return
   }
-  const towns = w.labels.map((l, i) => ({ l, i })).filter(({ l }) => l.kind === 'city' || l.kind === 'capital')
+  const towns = w.labels.map((l, i) => ({ l, i })).filter(({ l }) => isSettlement(l))
   towns.sort((a, b) => b.l.weight - a.l.weight)
   ss.places = towns.map(({ l, i }) => ({ i, capital: l.kind === 'capital', name: l.name, zh: l.zh, ja: l.ja }))
   if (!ss.places.some((p) => p.i === ss.from)) ss.from = -1
@@ -340,6 +340,7 @@ export async function run() {
     return
   }
   cache.clear()
+  clearVectorChunks()
   showInfo(st)
   if (ss.mode === 'areas') loadRegions()
   // 沙盘里看不到二维地图：只记下要重画（换了城，切回时适配视图），先搭沙盘
@@ -531,12 +532,7 @@ watch(
 /** 把地图（不含页面的图廓）整个放进图框内框，四周留一点空 */
 function fitView() {
   if (!shown || !viewer || !host) return
-  const r = viewer.inner()
-  const pad = 12
-  const k = Math.min((r.w - pad * 2) / shown.MW, (r.h - pad * 2) / shown.MH)
-  view.k = k
-  view.x = r.x + (r.w - shown.MW * k) / 2 - shown.M * k
-  view.y = r.y + (r.h - shown.MH * k) / 2 - shown.M * k
+  fitInto(view, viewer.inner(), shown)
   applyView()
 }
 
@@ -544,7 +540,7 @@ function showInfo(s: Settlement) {
   ss.landUse = landUseStats(s)
   ss.people = peopleStats(s)
   ss.info = {
-    title: lang === 'zh' ? s.nameZh : lang === 'ja' ? s.nameJa : s.name,
+    title: settlementTitle(s),
     // 中文、日文界面附原名（与英文地图对照）；英文界面标题就是原名，不再附别的写法
     sub: `${lang === 'en' ? '' : `${s.name} · `}${(s.stats.ms / 1000).toFixed(2)} s`,
     tiles: [
@@ -783,7 +779,7 @@ let townFor: SettlementHistory | null = null
 let townJob = 0
 
 const townTitle = (s: Settlement) => ({
-  name: lang === 'zh' ? s.nameZh : lang === 'ja' ? s.nameJa : s.name,
+  name: settlementTitle(s),
   sub: t('{km} 公里 · 种子 {seed}', { km: (s.width / 1000).toFixed(1), seed: s.params.seed }),
 })
 const townOpts = (): Town3DOptions => {

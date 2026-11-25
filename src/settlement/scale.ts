@@ -176,11 +176,8 @@ export const fullPerHa = (culture: Culture, type: WardType, d: Density) => FULL[
  * - noise：平滑的位置噪声（0 ~ 1），同样远的地方有疏有密。
  * 密档要城市够大才有（小城镇的老街也就两层），疏档在任何城镇的外围都有。
  * 城市长大时老城的 age 变小，会从疏到中、从中到密一档档加密（翻建），但不会反过来。
+ * 得分越老、离大路越近越高，再由 densityTier 按城镇规模分档。
  */
-export function densityOf(pop: number, age: number, road: number, noise: number): Density {
-  return densityTier(pop, densityScore(age, road, noise))
-}
-/** 密度得分（见 densityOf）：越老、离大路越近越高 */
 export const densityScore = (age: number, road: number, noise: number) => (1 - Math.min(1.3, age)) * 0.85 + road * 0.3 + (noise - 0.5) * 0.55
 /**
  * 得分到中档、密档的门槛。中档、密档随城镇化逐步放开：小村的街坊都是疏的，快成镇时村心才连成排，城市里才有密档

@@ -1,10 +1,7 @@
 // 离线渲染聚落地图：pnpm settlement:png <seed> <size> <style> <outDir> [key=value ...]
 import { writeFileSync } from 'node:fs'
-import { createCanvas, ImageData, Path2D, DOMMatrix } from '@napi-rs/canvas'
-;(globalThis as any).ImageData = ImageData
-;(globalThis as any).Path2D = Path2D
-;(globalThis as any).DOMMatrix = DOMMatrix
-;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
+import { createCanvas } from '@napi-rs/canvas'
+import './lib/canvas'
 const { generateSettlement } = await import('../src/settlement/generate')
 const { buildSettlementVector } = await import('../src/settlement/render')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')

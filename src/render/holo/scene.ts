@@ -8,7 +8,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
-import { reliefKm, type AdminBorder, type World } from '../../gen/types'
+import { isSettlement, reliefKm, type AdminBorder, type World } from '../../gen/types'
 import { hashString } from '../../gen/rng'
 import { smoothstep } from '../../gen/util'
 import { latitudeOf } from '../../gen/climate'
@@ -1810,7 +1810,7 @@ export class HoloScene {
       for (const l of seas.slice(0, 10))
         cands.push({ text: placeName(l), style: 'sea', cx: l.x, cy: l.y, size: l.kind === 'ocean' ? 1.1 : 0.7, color: p.grid })
       const annotated = new Set(this.annotatedCities())
-      const cities = w.labels.filter((l) => (l.kind === 'capital' || l.kind === 'city') && !annotated.has(l)).sort((a, b) => b.weight - a.weight)
+      const cities = w.labels.filter((l) => isSettlement(l) && !annotated.has(l)).sort((a, b) => b.weight - a.weight)
       for (const l of cities.slice(0, 32))
         cands.push({ text: placeName(l), style: l.kind === 'capital' ? 'capital' : 'city', cx: l.x, cy: l.y, size: l.kind === 'capital' ? 0.5 : 0.38, color: p.text, dot: true })
       const taken: [number, number, number, number][] = []
@@ -1861,7 +1861,7 @@ export class HoloScene {
   private annotatedCities() {
     const w = this.world
     if (!w) return []
-    const cities = w.labels.filter((l) => l.kind === 'capital' || l.kind === 'city')
+    const cities = w.labels.filter(isSettlement)
     // 区域图指定了要标的城市（如中国的首都与直辖市）就只标这些
     const chosen = cities.filter((l) => l.anno)
     if (chosen.length) return chosen

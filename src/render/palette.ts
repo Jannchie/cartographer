@@ -2,7 +2,7 @@ import { Biome } from '../gen/types'
 
 export type RGB = [number, number, number]
 
-const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]
+export const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]
 
 /** 写实地表色（3D 贴图用），偏自然的卫星影像色调 */
 export const PHYSICAL: Record<number, RGB> = {
@@ -48,32 +48,29 @@ export const ATLAS: Record<number, RGB> = {
   [Biome.SaltFlat]: hex('#f1ece0'),
 }
 
+const SEABED_STOPS: [number, RGB][] = [
+  [0, hex('#bfb593')],
+  [0.012, hex('#d9d0b0')],
+  [0.03, hex('#d3cbaa')],
+  [0.07, hex('#a9b397')],
+  [0.16, hex('#5f7f7c')],
+  [0.6, hex('#2c4b5a')],
+  [4, hex('#15293a')],
+]
 /** 海底：浅滩沙色 → 陆架青绿 → 深海蓝 */
-export function seabed(depthKm: number): RGB {
-  const stops: [number, RGB][] = [
-    [0, hex('#bfb593')],
-    [0.012, hex('#d9d0b0')],
-    [0.03, hex('#d3cbaa')],
-    [0.07, hex('#a9b397')],
-    [0.16, hex('#5f7f7c')],
-    [0.6, hex('#2c4b5a')],
-    [4, hex('#15293a')],
-  ]
-  return ramp(stops, depthKm)
-}
+export const seabed = (depthKm: number): RGB => ramp(SEABED_STOPS, depthKm)
 
+const ATLAS_SEA_STOPS: [number, RGB][] = [
+  [0, hex('#cfe0de')],
+  [0.15, hex('#bcd3d5')],
+  [1, hex('#a8c4cb')],
+  [3, hex('#94b3be')],
+  [5, hex('#86a7b4')],
+]
 /** 纸图海洋分层设色 */
-export function atlasSea(depthKm: number): RGB {
-  const stops: [number, RGB][] = [
-    [0, hex('#cfe0de')],
-    [0.15, hex('#bcd3d5')],
-    [1, hex('#a8c4cb')],
-    [3, hex('#94b3be')],
-    [5, hex('#86a7b4')],
-  ]
-  return ramp(stops, depthKm)
-}
+export const atlasSea = (depthKm: number): RGB => ramp(ATLAS_SEA_STOPS, depthKm)
 
+/** 分段线性色带。两端直接返回断点表里的颜色（同一个数组），调用方不要改返回值 */
 export function ramp(stops: [number, RGB][], v: number): RGB {
   if (v <= stops[0][0]) return stops[0][1]
   for (let k = 1; k < stops.length; k++) {

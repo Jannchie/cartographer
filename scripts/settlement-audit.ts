@@ -32,7 +32,8 @@ import type { P, Poly } from '../src/settlement/geom'
 const { generateHistory } = await import('../src/settlement/generate')
 const { snapshot } = await import('../src/settlement/history')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')
-const { area, bboxOf, centroid, convexOverlap, pointInPoly, segDist, segIntersect, segPolyDist } = await import('../src/settlement/geom')
+const { area, bboxOf, centroid, convexOverlap, edgeDist, pointInPoly, segDist, segIntersect, segPolyDist } = await import('../src/settlement/geom')
+const { waterSampler } = await import('../src/render/town3d/shared')
 
 const CASES: Record<string, Partial<SettlementParams>> = {
   'west-town': { seed: 'thornwick' },
@@ -108,12 +109,6 @@ function polyDist(p: P, poly: Poly) {
   for (let i = 0; i < poly.length; i++) d = Math.min(d, segDist(p, poly[i], poly[(i + 1) % poly.length]).d)
   return d
 }
-/** 点到多边形边界的距离 */
-function edgeDist(p: P, poly: Poly) {
-  let d = Infinity
-  for (let i = 0; i < poly.length; i++) d = Math.min(d, segDist(p, poly[i], poly[(i + 1) % poly.length]).d)
-  return d
-}
 
 function audit(name: string, input: Partial<SettlementParams>): Report {
   const params = { ...DEFAULT_SETTLEMENT, ...input } as SettlementParams
@@ -130,16 +125,8 @@ function audit(name: string, input: Partial<SettlementParams>): Report {
     return Math.max(la.born, lb.born) < Math.min(la.died, lb.died, h.until + 1e-6)
   }
   const T = st.terrain
-  const waterAt = (q: P) => {
-    const fx = Math.min(T.W - 1.001, Math.max(0, q[0] / T.cell))
-    const fy = Math.min(T.H - 1.001, Math.max(0, q[1] / T.cell))
-    const i = Math.floor(fx)
-    const j = Math.floor(fy)
-    const tx = fx - i
-    const ty = fy - j
-    const w = T.water
-    return (w[j * T.W + i] * (1 - tx) + w[j * T.W + i + 1] * tx) * (1 - ty) + (w[(j + 1) * T.W + i] * (1 - tx) + w[(j + 1) * T.W + i + 1] * tx) * ty
-  }
+  const water = waterSampler(T)
+  const waterAt = (q: P) => water(q[0], q[1])
   const conflicts: Record<string, number> = {}
   const hits: Record<string, Hit[]> = {}
   const hit = (k: string, at: P, what: string) => {

@@ -5,7 +5,7 @@
  * 三角形按所在的块写进各自的缓冲（块供视锥裁剪），每个顶点带生卒与地基高度：
  * 成长回放只改着色器里的人口，不重建几何。
  */
-import { unit, type P, type Poly } from '../../settlement/geom'
+import { signedArea, unit, type P, type Poly } from '../../settlement/geom'
 
 export type RGB = readonly [number, number, number]
 
@@ -389,19 +389,10 @@ export const underOf = (roof: RGB): RGB => mixRGB(shade(roof, 0.62), [98, 82, 66
 /** 平面点 + 高度 → 三维点 */
 export const v3 = (p: P, y: number): V3 => [p[0], y, p[1]]
 
-/** 环的有向面积的两倍（平面 y 向南；正值时从上方看为顺时针，即三维右手系里朝上的逆时针） */
-function area2(ring: P[]) {
-  let a = 0
-  for (let i = 0; i < ring.length; i++) {
-    const q = ring[(i + 1) % ring.length]
-    a += ring[i][0] * q[1] - q[0] * ring[i][1]
-  }
-  return a
-}
 
 /** 统一成从上方看为逆时针（三维中外法线朝外、顶面朝上的绕向） */
 function upward(ring: P[]): P[] {
-  return area2(ring) < 0 ? ring : [...ring].reverse()
+  return signedArea(ring) < 0 ? ring : [...ring].reverse()
 }
 
 /**
@@ -426,7 +417,7 @@ const wallUv = (w: Writer, ax: number, az: number, dx: number, dz: number, L: nu
  * smooth 为折角的余弦阈值：相邻两面墙的夹角小于它时共用顶点法线（圆塔、半圆后殿的弧面），缺省全是平面
  */
 export function walls(w: Writer, ring: P[], y0: number, y1: number | number[], fac?: WallFac, smooth = 2) {
-  const flip = area2(ring) >= 0
+  const flip = signedArea(ring) >= 0
   const r = flip ? [...ring].reverse() : ring
   const tops = Array.isArray(y1) ? (flip ? [...y1].reverse() : y1) : null
   const face = w.face
@@ -507,7 +498,7 @@ export function wall1(w: Writer, a: P, b: P, y0: number, y1: number, out: P) {
  * 收分的墙：下环 lo（y0）到上环 hi（y1），两环点数相同、逐点对应（石垣、斜收的塔身、台基的斜面）
  */
 export function taper(w: Writer, lo: P[], hi: P[], y0: number, y1: number) {
-  const flip = area2(lo) >= 0
+  const flip = signedArea(lo) >= 0
   const a = flip ? [...lo].reverse() : lo
   const b = flip ? [...hi].reverse() : hi
   const n = a.length
@@ -555,7 +546,7 @@ function offsetRing(r: P[], d: number): P[] {
 
 /** 环整体外扩 d（负数内收），绕向不限，顶点次序与原环一致 */
 export function grow(ring: P[], d: number): P[] {
-  if (area2(ring) < 0) return offsetRing(ring, d)
+  if (signedArea(ring) < 0) return offsetRing(ring, d)
   return offsetRing([...ring].reverse(), d).reverse()
 }
 
@@ -564,7 +555,7 @@ export function grow(ring: P[], d: number): P[] {
  */
 export function growEdges(ring: P[], d: number[]): P[] {
   const n = ring.length
-  const sg = area2(ring) < 0 ? 1 : -1
+  const sg = signedArea(ring) < 0 ? 1 : -1
   const nrm = ring.map((a, i) => {
     const b = ring[(i + 1) % n]
     const u = unit([-(b[1] - a[1]), b[0] - a[0]])

@@ -75,18 +75,6 @@ export function sketchFields(s: WorldSketch, W: number, H: number, kmPerCell: nu
   return { coast, ridge, plateau }
 }
 
-/** 场的双线性采样（越界取边缘） */
-export function sampleField(f: Float32Array, W: number, H: number, x: number, y: number) {
-  x = Math.min(W - 1.001, Math.max(0, x))
-  y = Math.min(H - 1.001, Math.max(0, y))
-  const x0 = Math.floor(x)
-  const y0 = Math.floor(y)
-  const tx = x - x0
-  const ty = y - y0
-  const i = y0 * W + x0
-  return (f[i] * (1 - tx) + f[i + 1] * tx) * (1 - ty) + (f[i + W] * (1 - tx) + f[i + W + 1] * tx) * ty
-}
-
 /** 圆形软画笔：把陆地意图推向 target（1 陆地、0 海洋） */
 export function paintLand(land: Float32Array, W: number, H: number, cx: number, cy: number, R: number, target: number, amount: number) {
   const x0 = Math.max(0, Math.floor(cx - R)), x1 = Math.min(W - 1, Math.ceil(cx + R))

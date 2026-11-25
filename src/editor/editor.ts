@@ -689,7 +689,8 @@ export class EditorView {
     this.cb.onCommit('regions')
   }
 
-  private stamp(sx: number, sy: number, dt: number) {
+  /** 落一笔。flush 为 false 时只记脏区，由调用方在这批笔落完后 refresh + draw */
+  private stamp(sx: number, sy: number, dt: number, flush = true) {
     const w = this.world
     if (!w) return
     const { W, H } = w
@@ -708,8 +709,7 @@ export class EditorView {
       const b = paintLand(sk.land, W, H, c.x, c.y, R, tool === 'land' ? 1 : 0, Math.min(1, this.brush.strength * 0.8 * Math.max(0.3, dt / 0.03)))
       bumpSketch(this.edits)
       this.markDirty(b.x0, b.y0, b.x1, b.y1)
-      this.refresh()
-      this.draw()
+      if (flush) this.flushDirty()
       return
     }
     if (tool === 'regionAdd' || tool === 'regionErase') {
@@ -726,8 +726,7 @@ export class EditorView {
         }
       }
       this.markDirty(x0, y0, x1, y1)
-      this.refresh()
-      this.draw()
+      if (flush) this.flushDirty()
       return
     }
     // 按时间积分：强度 1 时地形每秒约 ±3 km、气温 ±20 °C、降水倍率 e^±2
@@ -785,6 +784,10 @@ export class EditorView {
     }
     if (key === 'terrain') this.edits.terrainRev = (this.edits.terrainRev ?? 0) + 1
     this.markDirty(x0, y0, x1, y1)
+    if (flush) this.flushDirty()
+  }
+
+  private flushDirty() {
     this.refresh()
     this.draw()
   }
@@ -914,12 +917,14 @@ export class EditorView {
         // 沿路径补笔：从上一笔起累计路程，每隔约 1/4 画笔半径落一笔（快拖、慢拖效果一致）
         const step = Math.max(2, this.brush.radius * this.view.k * 0.25)
         let len = Math.hypot(p.x - d.x, p.y - d.y)
+        const stamped = len >= step
         while (len >= step) {
           d.x += ((p.x - d.x) * step) / len
           d.y += ((p.y - d.y) * step) / len
-          this.stamp(d.x, d.y, 0.02)
+          this.stamp(d.x, d.y, 0.02, false)
           len -= step
         }
+        if (stamped) this.flushDirty()
       } else if ((d?.mode === 'lasso' || d?.mode === 'ridge') && d.path) {
         // 屏幕上移动超过 3 像素才记一个点
         const n = d.path.length

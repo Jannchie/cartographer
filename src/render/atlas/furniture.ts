@@ -1,6 +1,7 @@
 import { isGlobe, type World } from '../../gen/types'
 import { regionProjection } from '../../gen/earth/region'
 import { lang, placeName, t, worldTitle } from '../../i18n'
+import { ramp } from '../palette'
 import { hash, type Fields } from './fields'
 import { HYPSO_STOPS, themeCjk, type Theme } from './styles'
 import { labelCtx } from './svg/recorder'
@@ -529,19 +530,7 @@ export function drawLegend(ctx: CanvasRenderingContext2D, world: World, theme: T
     const bw = w - 28 * k
     const maxH = 5
     for (let t = 0; t < bw; t++) {
-      const hv = (t / bw) * maxH
-      let c = HYPSO_STOPS[0][1]
-      for (let s = 1; s < HYPSO_STOPS.length; s++) {
-        if (hv <= HYPSO_STOPS[s][0]) {
-          const [a, ca] = HYPSO_STOPS[s - 1]
-          const [b, cb] = HYPSO_STOPS[s]
-          const u = (hv - a) / (b - a)
-          c = [ca[0] + (cb[0] - ca[0]) * u, ca[1] + (cb[1] - ca[1]) * u, ca[2] + (cb[2] - ca[2]) * u]
-          break
-        }
-        c = HYPSO_STOPS[s][1]
-      }
-      ctx.fillStyle = rgb(c)
+      ctx.fillStyle = rgb(ramp(HYPSO_STOPS, (t / bw) * maxH))
       ctx.fillRect(bx + t, y + 14 * k, 1.5, 12 * k)
     }
     ctx.strokeRect(bx, y + 14 * k, bw, 12 * k)

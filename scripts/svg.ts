@@ -1,8 +1,7 @@
 // 离线导出矢量纸图
 import { writeFileSync } from 'node:fs'
-import { createCanvas, ImageData } from '@napi-rs/canvas'
-;(globalThis as any).ImageData = ImageData
-;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
+import { createCanvas } from '@napi-rs/canvas'
+import './lib/canvas'
 const { generateWorld } = await import('../src/gen/world')
 const { DEFAULT_PARAMS } = await import('../src/gen/types')
 const { renderAtlasSvg } = await import('../src/render/atlas/svg/vector')

@@ -1,5 +1,5 @@
 import type { Ctx } from './ctx'
-import { area, bboxOf, centroid, convexOverlap, pointInPoly, segDist, segPolyDist, segSegDist, type BBox, type P, type Poly } from './geom'
+import { area, bboxOf, centroid, convexOverlap, edgeDist, pointInPoly, segDist, segPolyDist, segSegDist, type BBox, type P, type Poly } from './geom'
 import type { Life } from './history'
 import type { Building, Road, Tree, Wall } from './types'
 import * as dmath from '../gen/dmath'
@@ -233,13 +233,6 @@ const rank = (b: Building) => RANK[b.kind] ?? 3
 /** 城门的门道：沿穿门的路前后各这么远、左右各这么宽以内不长树（门楼、瓮城与门前的空场） */
 const GATE_ALONG = 16
 const GATE_ACROSS = 5
-
-/** 点到多边形边界的距离 */
-function edgeDist(p: P, poly: Poly) {
-  let d = Infinity
-  for (let i = 0; i < poly.length; i++) d = Math.min(d, segDist(p, poly[i], poly[(i + 1) % poly.length]).d)
-  return d
-}
 
 /** 按格子登记包围盒的索引 */
 class Grid<T> {

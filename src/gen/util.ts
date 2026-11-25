@@ -15,6 +15,25 @@ export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
 
+/** 把方向角归到 (−90°, 90°]：标注沿轴线摆放，不分正反 */
+export function clampAngle(a: number): number {
+  while (a > Math.PI / 2) a -= Math.PI
+  while (a < -Math.PI / 2) a += Math.PI
+  return a
+}
+
+/** 场的双线性采样（越界取边缘） */
+export function sampleField(f: ArrayLike<number>, W: number, H: number, x: number, y: number): number {
+  x = Math.min(W - 1.001, Math.max(0, x))
+  y = Math.min(H - 1.001, Math.max(0, y))
+  const x0 = Math.floor(x)
+  const y0 = Math.floor(y)
+  const tx = x - x0
+  const ty = y - y0
+  const i = y0 * W + x0
+  return (f[i] * (1 - tx) + f[i + 1] * tx) * (1 - ty) + (f[i + W] * (1 - tx) + f[i + W + 1] * tx) * ty
+}
+
 /** 分位数（对副本排序） */
 export function quantile(arr: ArrayLike<number>, q: number, filter?: (v: number) => boolean): number {
   let tmp: Float32Array
@@ -89,27 +108,23 @@ export function blur(src: Float32Array, W: number, H: number, radius: number, pa
     for (let y = 0; y < H; y++) {
       const row = y * W
       let acc = 0
-      for (let x = -r; x <= r; x++) acc += a[row + clampi(x, 0, W - 1)]
+      for (let x = -r; x <= r; x++) acc += a[row + clamp(x, 0, W - 1)]
       for (let x = 0; x < W; x++) {
         tmp[row + x] = acc / (2 * r + 1)
-        acc += a[row + clampi(x + r + 1, 0, W - 1)] - a[row + clampi(x - r, 0, W - 1)]
+        acc += a[row + clamp(x + r + 1, 0, W - 1)] - a[row + clamp(x - r, 0, W - 1)]
       }
     }
     // 纵向
     for (let x = 0; x < W; x++) {
       let acc = 0
-      for (let y = -r; y <= r; y++) acc += tmp[clampi(y, 0, H - 1) * W + x]
+      for (let y = -r; y <= r; y++) acc += tmp[clamp(y, 0, H - 1) * W + x]
       for (let y = 0; y < H; y++) {
         a[y * W + x] = acc / (2 * r + 1)
-        acc += tmp[clampi(y + r + 1, 0, H - 1) * W + x] - tmp[clampi(y - r, 0, H - 1) * W + x]
+        acc += tmp[clamp(y + r + 1, 0, H - 1) * W + x] - tmp[clamp(y - r, 0, H - 1) * W + x]
       }
     }
   }
   return a
-}
-
-function clampi(x: number, a: number, b: number): number {
-  return x < a ? a : x > b ? b : x
 }
 
 /** 最小堆（浮点键 + 整数值） */

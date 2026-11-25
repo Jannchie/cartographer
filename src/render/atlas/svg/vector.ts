@@ -1,6 +1,6 @@
 import { Biome, reliefKm, type World } from '../../../gen/types'
 import { blur } from '../../../gen/util'
-import { ATLAS, atlasSea, ramp, type RGB } from '../../palette'
+import { ATLAS, atlasSea, hex, ramp, type RGB } from '../../palette'
 import type { SmoothRiver } from '../../rivers'
 import { drawFrame } from '../furniture'
 import { drawMapLabels, drawMapOverlays, fieldsFor, marginOf, type Reserved } from '../index'
@@ -14,7 +14,6 @@ import { Recorder } from './recorder'
 const FONT_CSS =
   'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@400;600&family=Noto+Sans+SC:wght@400;600&family=Noto+Serif+JP:wght@400;600&family=Noto+Sans+JP:wght@400;600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap'
 
-const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]
 const rgb = (c: RGB) => `rgb(${c.map((v) => Math.round(Math.min(255, Math.max(0, v)))).join(',')})`
 
 const FOREST = new Set<number>([Biome.Taiga, Biome.TemperateForest, Biome.TemperateRainforest, Biome.TropicalRainforest, Biome.TropicalSeasonalForest])
@@ -144,7 +143,7 @@ function biomeField(world: World, key: number | string, pred: (b: number) => boo
   return f
 }
 
-function biomeLayers(L: Layers, world: World, palette: Record<number, RGB>, opacity: number, transform?: (c: RGB) => RGB) {
+function biomeLayers(L: Layers, world: World, palette: Record<number, RGB>, opacity: number) {
   const counts = new Map<number, number>()
   for (let i = 0; i < world.biome.length; i++) {
     const b = world.biome[i]
@@ -152,8 +151,7 @@ function biomeLayers(L: Layers, world: World, palette: Record<number, RGB>, opac
   }
   const order = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([b]) => b)
   for (const b of order) {
-    const c = transform ? transform(palette[b]) : palette[b]
-    L.fill(biomeField(world, b, (x) => x === b), 0.5, rgb(c), opacity, { tol: 0.4, minArea: 3 })
+    L.fill(biomeField(world, b, (x) => x === b), 0.5, rgb(palette[b]), opacity, { tol: 0.4, minArea: 3 })
   }
 }
 

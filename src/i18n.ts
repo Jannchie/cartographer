@@ -84,6 +84,10 @@ export function worldTitle(w: { worldName: string; worldNameZh: string; worldNam
   return lg === 'zh' ? w.worldNameZh : lg === 'ja' ? w.worldNameJa || w.worldName : w.worldName
 }
 
+export function settlementTitle(s: { name: string; nameZh: string; nameJa: string }, lg: Lang = lang): string {
+  return lg === 'zh' ? s.nameZh : lg === 'ja' ? s.nameJa : s.name
+}
+
 /** 地图文字的 CJK 字体回退：中文 / 日文各用各的字形 */
 export function cjkFont(lg: Lang, sans = false): string {
   if (lg === 'ja') return sans ? '"Noto Sans JP", "Noto Serif JP", sans-serif' : '"Noto Serif JP", serif'
@@ -258,17 +262,12 @@ const EN: Record<string, string> = {
   '板块造山、侵蚀水系、气候与群系。3D 沙盘、六种纸图风格，并可在编辑视图里改地形、气候、大洲与地点。':
     'Plate tectonics, erosion and rivers, climate and biomes. A 3D sandbox, six paper-map styles, and an editor for terrain, climate, continents and places.',
   聚落地图: 'Settlement map',
-  '为一座城市、镇子或村庄生成街区级平面图：城墙、街道、街区、地块与地标，可继承世界地图上的地形。':
-    'Street-level plans of a city, town or village: walls, streets, wards, plots and landmarks, optionally inheriting terrain from the world map.',
   '从小村到大城的街区级平面图：城墙城门、街巷街坊、房屋院落、河桥港口与农田；西式或东方，写实或奇幻。可继承世界地图上某座城镇的环境。':
     'Street-level plans from hamlets to great cities: walls and gates, streets and wards, houses and courtyards, bridges, harbours and fields; Western or Eastern, realistic or fantastical. Can inherit the surroundings of a town on the world map.',
-  '打开项目文件…': 'Open project…',
   回到首页: 'Back to home',
   展开面板: 'Expand panel',
   收起面板: 'Collapse panel',
-  打开项目文件: 'Open a project file',
   打开: 'Open',
-  '保存种子、参数与全部编辑': 'Save seed, parameters and all edits',
   保存: 'Save',
   输入种子: 'Seed',
   同一种子总是生成同一个世界: 'The same seed always makes the same world',
@@ -279,7 +278,6 @@ const EN: Record<string, string> = {
   '全球全图：几块大陆隔着大洋，从赤道雨林到两极冰原': 'Whole globe: a few continents across wide oceans, from equatorial rainforest to polar ice',
   全球图: 'Whole globe',
   地球海陆: 'Earth land & sea',
-  '大陆、山脉与海深取自真实地球（ETOPO1）；陆地比例、板块数不再起作用': "Continents, mountains and depths from the real Earth (ETOPO1); land ratio and plate count no longer apply",
   '横跨 360° 经度的世界全图：比例尺按赤道，高度随纬度范围': 'A world map spanning 360° of longitude: scale at the equator, height set by the latitude range',
   '虚构语言的专名：中文音译、日文片假名': 'Invented-language names: Chinese transliteration, Japanese katakana',
   '意义词根：霜岭、银港、鸦渡……三语意译': 'Meaningful roots (Frostridge, Silverport, Crowford…), translated in all three languages',
@@ -412,7 +410,6 @@ const EN: Record<string, string> = {
   '自动运镜俯瞰浏览（T）': 'Automatic camera tour (T)',
   '自动运镜中 · → 下一个镜头 · 拖动或 Esc 交还手动': 'Touring · → next shot · drag or Esc to take over',
   '拖动旋转 · 右键平移 · 滚轮缩放 · WASD / 方向键移动 · Q E 转向 · PgUp PgDn 俯仰 · +/− 远近 · T 巡览 · R 随机 · P 性能': 'Drag to orbit · right-drag to pan · wheel to zoom · WASD / arrows to move · Q E to turn · PgUp PgDn to tilt · +/− to zoom · T tour · R random · P perf',
-  地形预设: 'Preset',
   自定义: 'Custom',
   '几块中等大小的大陆，温带为主': 'A few mid-sized continents, mostly temperate',
   '破碎的岛链与浅海，热带到亚热带': 'Broken island chains and shallow seas, tropical to subtropical',
@@ -598,7 +595,6 @@ const EN: Record<string, string> = {
   城郊: 'Suburb',
   '绘制{style}': 'Drawing {style}',
   按新参数生成: 'Generate with new settings',
-  高级参数: 'Advanced',
   恢复默认参数: 'Reset to defaults',
   沙盘: 'Sandbox',
   编辑: 'Edit',
@@ -642,10 +638,6 @@ const EN: Record<string, string> = {
   '四周线框立面上地形侧视轮廓的高度；顶面随之升降': 'Height of the terrain side profiles on the surrounding wireframe walls; the top plane follows',
   纸图: 'Paper map',
   正在塑造世界: 'Shaping the world',
-  '为一座城市、镇子或村庄生成街区级的平面图：城墙与城门、街道与街区、地块与房屋、广场与地标。':
-    'Street-level plans of a city, town or village: walls and gates, streets and wards, plots and houses, squares and landmarks.',
-  '正在开发中。完成后可以单独使用，也可以从世界地图上选一个地点，继承那里的地形、河流与海岸。':
-    'Work in progress. It will work on its own, or start from a place on the world map and inherit its terrain, rivers and coast.',
   语言: 'Language',
   // 参数
   分辨率: 'Resolution',
@@ -854,7 +846,6 @@ const EN: Record<string, string> = {
   自然地物名称: 'Natural feature names',
   真实地球: 'Real Earth',
   数据精度: 'Data resolution',
-  '高程、气候、群系、河湖与自然地物名称都取自真实数据，不再模拟；没有城市、国家与道路': 'Elevation, climate, biomes, rivers, lakes and natural feature names all come from real data instead of simulation; no cities, countries or roads',
   '真实地球数据的网格：0.25° 约 1 MB，5′ 约 9 MB（精细分辨率下更清楚）': 'Grid of the real Earth data: 0.25° is about 1 MB, 5′ about 9 MB (sharper at the fine resolution)',
   '1440 × 720 网格，约 28 km': '1440 × 720 grid, about 28 km',
   '4320 × 2160 网格，约 9 km': '4320 × 2160 grid, about 9 km',
@@ -1046,17 +1037,12 @@ const JA: Record<string, string> = {
   '板块造山、侵蚀水系、气候与群系。3D 沙盘、六种纸图风格，并可在编辑视图里改地形、气候、大洲与地点。':
     'プレート造山、侵食と水系、気候とバイオーム。3D ジオラマ、6 種類の紙地図スタイル、地形・気候・大陸・地名を編集できるエディター。',
   聚落地图: '集落地図',
-  '为一座城市、镇子或村庄生成街区级平面图：城墙、街道、街区、地块与地标，可继承世界地图上的地形。':
-    '都市・町・村の街区レベルの平面図を生成：城壁、街路、街区、区画、ランドマーク。世界地図の地形を引き継げます。',
   '从小村到大城的街区级平面图：城墙城门、街巷街坊、房屋院落、河桥港口与农田；西式或东方，写实或奇幻。可继承世界地图上某座城镇的环境。':
     '小さな村から大都市までの街区レベルの平面図：城壁と城門、街路と街区、家屋と中庭、橋・港・農地。西洋風でも東洋風でも、写実的でも幻想的でも。世界地図上の町の環境を引き継げます。',
-  '打开项目文件…': 'プロジェクトを開く…',
   回到首页: 'ホームへ戻る',
   展开面板: 'パネルを開く',
   收起面板: 'パネルを閉じる',
-  打开项目文件: 'プロジェクトファイルを開く',
   打开: '開く',
-  '保存种子、参数与全部编辑': 'シード・パラメータ・すべての編集を保存',
   保存: '保存',
   输入种子: 'シード',
   同一种子总是生成同一个世界: '同じシードからは常に同じ世界が生まれます',
@@ -1067,7 +1053,6 @@ const JA: Record<string, string> = {
   '全球全图：几块大陆隔着大洋，从赤道雨林到两极冰原': '全球図：大洋を隔てた数個の大陸、赤道の熱帯雨林から両極の氷原まで',
   全球图: '全球図',
   地球海陆: '地球の海陸',
-  '大陆、山脉与海深取自真实地球（ETOPO1）；陆地比例、板块数不再起作用': '大陸・山脈・海深は実在の地球（ETOPO1）から。陸地比率・プレート数は効かなくなる',
   '横跨 360° 经度的世界全图：比例尺按赤道，高度随纬度范围': '経度 360° にわたる世界全図：縮尺は赤道基準、高さは緯度範囲に従う',
   '虚构语言的专名：中文音译、日文片假名': '架空言語の固有名：中国語は音訳、日本語はカタカナ',
   '意义词根：霜岭、银港、鸦渡……三语意译': '意味のある語根（霜嶺・銀港・鴉渡……）を三言語で意訳',
@@ -1200,7 +1185,6 @@ const JA: Record<string, string> = {
   '自动运镜俯瞰浏览（T）': '自動カメラで俯瞰巡覧（T）',
   '自动运镜中 · → 下一个镜头 · 拖动或 Esc 交还手动': '自動カメラ中 · → 次のショット · ドラッグか Esc で手動に戻る',
   '拖动旋转 · 右键平移 · 滚轮缩放 · WASD / 方向键移动 · Q E 转向 · PgUp PgDn 俯仰 · +/− 远近 · T 巡览 · R 随机 · P 性能': 'ドラッグで回転 · 右ドラッグで移動 · ホイールでズーム · WASD / 矢印キーで移動 · Q E で旋回 · PgUp PgDn で俯角 · +/− で遠近 · T 巡覧 · R ランダム · P 性能',
-  地形预设: 'プリセット',
   自定义: 'カスタム',
   '几块中等大小的大陆，温带为主': '中程度の大陸がいくつか、温帯が中心',
   '破碎的岛链与浅海，热带到亚热带': '途切れた島嶼と浅い海、熱帯〜亜熱帯',
@@ -1386,7 +1370,6 @@ const JA: Record<string, string> = {
   城郊: '郊外',
   '绘制{style}': '{style}を描画',
   按新参数生成: '新しい設定で生成',
-  高级参数: '詳細設定',
   恢复默认参数: '初期値に戻す',
   沙盘: 'ジオラマ',
   编辑: '編集',
@@ -1430,10 +1413,6 @@ const JA: Record<string, string> = {
   '四周线框立面上地形侧视轮廓的高度；顶面随之升降': '周囲のワイヤーフレーム立面に描く地形側面輪郭の高さ。上面も連動して上下する',
   纸图: '紙地図',
   正在塑造世界: '世界を形づくっています',
-  '为一座城市、镇子或村庄生成街区级的平面图：城墙与城门、街道与街区、地块与房屋、广场与地标。':
-    '都市・町・村の街区レベルの平面図：城壁と城門、街路と街区、区画と家屋、広場とランドマーク。',
-  '正在开发中。完成后可以单独使用，也可以从世界地图上选一个地点，继承那里的地形、河流与海岸。':
-    '開発中です。単体でも使え、世界地図の地点を選んで地形・川・海岸を引き継ぐこともできる予定です。',
   语言: '言語',
   分辨率: '解像度',
   命名: '命名',
@@ -1633,7 +1612,6 @@ const JA: Record<string, string> = {
   自然地物名称: '自然地物の名称',
   真实地球: '実際の地球',
   数据精度: 'データ解像度',
-  '高程、气候、群系、河湖与自然地物名称都取自真实数据，不再模拟；没有城市、国家与道路': '標高・気候・バイオーム・河川と湖・自然地物の名称をすべて実データから取り、シミュレーションしない。都市・国・道路はない',
   '真实地球数据的网格：0.25° 约 1 MB，5′ 约 9 MB（精细分辨率下更清楚）': '実際の地球データの格子：0.25° は約 1 MB、5′ は約 9 MB（精細の解像度でよりくっきり）',
   '1440 × 720 网格，约 28 km': '1440 × 720 格子、約 28 km',
   '4320 × 2160 网格，约 9 km': '4320 × 2160 格子、約 9 km',

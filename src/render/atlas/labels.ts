@@ -1,4 +1,4 @@
-import type { Label, World } from '../../gen/types'
+import { isSettlement, type Label, type World } from '../../gen/types'
 import { areaMember, cellAt, rangeCells, type Area } from '../../gen/areas'
 import { bboxOf, chaikin } from '../../settlement/geom'
 import { lang, placeName } from '../../i18n'
@@ -570,7 +570,7 @@ export class LabelLayer {
         continue
       }
       const l = it.label!
-      if (l.kind === 'city' || l.kind === 'capital') {
+      if (isSettlement(l)) {
         this.city(l, capitals.has(world.labels.indexOf(l)))
         continue
       }

@@ -2,6 +2,7 @@
  * 沙盘体块各模块共用的东西：地面高程取样、颜色与写入上下文。
  * 纯函数，不依赖 three.js 与 DOM，可在 Worker 中运行。
  */
+import { sampleField } from '../../gen/util'
 import { settleTheme } from '../../settlement/themes'
 import type { Culture, Settlement } from '../../settlement/types'
 import type { RGB, Writer } from './mesh'
@@ -11,16 +12,7 @@ export type Height = (x: number, z: number) => number
 /** 地形格网上一个逐格量的双线性插值（坐标为米） */
 function gridSampler(t: Settlement['terrain'], f: Float32Array): Height {
   const { W, H, cell } = t
-  return (x, z) => {
-    const fx = Math.min(W - 1.001, Math.max(0, x / cell))
-    const fz = Math.min(H - 1.001, Math.max(0, z / cell))
-    const i = Math.floor(fx)
-    const j = Math.floor(fz)
-    const u = fx - i
-    const v = fz - j
-    const k = j * W + i
-    return (f[k] * (1 - u) + f[k + 1] * u) * (1 - v) + (f[k + W] * (1 - u) + f[k + W + 1] * u) * v
-  }
+  return (x, z) => sampleField(f, W, H, x / cell, z / cell)
 }
 /** 地面高程（米） */
 export const heightSampler = (t: Settlement['terrain']) => gridSampler(t, t.height)
@@ -75,7 +67,6 @@ export const ROOF = {
   /** 琉璃：黄、绿、蓝 */
   glazeYellow: hex('#bd882d'),
   glazeGreen: hex('#3f6f57'),
-  glazeBlue: hex('#2f5d80'),
   /** 铜绿、铅皮 */
   copper: hex('#6f9484'),
   lead: hex('#70777c'),

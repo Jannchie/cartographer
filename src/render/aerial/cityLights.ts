@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import type { World } from '../../gen/types'
+import { mulberry32 } from '../../gen/rng'
+import { isSettlement, type World } from '../../gen/types'
 
 /**
  * 夜里的城市灯火：每座城市一簇暖色光点（都城最大最密），沿道路零星散着村落的灯，
@@ -51,18 +52,6 @@ const FRAG = /* glsl */ `
     gl_FragColor = vec4(warm * i * vB, 0.0);
   }
 `
-
-/** 可复现的伪随机 */
-function rng(seed: number) {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 export interface LightsPlacement {
   SX: number
@@ -123,7 +112,7 @@ export class CityLights {
     const { W, H, elevation } = world
     let seed = 7
     for (const ch of world.params.seed) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0
-    const rand = rng(seed)
+    const rand = mulberry32(seed)
     const gauss = () => Math.sqrt(-2 * Math.log(Math.max(1e-6, rand()))) * Math.cos(Math.PI * 2 * rand())
     const toX = (x: number) => (x / (W - 1) - 0.5) * p.SX
     const toZ = (y: number) => (y / (H - 1) - 0.5) * p.SZ
@@ -146,7 +135,7 @@ export class CityLights {
       halo.push(h)
     }
     // 城市：中心密、向外稀的一簇（外围沿几条放射的街道拉长）
-    const cities = world.labels.filter((l) => l.kind === 'capital' || l.kind === 'city')
+    const cities = world.labels.filter(isSettlement)
     for (const l of cities) {
       const cap = l.kind === 'capital'
       const cx = toX(l.x)

@@ -4,11 +4,8 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createCanvas, DOMMatrix, GlobalFonts, ImageData, loadImage, Path2D, type Canvas, type Image, type SKRSContext2D } from '@napi-rs/canvas'
-;(globalThis as any).ImageData = ImageData
-;(globalThis as any).Path2D = Path2D
-;(globalThis as any).DOMMatrix = DOMMatrix
-;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
+import { createCanvas, GlobalFonts, loadImage, type Canvas, type Image, type SKRSContext2D } from '@napi-rs/canvas'
+import './lib/canvas'
 
 const args = process.argv.slice(2)
 const flag = (k: string) => args.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3)

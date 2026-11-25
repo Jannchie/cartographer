@@ -12,6 +12,7 @@
  * 下刻：护城河沿河道、池塘按轮廓把地面刻下去，各有自己的水面高度（就近地面略低）。
  * 下刻量带生卒（跟随城墙、园林），着色器按人口收放。
  */
+import { smoothstep } from '../../gen/util'
 import type { P, Poly } from '../../settlement/geom'
 import type { Life } from '../../settlement/history'
 import type { Settlement } from '../../settlement/types'
@@ -49,11 +50,6 @@ const MOAT_FREEBOARD = 0.6
 const MOAT_DEPTH = 1.1
 const POND_FREEBOARD = 0.3
 const POND_DEPTH = 0.7
-
-const sm = (a: number, b: number, x: number) => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
-  return t * t * (3 - 2 * t)
-}
 
 /** 3 × 3 二项式平滑（可分离的 1-2-1），边上取边值；tmp 为同样大小的暂存，结果写回 f */
 function smooth(f: Float32Array, tmp: Float32Array, W: number, H: number) {
@@ -534,15 +530,15 @@ export function terrainMesh(st: Settlement, life: Map<object, Life>): TerrainMes
             let end = 1
             if (k === 0 && seg.t < 0) {
               d = seg.perp
-              end = 1 - sm(0, 1.2, -seg.t * seg.L)
+              end = 1 - smoothstep(0, 1.2, -seg.t * seg.L)
             } else if (k === run.length - 2 && seg.t > 1) {
               d = seg.perp
-              end = 1 - sm(0, 1.2, (seg.t - 1) * seg.L)
+              end = 1 - smoothstep(0, 1.2, (seg.t - 1) * seg.L)
             }
             if (d > r) return
             const t = Math.min(1, Math.max(0, seg.t))
             const lv = level[k] + (level[k + 1] - level[k]) * t
-            dig(v, (1 - sm(hw - bank, hw + 0.3, d)) * end, lv - MOAT_DEPTH, lv, m.life)
+            dig(v, (1 - smoothstep(hw - bank, hw + 0.3, d)) * end, lv - MOAT_DEPTH, lv, m.life)
           })
         }
       }
@@ -564,8 +560,8 @@ export function terrainMesh(st: Settlement, life: Map<object, Life>): TerrainMes
       eachNode(x0 - r, z0 - r, x1 + r, z1 + r, (v, x, z) => {
         const d = polyDepth(x, z, q.poly)
         if (d < -r) return
-        let c = sm(-0.2, 1.0, d)
-        for (const s of near) c *= 1 - sm(-0.6, 0.5, polyDepth(x, z, s.poly))
+        let c = smoothstep(-0.2, 1.0, d)
+        for (const s of near) c *= 1 - smoothstep(-0.6, 0.5, polyDepth(x, z, s.poly))
         dig(v, c, level - POND_DEPTH, level, q.life)
       })
     }
@@ -691,7 +687,7 @@ function shoreField(sdf: Float32Array, W: number, H: number, cell: number): Uint
     out[o] = d >= -16 ? 128 - d * 4 : 192 + (-16 - d) * 0.6
     if (any) {
       const d = far[k] * cell
-      out[o + 1] = d < 40 ? 255 : d > 110 ? 0 : 255 * (1 - sm(40, 110, d))
+      out[o + 1] = d < 40 ? 255 : d > 110 ? 0 : 255 * (1 - smoothstep(40, 110, d))
     }
     out[o + 2] = 127.5 + 127.5 * c2[k]
     out[o + 3] = 127.5 + 127.5 * s2[k]

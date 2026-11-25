@@ -1,6 +1,6 @@
 import { Noise } from '../gen/noise'
 import { RNG, hashString } from '../gen/rng'
-import { edt } from '../gen/util'
+import { edt, sampleField, smoothstep } from '../gen/util'
 import { chaikin, dist, pointInPoly, polylineDist, resample, type P } from './geom'
 import type { SettlementParams, Terrain } from './types'
 import * as dmath from '../gen/dmath'
@@ -19,12 +19,6 @@ function densify(line: P[], step: number): P[] {
   }
   if (line.length) out.push(line[line.length - 1])
   return out
-}
-
-/** smoothstep */
-const sm = (a: number, b: number, x: number) => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
-  return t * t * (3 - 2 * t)
 }
 
 export interface TerrainResult {
@@ -174,7 +168,7 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
       let h = 6 + rel * (fbm(x, y, 520, 0, 0, 4) * 16 + 12) + rel * fbm(x, y, 140, 7, -3, 3) * 3.5
       if (p.hills) {
         const d = (x - cx) * hd[0] + (y - cy) * hd[1]
-        const t = sm(R * 0.1, R * 1.5, d + fbm(x, y, 380, -5, 9, 3) * R * 0.3)
+        const t = smoothstep(R * 0.1, R * 1.5, d + fbm(x, y, 380, -5, 9, 3) * R * 0.3)
         const ridge = noise.ridged((x - cx) / 330 + 2.1, (y - cy) / 330 - 7.7, 4)
         h += t * hillH * (0.45 + 0.9 * ridge) + t * t * hillH * 0.4
       }
@@ -198,7 +192,7 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
       let h = lerpC(baseC, i, j)
       if (p.coast) {
         const s = lerpC(shoreGrid, i, j) - ((x - cx) * cd[0] + (y - cy) * cd[1])
-        h = s >= 0 ? Math.max(0.4, h * sm(-20, 220, s)) : s * 0.06
+        h = s >= 0 ? Math.max(0.4, h * smoothstep(-20, 220, s)) : s * 0.06
       }
       height[j * W + i] = h
     }
@@ -257,7 +251,7 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
       const hw = hwAt(x, y)
       if (d < hw) riverMask[k] = 1
       const floor = 0.6 + Math.max(0, d - hw) * 0.035
-      const t = sm(hw * 1.2, hw * 1.2 + valley, d)
+      const t = smoothstep(hw * 1.2, hw * 1.2 + valley, d)
       const bed = d < hw ? -1.5 * (1 - d / hw) : floor
       height[k] = Math.min(height[k], bed * (1 - t) + height[k] * t)
       if (d < hw) height[k] = Math.min(height[k], -0.5)
@@ -284,16 +278,7 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
 /** 网格上的采样函数 */
 function sample(W: number, H: number, height: Float32Array, water: Float32Array, sea: Uint8Array) {
   const cell = TERRAIN_CELL
-  const bil = (f: Float32Array) => (q: P) => {
-    const fx = Math.min(W - 1.001, Math.max(0, q[0] / cell))
-    const fy = Math.min(H - 1.001, Math.max(0, q[1] / cell))
-    const i = Math.floor(fx)
-    const j = Math.floor(fy)
-    const tx = fx - i
-    const ty = fy - j
-    const k = j * W + i
-    return (f[k] * (1 - tx) + f[k + 1] * tx) * (1 - ty) + (f[k + W] * (1 - tx) + f[k + W + 1] * tx) * ty
-  }
+  const bil = (f: Float32Array) => (q: P) => sampleField(f, W, H, q[0] / cell, q[1] / cell)
   const seaAt = (q: P) => {
     const i = Math.min(W - 1, Math.max(0, Math.round(q[0] / cell)))
     const j = Math.min(H - 1, Math.max(0, Math.round(q[1] / cell)))
@@ -537,7 +522,7 @@ export function levelTerrain(T: TerrainResult, poly: P[], margin: number) {
       const q: P = [i * cell, j * cell]
       const d = pointInPoly(q, poly) ? 0 : polylineDist(q, closed)
       if (d >= margin) continue
-      const t = sm(0, margin, d)
+      const t = smoothstep(0, margin, d)
       height[k] = Math.max(0.2, target * (1 - t) + height[k] * t)
     }
 }
@@ -561,18 +546,4 @@ export function landPieces(T: TerrainResult, line: P[], step = 3): P[][] {
   }
   if (cur.length > 1) out.push(cur)
   return out
-}
-
-/** 折线离最近点的距离 */
-export function nearestOn(line: P[], q: P) {
-  let best = Infinity
-  let at = 0
-  for (let i = 0; i < line.length; i++) {
-    const d = dist(line[i], q)
-    if (d < best) {
-      best = d
-      at = i
-    }
-  }
-  return { d: best, i: at }
 }

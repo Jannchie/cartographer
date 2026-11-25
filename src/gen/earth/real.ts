@@ -4,7 +4,6 @@
  * - 矢量 features.bin：河流折线与自然地物（名称 + 轮廓）
  */
 export type EarthRes = '15m' | '5m'
-export const EARTH_RES: EarthRes[] = ['15m', '5m']
 
 /** 覆盖层的位 */
 export const COVER = { land: 1, lake: 2, playa: 4, glacier: 8 } as const
@@ -101,7 +100,6 @@ export async function loadEarthFeatures(): Promise<EarthFeatures> {
   return features
 }
 
-export const earthGridLoaded = (res: EarthRes) => grids.has(res)
 export const earthFeaturesLoaded = () => features !== null
 export const earthGrid = (res: EarthRes) => {
   const g = grids.get(res)

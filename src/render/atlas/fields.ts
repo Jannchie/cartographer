@@ -1,10 +1,6 @@
 import { Biome, reliefKm, type World } from '../../gen/types'
+import { sampleField, smoothstep } from '../../gen/util'
 import type { RGB } from '../palette'
-
-export function sm(a: number, b: number, x: number) {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
-  return t * t * (3 - 2 * t)
-}
 
 export function hash(x: number, y: number) {
   let h = (x * 374761393 + y * 668265263) | 0
@@ -58,7 +54,7 @@ export function set(o: Float32Array, c: RGB) {
 
 /** 细线的抗锯齿覆盖率：sd 为到线的像素距离，w 为半线宽 */
 export function line(sd: number, w: number) {
-  return 1 - sm(w - 0.5, w + 0.6, sd)
+  return 1 - smoothstep(w - 0.5, w + 0.6, sd)
 }
 
 /** 每个像素的地理量（由栅格双线性采样得到） */
@@ -94,8 +90,6 @@ export class Fields {
   readonly MH: number
   readonly lake: Float32Array
   private colorCache = new Map<string, [Float32Array, Float32Array, Float32Array]>()
-  /** 风格专用的预计算数据 */
-  cache = new Map<string, unknown>()
 
   constructor(readonly world: World, readonly S: number) {
     this.W = world.W
@@ -108,16 +102,7 @@ export class Fields {
   }
 
   sample(a: ArrayLike<number>, gx: number, gy: number) {
-    const W = this.W
-    const H = this.H
-    gx = Math.min(W - 1.001, Math.max(0, gx))
-    gy = Math.min(H - 1.001, Math.max(0, gy))
-    const x0 = Math.floor(gx)
-    const y0 = Math.floor(gy)
-    const fx = gx - x0
-    const fy = gy - y0
-    const i = y0 * W + x0
-    return (a[i] * (1 - fx) + a[i + 1] * fx) * (1 - fy) + (a[i + W] * (1 - fx) + a[i + W + 1] * fx) * fy
+    return sampleField(a, this.W, this.H, gx, gy)
   }
 
   /** 按调色板生成羽化过的每格群系底色 */

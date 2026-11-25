@@ -496,7 +496,8 @@ export const FEATURES: FeatureDef[] = [
     id: 'windmill',
     group: 'industry',
     name: ['风车', '风车'],
-    desc: '城外开阔高处的磨坊风车（西式，别的文明见 CultureInfo.exclude）',
+    // 别的文明不出风车：见 CultureInfo.exclude
+    desc: '城外开阔高处的磨坊风车（西式）',
     form: 'wonder',
     order: 0,
     max: 8,

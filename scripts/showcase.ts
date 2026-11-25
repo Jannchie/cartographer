@@ -1,11 +1,8 @@
 // README 配图：pnpm showcase → docs/images/{zh,en,ja}/*.webp（带文字的图，每种语言一套）与 docs/images/common/*.webp（不带文字的特写）
 // 世界纸图的各风格、聚落的四种文明、八种皮肤、区划视图、成长序列与几处地标、园林特写
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { createCanvas, DOMMatrix, ImageData, Path2D, type Canvas } from '@napi-rs/canvas'
-;(globalThis as any).ImageData = ImageData
-;(globalThis as any).Path2D = Path2D
-;(globalThis as any).DOMMatrix = DOMMatrix
-;(globalThis as any).document = { createElement: () => createCanvas(1, 1) }
+import { createCanvas, type Canvas } from '@napi-rs/canvas'
+import './lib/canvas'
 const { generateWorld } = await import('../src/gen/world')
 const { DEFAULT_PARAMS } = await import('../src/gen/types')
 const { renderAtlas } = await import('../src/render/atlas/index')

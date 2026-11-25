@@ -10,6 +10,8 @@
  *（见 KIND 与 treeShader.ts）。
  * 尺寸以冠径为 1，外形与 treeSpecies.ts 的远景轮廓一致。
  */
+import { hash3, mulberry32 } from '../../gen/rng'
+import { smoothstep } from '../../gen/util'
 import { SP, SPECIES } from './treeSpecies'
 
 type V3 = [number, number, number]
@@ -30,21 +32,6 @@ export interface TreeMeshData {
 }
 
 // —— 随机数与噪声 ——
-function mulberry(seed: number) {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-const ihash = (x: number, y: number, z: number) => {
-  let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(z, 1274126177)
-  h = Math.imul(h ^ (h >>> 13), 1274126177)
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296
-}
 const fade = (t: number) => t * t * (3 - 2 * t)
 /** 三维值噪声（0 ~ 1） */
 function noise3(x: number, y: number, z: number) {
@@ -56,8 +43,8 @@ function noise3(x: number, y: number, z: number) {
   const w = fade(z - k)
   const l = (a: number, b: number, t: number) => a + (b - a) * t
   return l(
-    l(l(ihash(i, j, k), ihash(i + 1, j, k), u), l(ihash(i, j + 1, k), ihash(i + 1, j + 1, k), u), v),
-    l(l(ihash(i, j, k + 1), ihash(i + 1, j, k + 1), u), l(ihash(i, j + 1, k + 1), ihash(i + 1, j + 1, k + 1), u), v),
+    l(l(hash3(i, j, k), hash3(i + 1, j, k), u), l(hash3(i, j + 1, k), hash3(i + 1, j + 1, k), u), v),
+    l(l(hash3(i, j, k + 1), hash3(i + 1, j, k + 1), u), l(hash3(i, j + 1, k + 1), hash3(i + 1, j + 1, k + 1), u), v),
     w,
   )
 }
@@ -72,7 +59,6 @@ const norm = (a: V3): V3 => {
 }
 const lerp3 = (a: V3, b: V3, t: number): V3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
-const smooth = (a: number, b: number, x: number) => fade(clamp01((x - a) / (b - a)))
 const hexRGB = (s: string): RGB => {
   const n = parseInt(s.slice(1, 7), 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
@@ -181,7 +167,7 @@ class Builder {
     seed: number,
     readonly lod: TreeLod,
   ) {
-    this.rnd = mulberry(seed)
+    this.rnd = mulberry32(seed)
   }
   get nv() {
     return this.P.length / 3
@@ -218,7 +204,7 @@ class Builder {
       const y = d[1] * r[1] * s
       let z = d[2] * r[2] * s
       if (o.taper) {
-        const k = 1 - o.taper * smooth(0.3, -1, d[1])
+        const k = 1 - o.taper * smoothstep(0.3, -1, d[1])
         x *= k
         z *= k
       }
@@ -318,7 +304,7 @@ class Builder {
       flare: this.by(0.6, 0.45, 0.3),
       phase,
       // 贴地一圈与冠下压暗
-      ao: (_t, p) => (0.6 + 0.4 * smooth(0, 0.25, p[1])) * (1 - 0.45 * smooth(canopyY * 0.6, canopyY, p[1])),
+      ao: (_t, p) => (0.6 + 0.4 * smoothstep(0, 0.25, p[1])) * (1 - 0.45 * smoothstep(canopyY * 0.6, canopyY, p[1])),
     })
   }
 
@@ -336,7 +322,7 @@ class Builder {
    * 每个枝梢 per 段
    */
   skirt(cx: number, cz: number, y0: number, y1: number, r0: number, r1: number, lobes: number, per: number, tone: number, seed: number) {
-    const rnd = mulberry(seed)
+    const rnd = mulberry32(seed)
     const segs = lobes * per
     const phase = rnd() * 6.28
     const jit = Array.from({ length: lobes }, () => 0.8 + 0.28 * rnd())
@@ -465,7 +451,7 @@ class Builder {
               break
             }
           }
-          if (!hit && d[1] < -0.15) hit = 0.5 * (1 - smooth(0.6, 2.2, p[1] / Math.max(0.05, -d[1])))
+          if (!hit && d[1] < -0.15) hit = 0.5 * (1 - smoothstep(0.6, 2.2, p[1] / Math.max(0.05, -d[1])))
           occ += hit
         }
         occ /= HEMI.length
@@ -585,7 +571,7 @@ const spruce: Make = (b, bark) => {
     const hi = y0 + (top - y0) * Math.pow(t1, 0.9)
     const r1 = 0.8 * Math.pow(1 - t, 0.85) + 0.05
     // 上沿伸进上一层里面
-    b.skirt(0, 0, lo, hi + (hi - lo) * 0.45, 0.05 + 0.1 * (1 - t1), r1, b.by(9, 7, 5), b.by(4, 2, 2), ihash(i, 3, 9), 100 + i)
+    b.skirt(0, 0, lo, hi + (hi - lo) * 0.45, 0.05 + 0.1 * (1 - t1), r1, b.by(9, 7, 5), b.by(4, 2, 2), hash3(i, 3, 9), 100 + i)
   }
   // 顶梢
   b.tube([[0, 3.85, 0], [0, 4.15, 0]], [0.05, 0.004], b.by(5, 4, 3), WHITE, { kind: KIND.leaf, ao: () => 1 })
@@ -636,14 +622,14 @@ const willow: Make = (b, bark) => {
 const palm: Make = (b, bark) => {
   const path: V3[] = [[0, -0.35, 0], [0.04, 0.9, 0], [0.1, 2.0, 0.02], [0.14, 3.02, 0.04]]
   const c = b.curve(path, [0.105, 0.088, 0.08, 0.085], b.by(4, 2, 1))
-  b.tube(c.path, c.radii, b.by(9, 6, 4), bark, { flare: 0.35, ao: (t, p) => (0.6 + 0.4 * smooth(0, 0.3, p[1])) * (1 - 0.3 * smooth(0.8, 1, t)) })
+  b.tube(c.path, c.radii, b.by(9, 6, 4), bark, { flare: 0.35, ao: (t, p) => (0.6 + 0.4 * smoothstep(0, 0.3, p[1])) * (1 - 0.3 * smoothstep(0.8, 1, t)) })
   const top: V3 = [0.14, 3.02, 0.04]
   b.centre = top
   // 叶鞘：干顶的一团（枯叶柄）
   b.lump(add(top, [0, 0.06, 0]), [0.15, 0.2, 0.15], { amp: 0.15, level: -1, col: [140, 120, 92], tone: 0.3 })
   const n = b.by(19, 13, 9)
   const a0 = b.r(0, 6.28)
-  const rnd = mulberry(4421)
+  const rnd = mulberry32(4421)
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1)
     // 自下而上：老叶下垂，新叶上举
