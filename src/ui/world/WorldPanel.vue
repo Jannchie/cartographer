@@ -32,7 +32,6 @@ import type { EditTool, EditView } from '../../editor/editor'
 import type { Label, WorldParams } from '../../gen/types'
 import type { EarthRes } from '../../gen/earth/real'
 import { isGlobe, SHAPE_PARAMS } from '../../gen/types'
-import { DEFAULT_SETTING } from '../../gen/setting'
 import { atlasStyles } from '../../render/atlas'
 import { FONT_PRESETS, themeById } from '../../render/atlas/styles'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
@@ -123,7 +122,7 @@ const holoKeys = ['labels', 'hud'] as const
 const holoSwatches = HOLO_PALETTES.map((p) => ({ value: p.id, label: p.name }))
 const lookBase = computed(() => LOOKS.find((l) => l.id === ws.lookId)?.look ?? LOOKS[0].look)
 
-const atlasSwatches = atlasStyles().map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: `rgb(${th.paper.join(',')})`, ink: th.ink }))
+const atlasSwatches = atlasStyles.all().map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: `rgb(${th.paper.join(',')})`, ink: th.ink }))
 const atlasToggles = computed(() => [
   { label: '注记', on: ws.atlasOpts.labels },
   { label: '等高线', on: ws.atlasOpts.contours },
@@ -230,7 +229,7 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
       </div>
       <!-- 只有一个世界观时不显示这一项 -->
       <Field v-if="SETTINGS.length > 1" label="世界观" title="一整套人文设定：可用的命名风格、各文化的制度与城镇的文明。只影响地名与人文层，不影响地形与气候">
-        <Dropdown :options="SETTINGS.map((s) => ({ value: s.id, label: s.name, desc: s.desc }))" :model-value="p.setting ?? DEFAULT_SETTING" @update:model-value="(s) => W.setSetting(s)" />
+        <Dropdown :options="SETTINGS.map((s) => ({ value: s.id, label: s.name, desc: s.desc }))" :model-value="p.setting" @update:model-value="(s) => W.setSetting(s)" />
       </Field>
       <Field label="命名" title="地名的命名风格：同一个地名在中英日三种语言里意思一致">
         <Dropdown :options="namingOpts.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => W.setParam('naming', n)" />

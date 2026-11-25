@@ -1,6 +1,6 @@
 import { Noise } from './noise'
 import { RNG } from './rng'
-import { polityDef, type Polity, type PolityRule } from './polity'
+import { polities, type Polity, type PolityRule } from './polity'
 import type { SettingDef } from './setting'
 import { Biome, isSettlement, type Label, type NamingStyle, type Realm, type TownCulture } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
@@ -436,7 +436,7 @@ export function politicalMap(
     const p = cPole.pole[k]
     return { naming, polity: setting.polity[naming], town, color: cColor[k], x: p >= 0 ? p % W : 0, y: p >= 0 ? Math.floor(p / W) : 0, area: cPole.area[k], room: cPole.room[k] }
   })
-  const rules = cultures.map((c) => polityDef(c.polity).rule)
+  const rules = cultures.map((c) => polities.get(c.polity).rule)
   const rule = (k: number) => rules[k]
 
   // —— 国家：都城与大城市为种子，跨文化的扩张代价更高 ——

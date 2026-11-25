@@ -1,4 +1,4 @@
-import { traitsOf } from './culture'
+import { cultures } from './culture'
 import { Biome } from '../gen/types'
 import { clamp } from '../gen/util'
 import { centerDist, clipWater, gridFrame, hashAt, inCity, mark, placeable, rngAt, type Core, type Ctx } from './ctx'
@@ -407,7 +407,7 @@ export function sharedEdge(a: Patch, b: Patch): [P, P] | null {
 /** 由气候决定植被：林木多少、农田类型 */
 export function vegetation(ctx: Ctx) {
   const c = ctx.p.climate
-  if (!c) return { trees: 1, farm: true, paddy: traitsOf(ctx.p.culture).paddy && ctx.p.relief < 0.6, vine: false }
+  if (!c) return { trees: 1, farm: true, paddy: cultures.get(ctx.p.culture).traits.paddy && ctx.p.relief < 0.6, vine: false }
   const b = c.biome
   const desert = b === Biome.HotDesert || b === Biome.ColdDesert || b === Biome.SaltFlat
   const cold = b === Biome.Tundra || b === Biome.IceCap
@@ -415,7 +415,7 @@ export function vegetation(ctx: Ctx) {
   return {
     trees: desert ? 0.05 : cold ? 0.15 : forest ? 1.5 : b === Biome.Grassland || b === Biome.Savanna ? 0.4 : 0.9,
     farm: !cold && (!desert || !!ctx.p.river),
-    paddy: traitsOf(ctx.p.culture).paddy && c.temp > 14 && c.rain > 1000,
+    paddy: cultures.get(ctx.p.culture).traits.paddy && c.temp > 14 && c.rain > 1000,
     vine: c.temp > 13 && c.rain < 900,
   }
 }

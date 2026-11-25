@@ -4,6 +4,7 @@ import { nextTick, ref } from 'vue'
 import { lang } from '../../i18n'
 import { t } from '../i18n'
 import Icon from '../kit/Icon.vue'
+import Sheet from '../kit/Sheet.vue'
 import * as W from './world'
 import { ws } from './world'
 
@@ -32,8 +33,7 @@ async function finishRename(apply: boolean) {
 </script>
 
 <template>
-  <div v-if="ws.library.open" class="library" @pointerdown.self="W.openLibrary(false)" @keydown.esc="W.openLibrary(false)">
-    <section class="library-sheet" role="dialog" :aria-label="t('新建与世界库')">
+  <Sheet :open="ws.library.open" label="新建与世界库" @close="W.openLibrary(false)">
       <div class="library-body">
       <aside class="new-world">
         <h2>{{ t('新建世界') }}</h2>
@@ -50,13 +50,13 @@ async function finishRename(apply: boolean) {
         </button>
       </aside>
       <div class="library-main">
-      <header class="library-head">
+      <header class="modal-head">
         <h2>{{ t('世界库') }}</h2>
-        <div class="library-actions">
+        <div class="modal-actions">
           <button type="button" class="link" :disabled="ws.busy" :title="t('保存到世界库：存下整个世界的数据，打开时直接显示')" @click="W.saveWorld()"><Icon :icon="IconSave" :size="14" />{{ t('保存') }}</button>
           <button v-if="ws.entry" type="button" class="link" :disabled="ws.busy" @click="W.saveWorld(true)"><Icon :icon="IconSave" :size="14" />{{ t('另存为新世界') }}</button>
           <button type="button" class="link" @click="emit('import')"><Icon :icon="IconFolderOpen" :size="14" />{{ t('导入文件…') }}</button>
-          <button type="button" class="library-close" :title="t('关闭')" @click="W.openLibrary(false)"><Icon :icon="IconX" :size="16" /></button>
+          <button type="button" class="modal-close" :title="t('关闭')" @click="W.openLibrary(false)"><Icon :icon="IconX" :size="16" /></button>
         </div>
       </header>
       <p v-if="!ws.library.items.length" class="library-empty">{{ t('还没有保存的世界。生成满意后点「保存」，世界会连同全部数据存进这里。') }}</p>
@@ -88,6 +88,5 @@ async function finishRename(apply: boolean) {
       </ul>
       </div>
       </div>
-    </section>
-  </div>
+  </Sheet>
 </template>

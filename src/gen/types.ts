@@ -39,10 +39,10 @@ export interface WorldParams {
   /** 命名风格（auto 按种子在世界观的池子里挑一种） */
   naming: NamingStyle
   /**
-   * 世界观：命名风格的池子、各文化的制度与城镇文明（见 gen/setting.ts）。不写即内置的 classic；
-   * 它是生成结果的一部分，与启用了哪些插件无关。只影响地名与人文层，不影响地面
+   * 世界观：命名风格的池子、各文化的制度与城镇文明（见 gen/setting.ts）。它是生成结果的一部分，
+   * 与启用了哪些插件无关；只影响地名与人文层，不影响地面。旧的链接与存档里没有这一项，由 normalizeParams 补上
    */
-  setting?: string
+  setting: string
   /**
    * 生成聚落与道路（城镇、国家、道路与航线）。关掉时只生成地形、气候、水系与自然地物名称——
    * 先定地形、再放聚落的两阶段流程；地面不受影响，开关之间不重算地形
@@ -79,8 +79,18 @@ export function globeHeight(p: Pick<WorldParams, 'width' | 'latNorth' | 'latSout
   return isGlobe(p) ? Math.max(64, Math.round((p.width * Math.abs(p.latNorth - p.latSouth)) / 360)) : Math.round(p.width * 0.625)
 }
 
-/** 参数里可以推导的部分就地补齐：地球底图总是全球图；高度由宽度（全球图再加纬度范围）定。改动 width、纬度、globe、earth 之后调用 */
+/**
+ * 旧种子的兼容契约：没有写世界观的参数（世界观出现之前的链接与存档）按内置的 classic 解释。
+ * 这个 id 只在这里出现；其余地方要"默认的内容"都向注册表要默认条目
+ */
+const LEGACY_SETTING = 'classic'
+
+/**
+ * 参数里可以推导的部分就地补齐：没有写世界观的补上旧种子的那个；地球底图总是全球图；高度由宽度（全球图再加纬度范围）定。
+ * 改动 width、纬度、globe、earth 之后调用；从链接、存档读来的参数也先过一遍
+ */
 export function normalizeParams(p: WorldParams) {
+  p.setting ||= LEGACY_SETTING
   if (p.region) {
     // 区域图：真实数据、投影铺满区域；纬度范围取图框中线的上下两端（模型补气温时用）
     p.earthReal = p.earth = true
@@ -121,6 +131,7 @@ export const DEFAULT_PARAMS: WorldParams = {
   settlements: true,
   terrainVariant: 0,
   placeVariant: 0,
+  setting: LEGACY_SETTING,
 }
 
 export const Biome = {
@@ -418,6 +429,11 @@ export interface World {
   kmPerCell: number
   /** 伯爵领与文化（生成的世界、放了聚落时才有） */
   political?: PoliticalLayer
+  /**
+   * 默认的城镇文明：城镇不属于任何文化时（没有政区层的真实地球与区域图，或城镇不在任何伯爵领里）建哪种文明的城。
+   * 按世界观的城镇文明规则、世界的命名风格算出（gen/townCulture.ts）；聚落层只读这个结果，不认识世界观
+   */
+  townCulture: TownCulture
   /** 真实行政区划（只有区域图有） */
   admin?: AdminLayer
   /** 实测山峰（只有区域图有） */

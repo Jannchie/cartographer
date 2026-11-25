@@ -14,6 +14,7 @@ import { outline, type Area, type AreaKind } from '../areas'
 import { RNG, hashString } from '../rng'
 import * as dmath from '../dmath'
 import { clampAngle } from '../util'
+import { worldTownCulture } from '../townCulture'
 import { COVER, earthFeatures, earthFeaturesLoaded, earthGrid, type EarthPlaceKind, type EarthRes } from './real'
 import { fillRings, type LonLatGrid } from './raster'
 import { regionProjection, REGION_INFO, type MapProjection, type RegionId } from './region'
@@ -265,6 +266,7 @@ export function realEarthWorld(p: WorldParams, progress: Progress = () => {}, ed
     kmPerCell,
     admin: political?.admin,
     peaks: political?.peaks,
+    townCulture: worldTownCulture(p),
     stats: { land: land / N, peak, trench, lakes, rivers: rivers.length, ms: performance.now() - t0 },
   }
 }

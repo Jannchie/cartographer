@@ -2,7 +2,7 @@ import { RNG } from '../../gen/rng'
 import type { Ctx } from '../ctx'
 import { add, area, cbox, centroid, chaikin, circlePoly, dist, frameAt, inscribedRect, insetConvex, lerpP, neg, obb, perp, edgeDist, pointInPoly, resample, segDist, sub, unit, at, type P, type Poly, type RectFrame } from '../geom'
 import type { BuildingKind, Building, ParkPart } from '../types'
-import { cultureOf } from '../culture'
+import { cultures } from '../culture'
 import { inside, place, plantTree } from '../wards'
 import type { Composer, Preset } from '../compose/core'
 import { emitArea } from '../ctx'
@@ -89,7 +89,7 @@ export function garden(ctx: Ctx, g: Poly, C: Composer, P: GardenPreset, wall: bo
   const b = obb(g)
   return {
     ctx,
-    trad: cultureOf(ctx.p.culture).garden,
+    trad: cultures.get(ctx.p.culture).garden,
     P,
     C,
     wall,

@@ -119,13 +119,15 @@ export interface AtlasBase {
  * 构建矢量纸图的显示列表：底色、色带、晕渲分级、等值线由格点场追踪成路径，
  * 河流、符号、注记、罗盘、图框复用位图渲染的绘制代码（经 Recorder 录制）。
  */
-export function buildAtlasVector(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): DisplayList {
-  return withLabels(buildAtlasBase(world, rivers, id, opts, measurer, S), opts.areas)
+export async function buildAtlasVector(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): Promise<DisplayList> {
+  return withLabels(await buildAtlasBase(world, rivers, id, opts, measurer, S), opts.areas)
 }
 
 /** 不含地图注记的部分（见 AtlasBase） */
-export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): AtlasBase {
+export async function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): Promise<AtlasBase> {
   const theme = themeById(id)
+  // 风格的矢量画法用到时才载入
+  const draw = await theme.vector()
   const f = fieldsFor(world, S)
   theme.prepare?.(f)
   const { MW, MH, W, H } = f
@@ -143,7 +145,7 @@ export function buildAtlasBase(world: World, rivers: SmoothRiver[], id: StyleId,
   const L = new Layers(list, W, H, S)
   // 政区专题风格的晕渲、湖泊与海岸线要压在政区色块之上：底图先画到色块为止，其余在着色之后
   // 风格自己的矢量底图；返回的函数留到政区着色之后再执行
-  const after = theme.vector(L, world, F, { opts, S })
+  const after = draw(L, world, F, { opts, S })
 
   if (opts.political && world.political) politicalFill(L, world, F, opts.political, theme.political)
   after?.()
@@ -226,6 +228,6 @@ export function withLabels(base: AtlasBase, areas: AtlasOpts['areas']): DisplayL
   return list
 }
 
-export function renderAtlasSvg(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): string {
-  return buildAtlasVector(world, rivers, id, opts, measurer, S).toSVG()
+export async function renderAtlasSvg(world: World, rivers: SmoothRiver[], id: StyleId, opts: AtlasOpts, measurer: CanvasRenderingContext2D, S = 2): Promise<string> {
+  return (await buildAtlasVector(world, rivers, id, opts, measurer, S)).toSVG()
 }

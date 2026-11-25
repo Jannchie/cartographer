@@ -1,10 +1,10 @@
 import { defineSlot, registryOf } from '../kernel'
-import { cultureOf } from './culture'
+import { cultures } from './culture'
 import type { BuildingKind, Culture, Field } from './types'
 
 /**
  * 聚落图主题（绘图风格）的类型与扩展点，以及沙盘地面的底色。主题由插件的 settlement 层入口登记（扩展点 SettleThemes）——
- * 放在 settlement 层而不是 paper 层，是因为沙盘的体块在聚落 Worker 里构建，要用彩绘主题的建筑配色。
+ * 放在 settlement 层而不是 paper 层，是因为沙盘的体块在聚落 Worker 里构建，要用主题里的沙盘配色。
  * 内置的八种在 packs/cartography/settlement/themes.ts。
  */
 
@@ -41,8 +41,16 @@ export interface SettleTheme {
   /** 街区内未建的院落 */
   yard: string
   plaza: string
-  /** 建筑配色：按文明（文明可以改默认配色的几项）；不给文明时是这种风格的默认配色 */
-  buildings: (culture?: Culture) => BuildingPalette
+  /** 建筑的默认配色。文明可以改其中几项（CultureDef.palettes），用的时候由 buildingPalette 合并 */
+  buildingBase: BuildingPalette
+  /** 文明对建筑配色的改动按哪个主题的 id 取（CultureDef.palettes 的键）：缺省是本主题；由别的主题换色而来的主题指向它的父主题 */
+  paletteOf?: SettleStyleId
+  /**
+   * 沙盘（三维）的配色：体块的建筑配色（连同文明的改动按哪个主题取）与法术色。给了它的主题作沙盘地面时体块按它着色，
+   * 没给的用默认主题的（dioramaOf）。ground 为 true 表示作沙盘地面时按写实地景画——草、土、石的固有色加材质掩膜，
+   * 而不是这种主题的地图
+   */
+  diorama?: DioramaLook
   /** 鸟居、神桥的朱红（缺省 #c8412a） */
   vermilion?: string
   buildingStroke: { color: string; width: number }
@@ -73,31 +81,49 @@ export interface SettleTheme {
   seal?: string
 }
 
-/** 扩展点：聚落图主题，按 id 登记（界面上的色块按登记顺序） */
-export const SettleThemes = defineSlot<SettleTheme>('settleTheme')
+/** 沙盘的配色（见 SettleTheme.diorama） */
+export interface DioramaLook {
+  buildingBase: BuildingPalette
+  paletteOf: SettleStyleId
+  magic: string
+  ground?: boolean
+}
 
-/** 没有选过、或选的主题不可用时用的那个（羊皮纸）；沙盘的地面贴图与建筑配色用的那个（彩绘）。都由内置插件 cartography 登记 */
-export const DEFAULT_SETTLE_STYLE: SettleStyleId = 'parchment'
-export const DIORAMA_STYLE: SettleStyleId = 'color'
+/** 扩展点：聚落图主题，按 id 登记（界面上的色块按登记顺序）。默认条目是没有选过、或选的主题不可用时用的那个，它要带沙盘的配色 */
+export const SettleThemes = defineSlot<SettleTheme>('settleTheme', { zh: '绘图风格', en: 'map style', ja: '描画スタイル' })
 
-const registry = registryOf(SettleThemes)
-
-/** 已登记的聚落图主题（按登记顺序） */
-export const settleThemes = (): SettleTheme[] => registry.all()
-
-/** 这个 id 的主题有没有登记（界面读存下的选择、地址里的参数时先核对，不可用就回到默认并提示） */
-export const hasSettleTheme = (id: string): boolean => registry.has(id)
-
-/** 主题的定义；没有登记时抛 MissingContent（所属的插件没有启用，或入口没有先启动插件） */
-export const settleTheme = (id: SettleStyleId): SettleTheme => registry.get(id)
+/** 聚落图主题的注册表 */
+export const settleThemes = registryOf(SettleThemes)
 
 /**
- * 主题的建筑配色：默认配色，盖上文明的改动（CultureDef.palettes 里按主题 id 写的那几项）。
- * 登记主题时用它生成 SettleTheme.buildings
+ * 建筑配色：默认配色盖上文明的改动（文明按主题 id 写的那几项）；不给文明时就是默认配色。
+ * src 是主题，或主题的沙盘配色
  */
-export const cultureBuildings =
-  (id: SettleStyleId, base: BuildingPalette) =>
-  (c?: Culture): BuildingPalette => ({ ...base, ...(c === undefined ? undefined : cultureOf(c).palettes?.[id]) })
+export function buildingPalette(src: { buildingBase: BuildingPalette; paletteOf?: SettleStyleId; id?: SettleStyleId }, culture?: Culture): BuildingPalette {
+  const key = src.paletteOf ?? src.id
+  return { ...src.buildingBase, ...(culture === undefined || key === undefined ? undefined : cultures.get(culture).palettes?.[key]) }
+}
+
+/** 沙盘的配色：地面主题自己的；它没有（或这个主题没有登记）时用默认主题的 */
+export function dioramaOf(ground?: SettleStyleId): DioramaLook {
+  const own = ground !== undefined && settleThemes.has(ground) ? settleThemes.get(ground).diorama : undefined
+  const look = own ?? settleThemes.get(settleThemes.defaultId()).diorama
+  if (!look) throw new Error('默认的聚落图主题没有沙盘配色（SettleTheme.diorama）')
+  return look
+}
+
+/** 两套沙盘配色是不是同一套（体块要不要重建） */
+export const sameDiorama = (a: DioramaLook, b: DioramaLook) => a.buildingBase === b.buildingBase && a.paletteOf === b.paletteOf && a.magic === b.magic
+
+/**
+ * 沙盘地面可选的主题当作一种可引用的内容（界面核对存下的沙盘选项时用）：
+ * 不可用时回到按写实地景画地面的那个主题，没有这样的主题就是默认主题
+ */
+export const groundStyles = {
+  label: { zh: '沙盘地面风格', en: 'diorama ground style', ja: 'ジオラマの地面スタイル' },
+  has: (id: string) => settleThemes.has(id),
+  defaultId: (): SettleStyleId => settleThemes.all().find((t) => t.diorama?.ground)?.id ?? settleThemes.defaultId(),
+}
 
 /** 一组颜色（同一种东西的几个色调） */
 const shades = (...c: string[]) => c
@@ -181,5 +207,5 @@ export function dioramaGround(culture: Culture): DioramaGround {
     paved: true,
   }
   // 文明改其中几项（街道的铺装、夯土的颜色、干旱地带的草色……）
-  return { ...base, ...cultureOf(culture).ground }
+  return { ...base, ...cultures.get(culture).ground }
 }

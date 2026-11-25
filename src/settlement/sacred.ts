@@ -8,7 +8,7 @@ import { tierLog } from './tiers'
 import type { Building, BuildingKind, Tri } from './types'
 import { drop } from './undo'
 import { smoothRoute } from './walls'
-import { cultureOf } from './culture'
+import { cultures } from './culture'
 
 /**
  * 名所：按地形才有的"招牌"布置，城边、城外挑合适的地方盖，放在片区、地标、城外设施都盖好以后。
@@ -29,7 +29,7 @@ export function sacredSites(ctx: Ctx) {
   // 城越大、越"神圣"（奇幻城、都城），名所越多
   const k = (big ? 1 : town ? 0.8 : 0.35) * (ctx.p.function === 'magic' || ctx.p.capital ? 1.25 : 1)
   // 名所难得一见：越有名的越少，常见些的多一点。有哪些、各有多大可能由文明定
-  const tries = cultureOf(ctx.p.culture).sacred?.(ctx, k) ?? []
+  const tries = cultures.get(ctx.p.culture).sacred?.(ctx, k) ?? []
   // 一座城至多两处名所（城镇、村落一处）；按种子排先后，免得总是表里靠前的先占了名额
   let left = big ? 2 : 1
   tries

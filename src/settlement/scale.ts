@@ -1,7 +1,7 @@
 import type { SizeCfg } from './ctx'
 import { clamp, lerp } from '../gen/util'
 import type { Culture, Density, SettlementParams, SettlementSize, WardType } from './types'
-import { cultureOf, traitsOf } from './culture'
+import { cultures } from './culture'
 import * as dmath from '../gen/dmath'
 
 /**
@@ -97,7 +97,7 @@ export function scaleOf(pop: number): { size: SettlementSize; cfg: SizeCfg; exte
 export const planPopOf = (p: Pick<SettlementParams, 'population' | 'planPop'>) => Math.max(p.population, p.planPop ?? 0)
 
 /** 每户人数（见 culture.ts） */
-export const perHousehold = (culture: Culture) => traitsOf(culture).perHousehold
+export const perHousehold = (culture: Culture) => cultures.get(culture).traits.perHousehold
 
 /**
  * 每公顷城区（城内陆地）的民居户数：实测的经验值，含城外城郊与农舍，城区按它来定生长到多大。
@@ -115,7 +115,7 @@ export interface CultureHousing {
   full: Partial<Record<WardType, Record<Density, number>>>
 }
 export function housesPerHa(p: Pick<SettlementParams, 'population' | 'culture' | 'function' | 'regularity'>) {
-  const h = cultureOf(p.culture).housing.perHa
+  const h = cultures.get(p.culture).housing.perHa
   const town = h.town * (1 - h.regular * p.regularity) * (p.function === 'fortress' ? 0.95 : p.function === 'trade' ? h.trade : 1)
   // 农家与街坊按全村平均的街坊占比混合，街坊的密度随城镇化从村里的七成升到城镇：村 → 镇连续过渡，没有分界上的跳变
   const s = townShare(p.population, 2 / 3)
@@ -123,7 +123,7 @@ export function housesPerHa(p: Pick<SettlementParams, 'population' | 'culture' |
 }
 
 /** 零散农家的片区每公顷住多少户（盖满时） */
-export const farmPerHa = (culture: Culture) => cultureOf(culture).housing.perHa.farm
+export const farmPerHa = (culture: Culture) => cultures.get(culture).housing.perHa.farm
 
 /**
  * 片区盖满时每公顷（片区全面积）的住户数，按功能与密度档实测（成长史里各形态都是按盖满盖的：统计各形态的户数 ÷ 片区陆地面积）。
@@ -131,7 +131,7 @@ export const farmPerHa = (culture: Culture) => cultureOf(culture).housing.perHa.
  * 城区生长用的 housesPerHa 是全城平均（含广场、寺庙这些不住人的片区），占用率估算要的是单块片区盖满能住多少。
  */
 export function fullPerHa(culture: Culture, type: WardType, d: Density) {
-  const full = cultureOf(culture).housing.full
+  const full = cultures.get(culture).housing.full
   return full[type]?.[d] ?? full.common![d]
 }
 

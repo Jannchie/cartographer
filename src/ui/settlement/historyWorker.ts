@@ -1,7 +1,8 @@
 import type { SettlementHistory } from '../../settlement/history'
 import type { SettlementParams } from '../../settlement/types'
 import type { TownBuild } from '../../render/town3d/massing'
-import { activePlugins } from '../../kernel'
+import type { SettleStyleId } from '../../settlement/themes'
+import { activePlugins, workerName } from '../../kernel'
 import type { HistoryRequest } from './history.worker'
 
 /** 推演被更新的请求取代（拖动参数时）：调用方忽略即可 */
@@ -21,9 +22,8 @@ const towns = new Map<number, { resolve: (t: TownBuild | null) => void; reject: 
 const seqOf = new WeakMap<SettlementHistory, number>()
 
 function spawn() {
-  const w = new Worker(new URL('./history.worker.ts', import.meta.url), { type: 'module' })
-  // 线程每次重建都要先告诉它启用了哪些插件
-  w.postMessage({ kind: 'init', plugins: [...activePlugins()] } satisfies HistoryRequest)
+  // 启用的插件写在线程的名字里，线程在模块顶层据此启动
+  const w = new Worker(new URL('./history.worker.ts', import.meta.url), { type: 'module', name: workerName(activePlugins()) })
   w.onmessage = (e: MessageEvent<Reply>) => {
     const m = e.data
     if (m.kind === 'history') {
@@ -79,14 +79,14 @@ export function computeHistory(params: SettlementParams): Promise<SettlementHist
 
 /**
  * 沙盘的体块与树：在推演这份成长史的线程里构建（它还留着原件），数组转移回来。
- * 线程里已经换成了别的成长史（或线程被终止过）时得 null，由调用方在主线程构建
+ * 线程里已经换成了别的成长史（或线程被终止过）时得 null，由调用方在主线程构建。ground 是沙盘地面用的主题
  */
-export function computeTown(hist: SettlementHistory): Promise<TownBuild | null> {
+export function computeTown(hist: SettlementHistory, ground: SettleStyleId): Promise<TownBuild | null> {
   const s = seqOf.get(hist)
   if (s === undefined || !worker) return Promise.resolve(null)
   const w = worker
   return new Promise((resolve, reject) => {
     towns.set(s, { resolve, reject })
-    w.postMessage({ kind: 'town', seq: s } satisfies HistoryRequest)
+    w.postMessage({ kind: 'town', seq: s, ground } satisfies HistoryRequest)
   })
 }

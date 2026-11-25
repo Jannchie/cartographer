@@ -8,6 +8,7 @@ import { SETTLE_THEMES } from './settlement/themes'
  * 要用彩绘主题的建筑配色。登记顺序决定界面上色块的顺序。
  */
 const setup: LayerSetup = (host) => {
-  for (const th of SETTLE_THEMES) host.add(SettleThemes, th.id, th)
+  // 第一种（羊皮纸）是默认主题
+  SETTLE_THEMES.forEach((th, i) => host.add(SettleThemes, th.id, th, { default: i === 0 }))
 }
 export default setup

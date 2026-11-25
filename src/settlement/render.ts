@@ -1,9 +1,9 @@
-import { traitsOf } from './culture'
+import { cultures } from './culture'
 import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
 import { DisplayList, rasterArea, rasterPoly, type BBox, type Fill, type Item, type LabelArea, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
 import { bboxOf, centroid, circlePoly, dist, obb, pointAt, pointInPoly, polylineLength, rect, signedArea, type P, type Poly } from './geom'
-import { DIORAMA_STYLE, dioramaGround, settleTheme, type SettleStyleId, type SettleTheme } from './themes'
+import { buildingPalette, dioramaGround, settleThemes, type SettleStyleId, type SettleTheme } from './themes'
 import type { BuildingKind, Field, MapLabel, Road, Settlement, SettlementSize } from './types'
 import { LAND_USES, isDarkGround, landUseColor, landUseOf, landUseStats, type LandUse } from './landuse'
 import { settlementTitle, tr } from '../i18n'
@@ -60,7 +60,7 @@ function langFont(f: string, lg: Lang): string {
  */
 /** 风格的字体按语言换成对应的字族 */
 function themeFor(style: SettleStyleId, lg: Lang): SettleTheme {
-  const th0 = settleTheme(style)
+  const th0 = settleThemes.get(style)
   return { ...th0, font: { title: langFont(th0.font.title, lg), label: langFont(th0.font.label, lg), italic: langFont(th0.font.italic, lg) } }
 }
 
@@ -823,7 +823,7 @@ function crossingLayers(R: Painter, st: Settlement, th: SettleTheme) {
       ]
       R.poly(
         boat.map((p) => [p[0], p[1]] as P),
-        { color: th.buildings().shed[0], alpha: 1 },
+        { color: th.buildingBase.shed[0], alpha: 1 },
         { color: th.ink, alpha: 1, width: 0.8 },
       )
       // 两岸的小码头
@@ -864,7 +864,7 @@ function boatLayers(R: Painter, st: Settlement, th: SettleTheme) {
     if (b.len > 10) masts.push([at(L * 0.1, -w * 1.9), at(L * 0.1, w * 1.9)])
   }
   if (th.shadow) R.polys(hulls.map((h) => h.map(([x, y]) => [x + 1, y + 1] as P)), { color: th.shadow, alpha: 1 })
-  R.polys(hulls, { color: th.buildings().shed[0], alpha: 1 }, { color: th.ink, alpha: 1, width: 0.7, join: 'round' })
+  R.polys(hulls, { color: th.buildingBase.shed[0], alpha: 1 }, { color: th.ink, alpha: 1, width: 0.7, join: 'round' })
   R.lines(masts, { color: th.ink, alpha: 0.9, width: 1.1, cap: 'round' })
 }
 
@@ -878,7 +878,7 @@ const KIND_ORDER: Exclude<BuildingKind, 'torii'>[] = ['shed', 'house', 'large', 
 
 function buildingLayers(R: Painter, st: Settlement, th: SettleTheme) {
   const S = R.S
-  const pal = th.buildings(st.params.culture)
+  const pal = buildingPalette(th, st.params.culture)
   if (th.shadow) {
     // 影子随层数拉长：一层的平房短、四层的楼房长，一眼看出老城与外围的高低
     const byOff = new Map<number, P[][]>()
@@ -1096,7 +1096,7 @@ function wonderLayers(R: Painter, st: Settlement, th: SettleTheme, ground = fals
       )
       R.poly(top, { color: th.green.park, alpha: 1 }, { color: th.ink, alpha: 1, width: 1.1 })
       const tower = circlePoly(c, w.r * 0.16, 16)
-      R.poly(tower, { color: th.buildings(st.params.culture).magic[0], alpha: 1 }, { color: th.ink, alpha: 1, width: 1 })
+      R.poly(tower, { color: buildingPalette(th, st.params.culture).magic[0], alpha: 1 }, { color: th.ink, alpha: 1, width: 1 })
       const trees: string[] = []
       for (let k = 0; k < 7; k++) {
         const a = k * 2.3
@@ -1179,8 +1179,9 @@ class GroundPen {
     readonly color: DisplayList,
     readonly mask: DisplayList,
     readonly S: number,
+    th: SettleTheme,
   ) {
-    this.R = new Painter(color, S, settleTheme(DIORAMA_STYLE))
+    this.R = new Painter(color, S, th)
   }
 
   /** 一条路径写进两张表（paint、mat 各自可缺） */
@@ -1240,12 +1241,14 @@ class GroundPen {
 }
 
 export function buildGroundVector(st: Settlement, style: SettleStyleId, measurer: CanvasRenderingContext2D): GroundVector {
-  if (style !== DIORAMA_STYLE) return { color: buildSettlementVector(st, style, { labels: false, contours: false, ground3d: true }, measurer), mask: null }
+  // 只有声明了写实地面的主题走下面带材质掩膜的画法；别的主题的地面就是那种主题的地图
+  const th = settleThemes.get(style)
+  if (!th.diorama?.ground) return { color: buildSettlementVector(st, style, { labels: false, contours: false, ground3d: true }, measurer), mask: null }
   const S = settlePageScale(st)
   const M = 44
   const MW = Math.round(st.width * S)
   const MH = Math.round(st.height * S)
-  const G = new GroundPen(new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH), new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH), S)
+  const G = new GroundPen(new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH), new DisplayList(MW + M * 2, MH + M * 2, M, MW, MH), S, th)
   dioramaGroundLayers(G, st)
   return { color: G.color, mask: G.mask }
 }
@@ -1860,7 +1863,7 @@ function titleBlock(list: DisplayList, st: Settlement, th: SettleTheme, X: numbe
   const ty = Y + 22
   // 东式城名用毛笔字（中文）；英文用标题字体
   const title = settlementTitle(st, lg)
-  const zhFont = lg === 'en' ? `600 40px ${th.font.title}` : traitsOf(st.params.culture).brushTitle && th.brushTitle !== false && lg === 'zh' ? `400 44px "Ma Shan Zheng", ${th.font.label}` : `600 40px ${th.font.label}`
+  const zhFont = lg === 'en' ? `600 40px ${th.font.title}` : cultures.get(st.params.culture).traits.brushTitle && th.brushTitle !== false && lg === 'zh' ? `400 44px "Ma Shan Zheng", ${th.font.label}` : `600 40px ${th.font.label}`
   measurer.font = zhFont
   const tw = Math.max(measurer.measureText(title).width, 200)
   const bw = tw + 60
@@ -1998,7 +2001,7 @@ function probeCard(list: DisplayList, th: SettleTheme, measurer: CanvasRendering
 }
 
 /** 图框里、地图范围以外的底色 */
-export const settleBackdrop = (style: SettleStyleId) => settleTheme(style).ground
+export const settleBackdrop = (style: SettleStyleId) => settleThemes.get(style).ground
 
 /** 字体加载：中文按实际用到的字取子集 */
 /**
@@ -2006,11 +2009,11 @@ export const settleBackdrop = (style: SettleStyleId) => settleTheme(style).groun
  * 大城的地名多、网络慢时要下很久，超时就先用回退字体画，返回 false；later 在字体全部到齐（或失败）时兑现，调用方据此重画
  */
 export async function ensureSettleFonts(st: Settlement, style: SettleStyleId, lg: Lang = 'zh', wait = 2500): Promise<{ ready: boolean; later: Promise<unknown> }> {
-  const th = settleTheme(style)
+  const th = settleThemes.get(style)
   const text = [st.nameZh, st.name, st.nameJa, ...st.labels.map((l) => l.text[lg] + (l.sub?.[lg] ?? '')), SIZE_NAME[lg][st.params.size], CAPITAL_NAME[lg], POP_TEXT[lg]('0123456789,'), tr('区划', lg), ...LAND_USES.map((d) => tr(d.name, lg))].join('')
   const fams = new Set<string>()
   for (const f of [th.font.title, th.font.label]) for (const x of langFont(f, lg).split(',')) if (x.includes('"')) fams.add(x.trim().replace(/^italic /, ''))
-  if (traitsOf(st.params.culture).brushTitle || th.seal) fams.add('"Ma Shan Zheng"')
+  if (cultures.get(st.params.culture).traits.brushTitle || th.seal) fams.add('"Ma Shan Zheng"')
   const loads: Promise<unknown>[] = []
   for (const fam of fams) for (const w of ['400', '600', 'italic 400']) loads.push(document.fonts.load(`${w} 20px ${fam}`, text))
   // 字体加载失败回退系统字体

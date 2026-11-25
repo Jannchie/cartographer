@@ -63,7 +63,6 @@ const setting: SettingDef = {
   naming: ['sample'],
   polity: { sample: 'feudal' },
   townCulture: () => 'sample',
-  cultures: ['sample'],
 }
 
 const setup: LayerSetup = (host) => {

@@ -113,19 +113,11 @@ export interface CultureDef {
   ground?: Partial<DioramaGround>
 }
 
-/** 扩展点：文明，按文明 id 登记（界面上的选项按登记顺序） */
-export const Cultures = defineSlot<CultureDef>('culture')
+/** 扩展点：文明，按文明 id 登记（界面上的选项按登记顺序）。默认条目是没有指定文明时用的那个 */
+export const Cultures = defineSlot<CultureDef>('culture', { zh: '文明', en: 'culture', ja: '文明' })
 
-const defs = registryOf(Cultures)
-
-/** 已登记的文明 id（按登记顺序） */
-export const cultureIds = (): Culture[] => defs.ids()
-
-/** 文明的定义；没有登记的 id 抛 MissingContent（入口没有先启动插件，或参数里的文明来自没有启用的插件） */
-export const cultureOf = (c: Culture): CultureDef => defs.get(c)
-
-/** 文明的能力标记与基本参数 */
-export const traitsOf = (c: Culture): CultureTraits => cultureOf(c).traits
+/** 文明的注册表：get 取定义（没有登记的 id 抛错：入口没有先启动插件，或参数里的文明来自没有启用的插件） */
+export const cultures = registryOf(Cultures)
 
 // —————————————————————— 城市形制 ——————————————————————
 
@@ -133,18 +125,18 @@ export const traitsOf = (c: Culture): CultureTraits => cultureOf(c).traits
 const ORGANIC_PLAN = { id: 'organic' as PlanId, name: '有机生长', desc: '沿干道、河流自然长成的街巷' }
 
 /** 这个文明里的某种形制（含它在这个文明里的变体）；有机生长、别的文明的形制返回 undefined */
-export const planOf = (c: Culture, id: PlanId | undefined): CityPlan | undefined => (id && id !== 'organic' ? cultureOf(c).plans.find((p) => p.id === id) : undefined)
+export const planOf = (c: Culture, id: PlanId | undefined): CityPlan | undefined => (id && id !== 'organic' ? cultures.get(c).plans.find((p) => p.id === id) : undefined)
 
 /** 形制与文明是否相配 */
 export const planFits = (c: Culture, plan: PlanId | undefined) => !plan || plan === 'organic' || !!planOf(c, plan)
 
 /** 界面用：这个文明可选的形制（名称与说明按它在这个文明里的叫法） */
-export const planChoices = (c: Culture): { id: PlanId; name: string; desc: string }[] => [ORGANIC_PLAN, ...cultureOf(c).plans.map((p) => ({ id: p.id, name: p.name, desc: p.desc }))]
+export const planChoices = (c: Culture): { id: PlanId; name: string; desc: string }[] => [ORGANIC_PLAN, ...cultures.get(c).plans.map((p) => ({ id: p.id, name: p.name, desc: p.desc }))]
 
 /** 按 id 找形制，不看文明：参数里写着某种形制时，它自带的属性（如 eliteShare）照它的算 */
 export function planById(id: PlanId | undefined): CityPlan | undefined {
   if (!id || id === 'organic') return undefined
-  for (const d of defs.all()) {
+  for (const d of cultures.all()) {
     const p = d.plans.find((p) => p.id === id)
     if (p) return p
   }
@@ -152,4 +144,11 @@ export function planById(id: PlanId | undefined): CityPlan | undefined {
 }
 
 /** 全部形制的 id（含有机生长） */
-export const planIds = (): PlanId[] => [...new Set<PlanId>(['organic', ...defs.all().flatMap((d) => d.plans.map((p) => p.id))])]
+export const planIds = (): PlanId[] => [...new Set<PlanId>(['organic', ...cultures.all().flatMap((d) => d.plans.map((p) => p.id))])]
+
+/** 城市形制当作一种可引用的内容（界面核对地址、存下的参数里的形制时用）：不可用时回到有机生长 */
+export const plans = {
+  label: { zh: '城市形制', en: 'city plan', ja: '都市形制' },
+  has: (id: string) => planIds().includes(id),
+  defaultId: (): PlanId => 'organic',
+}

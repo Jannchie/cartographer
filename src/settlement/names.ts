@@ -2,7 +2,7 @@ import { Language } from '../gen/names'
 import { katakana } from '../gen/names_ja'
 import { transliterateZh, type Tri } from '../gen/naming'
 import { RNG, hashString } from '../gen/rng'
-import { cultureOf } from './culture'
+import { cultures } from './culture'
 import type { Culture, SettlementSize, WardType } from './types'
 
 /**
@@ -138,7 +138,7 @@ export class SettleNamer {
   }
   /** 本文明的起名规则 */
   private get rules() {
-    return cultureOf(this.culture).naming
+    return cultures.get(this.culture).naming
   }
   constructor(
     private seed: string,

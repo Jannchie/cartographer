@@ -1,11 +1,8 @@
 import type { Area } from '../gen/areas'
 import { bumpSketch } from '../gen/sketch'
-import type { Label, Realm, River, Road, SketchRange, World, WorldEdits, WorldParams } from '../gen/types'
-import { NamingStyles } from '../gen/naming'
-import { Polities } from '../gen/polity'
-import { DEFAULT_SETTING, Settings } from '../gen/setting'
-import { registryOf } from '../kernel'
-import { Cultures } from '../settlement/culture'
+import { settings } from '../gen/setting'
+import { worldTownCulture } from '../gen/townCulture'
+import { normalizeParams, type Label, type Realm, type River, type Road, type SketchRange, type World, type WorldEdits, type WorldParams } from '../gen/types'
 
 /**
  * 项目文档：一份可保存、可重放的世界——种子与参数 + 用户的全部编辑。
@@ -62,6 +59,8 @@ interface PackedWorld {
   /** 行政区划（区域图）：每格所属单位压缩存放，其余照原样 */
   admin?: Omit<NonNullable<World['admin']>, 'unit'> & { unit: Packed }
   peaks?: World['peaks']
+  /** 默认的城镇文明；旧文件没有，打开时补算（upgradeWorld） */
+  townCulture?: string
 }
 
 type Packed = { t: 'f32' | 'u8' | 'i16'; d: string }
@@ -127,6 +126,7 @@ async function packWorld(w: World): Promise<PackedWorld> {
     political: w.political && { ...w.political, county: await packTA(w.political.county) },
     admin: w.admin && { ...w.admin, unit: await packTA(w.admin.unit) },
     peaks: w.peaks,
+    townCulture: w.townCulture,
   }
 }
 
@@ -161,35 +161,27 @@ async function unpackWorld(p: PackedWorld, params: WorldParams): Promise<World> 
     political: p.political && { ...p.political, county: (await unpackTA(p.political.county)) as Int16Array },
     admin: p.admin && { ...p.admin, unit: (await unpackTA(p.admin.unit)) as Int16Array },
     peaks: p.peaks,
+    townCulture: p.townCulture ?? '',
   }
 }
 
 /**
- * 一个世界引用的内容来自哪些插件：存档时记下，打开时核对（缺了就提示启用，而不是换成默认内容）。
- * 按参数里的世界观算：世界观本身、它池子里的命名风格、各命名风格对应的制度、城镇文明规则会用到的文明；
- * 再加上世界里已经定下的各文化实际用的命名风格、制度与城镇形制。没有登记的 id 查不到所属，不计入
+ * 一个世界依赖的插件：它的世界观所属的那个，存档时记下，打开时核对（缺了就提示启用，而不是换成默认内容）。
+ * 世界观引用的命名风格、制度、文明若来自别的插件，由清单里的依赖带出，打开时一并启用（见 ui/plugins.ts 的 ensurePlugins）
  */
-export function requiresOf(params: WorldParams, world?: World): string[] {
-  const ids = new Set<string>()
-  const add = (owner: string | undefined) => owner && ids.add(owner)
-  const settings = registryOf(Settings)
-  const namings = registryOf(NamingStyles)
-  const polities = registryOf(Polities)
-  const cultures = registryOf(Cultures)
-  const id = params.setting || DEFAULT_SETTING
-  add(settings.owner(id))
-  const s = settings.find(id)
-  if (s) {
-    for (const n of s.naming) add(namings.owner(n))
-    for (const p of Object.values(s.polity)) add(polities.owner(p))
-    for (const c of s.cultures) add(cultures.owner(c))
-  }
-  for (const c of world?.political?.cultures ?? []) {
-    add(namings.owner(c.naming))
-    if (c.polity) add(polities.owner(c.polity))
-    add(cultures.owner(c.town))
-  }
-  return [...ids]
+export function requiresOf(params: Pick<WorldParams, 'setting'>): string[] {
+  const owner = settings.owner(params.setting)
+  return owner ? [owner] : []
+}
+
+/**
+ * 旧存档里的世界补齐后来才有的内容（打开时调用，要在核对过依赖的插件之后）：
+ * 参数里没有世界观的补上旧种子的那个；没有默认城镇文明的按世界观的规则补算
+ */
+export function upgradeWorld(w: World): World {
+  normalizeParams(w.params)
+  w.townCulture ||= worldTownCulture(w.params)
+  return w
 }
 
 /** world 给了就连同整个世界的数据一起存（第 2 版）；requires 是它引用的插件（见 requiresOf） */

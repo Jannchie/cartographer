@@ -158,9 +158,7 @@ export interface TownKit {
 }
 
 /** 扩展点：沙盘套件，按文明 id 登记（同一个 id 重复登记视为错误） */
-export const TownKits = defineSlot<TownKit>('townKit')
+export const TownKits = defineSlot<TownKit>('townKit', { zh: '沙盘套件', en: 'diorama kit', ja: 'ジオラマキット' })
 
-const kits = registryOf(TownKits)
-
-/** 某种文明的沙盘套件；没有登记时抛 MissingContent */
-export const townKit = (culture: string): TownKit => kits.get(culture)
+/** 沙盘套件的注册表：get 按文明 id 取套件 */
+export const townKits = registryOf(TownKits)

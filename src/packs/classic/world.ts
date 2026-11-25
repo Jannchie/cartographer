@@ -15,6 +15,7 @@ import { classic } from './world/setting'
 const setup: LayerSetup = (host) => {
   for (const s of [fantasy, epic, eastern, wa]) host.add(NamingStyles, s.id, s)
   for (const p of [feudal, commandery, ritsuryo]) host.add(Polities, p.id, p)
-  host.add(Settings, classic.id, classic)
+  // 默认的世界观：新建世界用它，链接里的世界观不可用时也换成它
+  host.add(Settings, classic.id, classic, { default: true })
 }
 export default setup

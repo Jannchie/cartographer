@@ -5,7 +5,7 @@
  */
 import { centroid, clipConvex, type P } from '../../settlement/geom'
 import type { Life } from '../../settlement/history'
-import { DIORAMA_STYLE, settleTheme } from '../../settlement/themes'
+import { buildingPalette, dioramaOf, type SettleStyleId } from '../../settlement/themes'
 import type { Settlement, Wall } from '../../settlement/types'
 import { NEVER, Writer, type TownChunk } from './mesh'
 import { facades } from './facade'
@@ -17,7 +17,7 @@ import { fieldProps, landmarkProp, propBuilding, propIndex, rock, wonder } from 
 import { heightSampler, hex, waterSampler } from './shared'
 import { treeInstances, type TreeBuild } from './vegetation'
 import { terrainMesh, type TerrainMesh } from './relief'
-import { townKit } from './kits'
+import { townKits } from './kits'
 
 /** Worker 回传的沙盘数据（数组均可转移） */
 export interface TownBuild {
@@ -36,17 +36,19 @@ export interface TownBuild {
  * 生成器会在画幅以外留下东西（画幅外的农家、院墙、野地）：沙盘只到画幅为止，越界的体块整个不建，
  * 城墙在画幅边上断开，码头按画幅裁切——底座之外不悬着任何几何
  */
-export function buildTown(st: Settlement, life: Map<object, Life>): TownBuild {
+export function buildTown(st: Settlement, life: Map<object, Life>, ground?: SettleStyleId): TownBuild {
+  // 体块的配色：地面主题的沙盘配色，它没有就用默认主题的
+  const look = dioramaOf(ground)
   const t0 = performance.now()
   const culture = st.params.culture
   const nx = Math.max(1, Math.min(10, Math.round(st.width / 400)))
   const nz = Math.max(1, Math.min(10, Math.round(st.height / 400)))
   const w = new Writer(st.width, st.height, nx, nz)
-  const kit = townKit(culture)
+  const kit = townKits.get(culture)
   const c: WCtx = {
     w,
     kit,
-    pal: settleTheme(DIORAMA_STYLE).buildings(culture),
+    pal: buildingPalette(look, culture),
     H: heightSampler(st.terrain),
     capital: !!st.params.capital,
     st,
@@ -115,7 +117,7 @@ export function buildTown(st: Settlement, life: Map<object, Life>): TownBuild {
     setLife(q)
     rock(c, q)
   }
-  const magic = hex(settleTheme(DIORAMA_STYLE).magic)
+  const magic = hex(look.magic)
   for (const x of st.wonders) {
     if (x.kind !== 'leyline' && !inside(x.p, x.r * 1.3 + 3)) continue
     setLife(x)

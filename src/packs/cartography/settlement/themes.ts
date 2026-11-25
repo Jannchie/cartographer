@@ -1,9 +1,9 @@
-import { cultureBuildings as palette, type SettleTheme } from '../../../settlement/themes'
+import type { SettleTheme } from '../../../settlement/themes'
 
 /**
  * 八种内置的聚落图主题（由 ../settlement.ts 按这里的顺序登记，界面上的色块也按这个顺序）：
  * 羊皮纸、彩绘、版画、蓝图、切绘图、图底铜版、方志舆图、测绘图。
- * 第一种（parchment）是默认主题，彩绘（color）兼作沙盘的地面与建筑配色（见 settlement/themes.ts）。
+ * 第一种（parchment）是默认主题；沙盘的建筑配色用彩绘（color）的，以彩绘作沙盘地面时按写实地景画（见 SettleTheme.diorama）。
  */
 
 const shades = (...c: string[]) => c
@@ -26,7 +26,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f8f1de',
     yard: '#e2d4b2',
     plaza: '#ede1c4',
-    buildings: palette('parchment', {
+    buildingBase: {
       house: shades('#c7b18c', '#c2aa83', '#cbb693'),
       large: shades('#bba47d'),
       temple: shades('#b09a74'),
@@ -37,7 +37,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('#b09a74'),
       magic: shades('#a996b6'),
       civic: shades('#b58a55'),
-    }),
+    },
     buildingStroke: { color: '#3f3122', width: 0.9 },
     roofLines: null,
     shadow: null,
@@ -76,7 +76,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f4ecd5',
     yard: '#cfd6ac',
     plaza: '#e8dcc0',
-    buildings: palette('color', {
+    buildingBase: {
       house: shades('#c0674a', '#b65c42', '#c9764f', '#a9543d', '#c26e56'),
       large: shades('#8a7f76'),
       temple: shades('#9aa0a6'),
@@ -87,7 +87,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('#9aa0a6'),
       magic: shades('#7b64a8'),
       civic: shades('#4a6f86'),
-    }),
+    },
     buildingStroke: { color: '#3b3833', width: 0.5 },
     roofLines: 'rgba(40,30,25,0.35)',
     shadow: 'rgba(40,40,30,0.28)',
@@ -126,7 +126,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f7f4ec',
     yard: '#ece8dc',
     plaza: '#f7f4ec',
-    buildings: palette('ink', {
+    buildingBase: {
       house: shades('url(#hatch)'),
       large: shades('url(#hatch)'),
       temple: shades('url(#hatch2)'),
@@ -137,7 +137,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('url(#hatch2)'),
       magic: shades('url(#hatch2)'),
       civic: shades('url(#hatch2)'),
-    }),
+    },
     buildingStroke: { color: '#1e1c1a', width: 0.8 },
     roofLines: null,
     shadow: null,
@@ -178,7 +178,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#2e5a88',
     yard: '#234a72',
     plaza: '#2b5682',
-    buildings: palette('blueprint', {
+    buildingBase: {
       house: shades('#3d6c98'),
       large: shades('#4574a0'),
       temple: shades('#5a86b0'),
@@ -189,7 +189,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('#5a86b0'),
       magic: shades('#6f6fb8'),
       civic: shades('#7fa6cc'),
-    }),
+    },
     buildingStroke: { color: '#e3eef8', width: 0.6 },
     roofLines: null,
     shadow: null,
@@ -230,7 +230,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#e6c25a',
     yard: '#b4ada0',
     plaza: '#e9ca6c',
-    buildings: palette('kiriezu', {
+    buildingBase: {
       // 切绘图的图例：町屋鼠灰、武家屋敷白地、寺社朱；个别文明改其中一两项（伊斯兰的土坯城换成浅一些的灰褐，东亚的厅堂用朱）
       house: shades('#8e8a82', '#86827a', '#96928a'),
       large: shades('#f3eee0'),
@@ -242,7 +242,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('#c8452d'),
       magic: shades('#3f8a80'),
       civic: shades('#c8452d'),
-    }),
+    },
     buildingStroke: { color: '#1e1b16', width: 0.8 },
     roofLines: null,
     shadow: null,
@@ -284,7 +284,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f1ece0',
     yard: 'url(#poche)',
     plaza: '#f1ece0',
-    buildings: palette('nolli', {
+    buildingBase: {
       // 私宅并进街区的涂实里，只剩一圈轮廓；寺院、官署、城堡这些公共空间留白
       house: shades('url(#poche)'),
       large: shades('url(#poche)'),
@@ -296,7 +296,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('#f1ece0'),
       magic: shades('#f1ece0'),
       civic: shades('#f1ece0'),
-    }),
+    },
     buildingStroke: { color: '#1f1c19', width: 0.7 },
     roofLines: null,
     shadow: null,
@@ -339,7 +339,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f3ead4',
     yard: '#e2d4b3',
     plaza: '#f3ead4',
-    buildings: palette('fangzhi', {
+    buildingBase: {
       house: shades('#efe5cc'),
       large: shades('#efe5cc'),
       temple: shades('#dcc39c'),
@@ -350,7 +350,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('#dcc39c'),
       magic: shades('#d7c4a6'),
       civic: shades('#dcc39c'),
-    }),
+    },
     buildingStroke: { color: '#2b2520', width: 0.75 },
     roofLines: 'rgba(43,37,32,0.55)',
     shadow: null,
@@ -392,7 +392,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#ffffff',
     yard: '#efe9e1',
     plaza: '#ffffff',
-    buildings: palette('survey', {
+    buildingBase: {
       house: shades('#d9b8a4', '#d4b19c', '#ddbfac'),
       large: shades('#cba590'),
       temple: shades('#8f7064'),
@@ -403,7 +403,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
       pagoda: shades('#8f7064'),
       magic: shades('#8c79a8'),
       civic: shades('#8f7064'),
-    }),
+    },
     buildingStroke: { color: '#6b5347', width: 0.45 },
     roofLines: null,
     shadow: null,
@@ -429,3 +429,9 @@ export const SETTLE_THEMES: SettleTheme[] = [
     brushTitle: false,
   },
 ]
+
+// 沙盘的配色取自彩绘：彩绘自己作地面时另按写实地景画；默认主题（羊皮纸）带同一份，别的主题作地面时由它兜底
+const color = SETTLE_THEMES.find((t) => t.id === 'color')!
+const look = { buildingBase: color.buildingBase, paletteOf: color.id, magic: color.magic }
+color.diorama = { ...look, ground: true }
+SETTLE_THEMES[0].diorama = look

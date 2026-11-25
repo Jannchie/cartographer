@@ -51,15 +51,10 @@ export interface PolityDef {
 }
 
 /** 扩展点：制度，按 id 登记 */
-export const Polities = defineSlot<PolityDef>('polity')
+export const Polities = defineSlot<PolityDef>('polity', { zh: '制度', en: 'polity', ja: '制度' })
 
-const polities = registryOf(Polities)
-
-/** 已登记的制度 id（按登记顺序） */
-export const polityIds = (): Polity[] => polities.ids()
-
-/** 制度的定义；没有登记时抛 MissingContent */
-export const polityDef = (id: Polity): PolityDef => polities.get(id)
+/** 制度的注册表 */
+export const polities = registryOf(Polities)
 
 /** 文化的制度（旧存档没记，按所在世界观里它的命名风格对应的制度推出） */
 export const polityOf = (s: SettingDef, c: { naming: string; polity?: Polity }): Polity => c.polity ?? s.polity[c.naming] ?? defaultPolity(s)

@@ -11,10 +11,10 @@ import { western } from './western'
  * town3d/ 是沙盘的建筑套件（由 ./town3d.ts 登记，聚落生成不引入）。
  * 文明之间可以借用：和风的条坊制是东方里坊的变体，山寺、山塔与东方共用。
  *
- * 登记顺序（西式、东方、和风、伊斯兰）决定界面选项的顺序与 planById 的先后，不能改动。
+ * 登记顺序（西式、东方、和风、伊斯兰）决定界面选项的顺序与 planById 的先后，不能改动；西式是默认文明。
  */
 const setup: LayerSetup = (host) => {
   // "铁匠"在东方与西式的职业表里日文写法不同（鍛冶、鍛冶屋）：界面一律用前者
-  registerCultures(host, [western, eastern, wa, islamic], [['铁匠', 'Smith', '鍛冶']])
+  registerCultures(host, [western, eastern, wa, islamic], { strings: [['铁匠', 'Smith', '鍛冶']], default: western.id })
 }
 export default setup

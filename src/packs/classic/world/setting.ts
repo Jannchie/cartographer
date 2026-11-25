@@ -2,7 +2,7 @@ import type { SettingDef } from '../../../gen/setting'
 
 /**
  * 内置的世界观 classic（由 ../world.ts 登记）：前工业时代的世界，四种命名风格、三种制度、四种城市文明。
- * 参数里没有写世界观的世界都按它生成（gen/setting.ts 的 DEFAULT_SETTING），所以这里的每一项都是旧种子结果的一部分：
+ * 参数里没有写世界观的世界都按它生成（gen/types.ts 的 normalizeParams），所以这里的每一项都是旧种子结果的一部分：
  * 命名风格的池子不能增删、不能调换顺序，制度的对应与城镇文明规则不能改。
  */
 export const classic: SettingDef = {
@@ -14,5 +14,4 @@ export const classic: SettingDef = {
   // 汉字地名的文化建东方的城，日本地名的建和风的城；其余的看地理——炎热干旱的地方占到四成五以上建伊斯兰式的城
   //（只换形制，名字仍按自己的命名风格），否则是西式
   townCulture: ({ naming, aridCells, cells }) => (naming === 'eastern' || naming === 'wa' ? naming : aridCells > cells * 0.45 ? 'islamic' : 'western'),
-  cultures: ['western', 'eastern', 'wa', 'islamic'],
 }

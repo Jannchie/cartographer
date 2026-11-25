@@ -1,4 +1,5 @@
 import { reactive, watch } from 'vue'
+import type { Label, Registry } from '../kernel'
 // 先定下界面语言：它要读地址里的 lang= 参数，而下面启动时会把地址规整掉
 import '../i18n'
 
@@ -19,33 +20,67 @@ export function storeSet(k: string, v: string) {
   }
 }
 
-/** 舞台上的提示（地址、存下的选择引用了没有启用的内容）：text 是词条的中文键，id 填进其中的 {id}；点一下收起 */
+/**
+ * 可以被参数引用的一类内容：注册表（扩展点），或同样有名称、能核对 id、给得出默认条目的对象（城市形制、沙盘地面风格）
+ */
+export type RefTarget = Pick<Registry<unknown>, 'label' | 'has' | 'defaultId'>
+
+/** 舞台上的提示：来自链接或本机存储的 what「id」不可用，已换成默认的。点一下收起（见 kit/Notices.vue） */
 export interface Notice {
-  text: string
+  source: 'link' | 'stored'
+  what: Label
   id: string
-  /**
-   * 存下的选择不可用时：收起提示时把 value 写回存储的 key（换成默认的选择，之后不再提示）。没收起就一直留着——重新启用插件后原来的选择还在。
-   * stale 是提示产生时存储里的原值：收起时存储已经不是它（期间用户另选了别的）就不写
-   */
-  store?: { key: string; value: string; stale: string }
 }
 
 /**
- * 读存下的内容 id（纸图风格、聚落图主题这类由插件登记的内容）：还可用就用它，没存过用 fallback。
- * 存下的 id 不可用（所属的插件停用了，或已经不在这个版本里）时回到 fallback，往 notices 里记一条提示（text 为词条）；
- * 存储里的值等提示被收起时才改（见 dismissNotices）
+ * 核对一组参数里对插件内容的引用：refs 说明哪个键引用哪一类内容。
+ * 引用的内容不可用（所属的插件停用了，或已经不在这个版本里）时就地换成那一类的默认条目，返回要显示的提示。
+ * source 是这组参数的来源（链接，或本机存下的选择）。存档不走这里：存档缺了内容是提示启用插件，不换成默认的
  */
-export function storedContent(key: string, has: (id: string) => boolean, fallback: string, notices: Notice[], text: string): string {
-  const v = storeGet(key)
-  if (!v) return fallback
-  if (has(v)) return v
-  notices.push({ text, id: v, store: { key, value: fallback, stale: v } })
-  return fallback
+export function resolveRefs<T extends object>(obj: T, refs: { [K in keyof T]?: RefTarget }, source: Notice['source']): Notice[] {
+  const out: Notice[] = []
+  for (const k of Object.keys(refs) as (keyof T & string)[]) {
+    const target = refs[k]!
+    const v = obj[k]
+    if (typeof v !== 'string' || v === '' || target.has(v)) continue
+    ;(obj as Record<string, unknown>)[k] = target.defaultId()
+    out.push({ source, what: target.label, id: v })
+  }
+  return out
 }
 
-/** 收起提示：其中"存下的选择不可用"的那几条，把默认的选择写回存储 */
-export function dismissNotices(notices: readonly Notice[]) {
-  for (const n of notices) if (n.store && storeGet(n.store.key) === n.store.stale) storeSet(n.store.key, n.store.value)
+/**
+ * 读本机存下的一个选项。
+ * - allowed 是取值的列表：不在其中的回到 fallback（旧版的值先按 renamed 换成新值），不提示；
+ * - allowed 是一类可引用的内容：没存过用它的默认条目；存下的不可用时也换成默认条目、立即写回存储，并往 notices 里记一条提示
+ */
+export function stored<T extends string>(key: string, allowed: readonly string[], fallback: T, renamed?: Record<string, T>): T
+export function stored(key: string, allowed: RefTarget, notices: Notice[]): string
+export function stored(key: string, allowed: readonly string[] | RefTarget, a: unknown, renamed: Record<string, string> = {}): string {
+  const v = storeGet(key) ?? ''
+  if ('has' in allowed) {
+    const box = { value: v || allowed.defaultId() }
+    const n = resolveRefs(box, { value: allowed }, 'stored')
+    if (n.length) storeSet(key, box.value)
+    ;(a as Notice[]).push(...n)
+    return box.value
+  }
+  return renamed[v] ?? (allowed.includes(v) ? v : (a as string))
+}
+
+/** 读本机存下的一组选项（JSON 对象），核对其中对插件内容的引用（见 resolveRefs）：有不可用的就换成默认条目、立即写回，提示记进 notices */
+export function storedJson<T extends object>(key: string, refs: { [K in keyof T]?: RefTarget }, notices: Notice[]): Partial<T> {
+  let obj: Partial<T> = {}
+  try {
+    const v: unknown = JSON.parse(storeGet(key) ?? '{}')
+    if (v && typeof v === 'object') obj = v as Partial<T>
+  } catch {
+    // 存坏了：当作没存过
+  }
+  const n = resolveRefs(obj as T, refs, 'stored')
+  if (n.length) storeSet(key, JSON.stringify(obj))
+  notices.push(...n)
+  return obj
 }
 
 // —— 路由：hash 里写明模块与参数 ——

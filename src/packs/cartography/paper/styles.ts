@@ -2,12 +2,14 @@ import { hex } from '../../../render/palette'
 import { BRUSH, CORMORANT, FELL, FELL_SC, SANS, SONG, type Theme } from '../../../render/atlas/styles'
 import { POL_ATLAS, POL_FANTASY, POL_INK, POL_NAUTICAL, POL_PHYSICAL, POL_STRATEGY, POL_TEYVAT, POL_TOPO } from './looks'
 import { FANTASY_GLYPHS, HYPSO, TEYVAT, fantasyPixel, inkPixel, nauticalPixel, physicalPixel, politicalPixel, strategyPixel, teyvatPixel, topoPixel } from './pixel'
-import { fantasy, ink, nautical, physical, politicalAtlas, strategy, teyvat, topo } from './vector'
+
+/** 矢量底图的画法在 ./vector.ts，用到时才载入 */
+const vector = () => import('./vector')
 
 /**
  * 八种内置的纸图风格（由 ../paper.ts 按这里的顺序登记，界面上的色块也按这个顺序）：
  * 自然地理、奇幻羊皮、航海图、提瓦特、水墨、等高线、政区地图集、战略图。
- * 第一种（physical）是默认风格（render/atlas/styles.ts 的 DEFAULT_ATLAS_STYLE）。
+ * 第一种（physical）登记为默认风格。
  */
 export const ATLAS_STYLES: Theme[] = [
   {
@@ -18,7 +20,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: hex('#f1ead8'),
     ink: '#3a4246',
     pixel: physicalPixel,
-    vector: (L, world, F, { opts }) => physical(L, world, F, opts),
+    vector: () => vector().then((m) => (L, world, F, { opts }) => m.physical(L, world, F, opts)),
     river: { color: 'rgba(78, 122, 146, 0.92)', width: 1, minFlow: 1.8 },
     roads: { color: 'rgba(158, 60, 42, 0.88)', width: 1.4, casing: 'rgba(241, 234, 216, 0.65)', sea: 'rgba(60, 96, 120, 0.55)', seaDash: [5, 4] },
     frame: 'atlas',
@@ -47,7 +49,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: hex('#dcc596'),
     ink: '#4a3624',
     pixel: fantasyPixel,
-    vector: (L, world, F) => fantasy(L, world, F),
+    vector: () => vector().then((m) => m.fantasy),
     river: { color: 'rgba(48, 70, 88, 0.95)', width: 1.15, minFlow: 2, fitCoast: true },
     roads: { color: 'rgba(74, 54, 36, 0.92)', width: 1.7, dash: [2, 3.2], sea: 'rgba(74, 54, 36, 0.5)', seaDash: [6, 5] },
     frame: 'ornate',
@@ -78,7 +80,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: hex('#efe9da'),
     ink: '#1f2a33',
     pixel: nauticalPixel,
-    vector: (L, world, F) => nautical(L, world, F),
+    vector: () => vector().then((m) => m.nautical),
     river: { color: 'rgba(60, 110, 150, 0.85)', width: 0.8, minFlow: 3 },
     roads: { color: 'rgba(60, 60, 60, 0.6)', width: 0.9, sea: 'rgba(30, 70, 110, 0.7)', seaDash: [7, 4] },
     frame: 'atlas',
@@ -109,7 +111,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: TEYVAT.void,
     ink: '#f2f0e6',
     pixel: teyvatPixel,
-    vector: (L, world, F, { S }) => teyvat(L, world, F, S),
+    vector: () => vector().then((m) => (L, world, F, { S }) => m.teyvat(L, world, F, S)),
     river: { color: 'rgba(88, 150, 152, 0.95)', width: 1.1, minFlow: 2, fitCoast: true },
     roads: { color: 'rgba(236, 222, 164, 0.95)', width: 1.9, casing: 'rgba(50, 56, 24, 0.55)', sea: 'rgba(190, 230, 222, 0.55)', seaDash: [4, 5] },
     frame: 'none',
@@ -142,7 +144,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: hex('#e6ddc6'),
     ink: '#2b2a27',
     pixel: inkPixel,
-    vector: (L, world, F, { S }) => ink(L, world, F, S),
+    vector: () => vector().then((m) => (L, world, F, { S }) => m.ink(L, world, F, S)),
     river: { color: 'rgba(60, 62, 60, 0.75)', width: 0.8, minFlow: 2.2 },
     roads: { color: 'rgba(43, 42, 39, 0.75)', width: 1, dash: [3, 2.5], sea: 'rgba(43, 42, 39, 0.45)', seaDash: [2, 4] },
     frame: 'ink',
@@ -171,7 +173,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: hex('#fbfaf6'),
     ink: '#2d3a44',
     pixel: topoPixel,
-    vector: (L, world, F) => topo(L, world, F),
+    vector: () => vector().then((m) => m.topo),
     river: { color: 'rgba(50, 110, 160, 0.95)', width: 0.8, minFlow: 1.8 },
     roads: { color: 'rgba(170, 40, 30, 0.88)', width: 1.3, casing: 'rgba(255, 255, 255, 0.8)', sea: 'rgba(50, 110, 160, 0.6)', seaDash: [6, 4] },
     frame: 'atlas',
@@ -204,7 +206,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: hex('#f4efe2'),
     ink: '#3d3640',
     pixel: politicalPixel,
-    vector: (L, world, F) => politicalAtlas(L, world, F),
+    vector: () => vector().then((m) => m.politicalAtlas),
     river: { color: 'rgba(70, 120, 150, 0.85)', width: 0.8, minFlow: 3 },
     roads: { color: 'rgba(120, 60, 50, 0.55)', width: 0.9, sea: 'rgba(70, 110, 135, 0.45)', seaDash: [4, 4] },
     frame: 'atlas',
@@ -236,7 +238,7 @@ export const ATLAS_STYLES: Theme[] = [
     paper: hex('#13222c'),
     ink: '#e9e1cc',
     pixel: strategyPixel,
-    vector: (L, world, F) => strategy(L, world, F),
+    vector: () => vector().then((m) => m.strategy),
     river: { color: 'rgba(70, 130, 160, 0.95)', width: 1, minFlow: 2.2 },
     roads: { color: 'rgba(60, 40, 25, 0.6)', width: 1, dash: [3, 2.5], sea: 'rgba(200, 220, 230, 0.35)', seaDash: [4, 5] },
     frame: 'none',

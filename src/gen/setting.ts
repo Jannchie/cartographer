@@ -3,7 +3,7 @@ import type { TownCultureRule } from './townCulture'
 
 /**
  * 世界观（setting）：一套相互配套的人文内容——世界上的文化可以用哪些命名风格、各自实行什么制度、建哪种文明的城。
- * 一个世界用哪个世界观写在它的参数里（WorldParams.setting，缺省为 DEFAULT_SETTING），是生成结果的一部分：
+ * 一个世界用哪个世界观写在它的参数里（WorldParams.setting），是生成结果的一部分：
  * 命名风格选"随机"时、给其余文化抽命名风格时，都只从这个世界观的池子里取，与启用了哪些插件无关——
  * 多启用一个插件，已有的世界不会变。
  *
@@ -23,25 +23,18 @@ export interface SettingDef {
   naming: readonly string[]
   /** 各命名风格的文化实行的制度（制度的 id，见 gen/polity.ts）：池子里的每一种都要有；第一种命名风格的制度也是没有文化时的默认制度 */
   polity: Readonly<Record<string, string>>
-  /** 城镇文明规则：一种文化建哪种文明的城（返回聚落层的文明 id） */
+  /** 城镇文明规则：一种文化建哪种文明的城（返回聚落层的文明 id）。它用到的文明、制度、命名风格若来自别的插件，登记世界观的插件要在清单里声明依赖 */
   townCulture: TownCultureRule
-  /** 城镇文明规则可能返回的文明 id：存档据此记下依赖的插件，世界层不引用聚落层的代码 */
-  cultures: readonly string[]
 }
 
-/** 扩展点：世界观，按 id 登记（界面上的选项按登记顺序） */
-export const Settings = defineSlot<SettingDef>('setting')
+/** 扩展点：世界观，按 id 登记（界面上的选项按登记顺序）。默认条目是新建世界时用的那个，也是链接里的世界观不可用时换上的那个 */
+export const Settings = defineSlot<SettingDef>('setting', { zh: '世界观', en: 'setting', ja: '世界観' })
 
-/** 参数里没有写世界观时用的那个：内置插件 classic 登记，旧的链接与存档都按它 */
-export const DEFAULT_SETTING = 'classic'
+/** 世界观的注册表 */
+export const settings = registryOf(Settings)
 
-const settings = registryOf(Settings)
-
-/** 已登记的世界观 id（按登记顺序） */
-export const settingIds = (): string[] => settings.ids()
-
-/** 一组世界参数用的世界观；没有登记时抛 MissingContent（所属的插件没有启用） */
-export const settingOf = (p: { setting?: string }): SettingDef => settings.get(p.setting || DEFAULT_SETTING)
+/** 一组世界参数用的世界观（参数先经过 normalizeParams：没有写世界观的旧参数已经补上）；没有登记时抛错（所属的插件没有启用） */
+export const settingOf = (p: { setting: string }): SettingDef => settings.get(p.setting)
 
 /** 没有文化可依时的制度（区域图、还没有政区的世界）：世界观里第一种命名风格的制度 */
 export const defaultPolity = (s: SettingDef): string => s.polity[s.naming[0]]

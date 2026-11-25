@@ -1,7 +1,7 @@
 import { defineStrings } from '../../i18n'
 import type { LayerSetup } from '../../kernel'
 import { registerCultures } from '../../settlement/register'
-import { cultureBuildings, SettleThemes, type SettleTheme } from '../../settlement/themes'
+import { SettleThemes, type SettleTheme } from '../../settlement/themes'
 import { SETTLE_THEMES } from '../cartography/settlement/themes'
 import { western } from '../classic/western'
 
@@ -20,7 +20,8 @@ const theme: SettleTheme = {
   ground: '#173d34',
   water: '#0f2a25',
   waterDeep: '#0c231f',
-  buildings: cultureBuildings('sample-green', blueprint.buildings()),
+  // 文明对建筑配色的改动沿用蓝图的
+  paletteOf: blueprint.id,
 }
 
 const setup: LayerSetup = (host) => {

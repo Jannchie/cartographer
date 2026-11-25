@@ -7,22 +7,22 @@ import { computeHistory, computeTown, Superseded } from './historyWorker'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import { pointInPoly, type P } from '../../settlement/geom'
 import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, clearVectorChunks, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
-import { DEFAULT_SETTLE_STYLE, DIORAMA_STYLE, hasSettleTheme, settleTheme, type SettleStyleId } from '../../settlement/themes'
+import { dioramaOf, groundStyles, sameDiorama, settleThemes, type SettleStyleId } from '../../settlement/themes'
 import type { CityFunction, FeatureId } from '../../settlement/features'
 import { POP_OF_SIZE } from '../../settlement/scale'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, WARD_NAMES, type Culture, type Settlement, type SettlementParams, type Ward } from '../../settlement/types'
-import { app, dismissNotices, download, initialQuery, paramSig, registerRoute, storedContent, storeGet, storeSet, syncRoute, type Notice } from '../app'
+import { app, download, initialQuery, paramSig, registerRoute, resolveRefs, stored, storedJson, storeGet, storeSet, syncRoute, type Notice } from '../app'
 import { ensureWorld, getWorld, sameProbe } from '../world/world'
 import { mapFontsReady } from '../fonts'
 import { bindPanZoom, fitInto } from '../panZoom'
 import { syllableSeed } from '../seed'
 import { t } from '../i18n'
-import { defineStrings, lang, onLang, settlementTitle } from '../../i18n'
+import { lang, onLang, settlementTitle } from '../../i18n'
 import { isTypingTarget } from '../keys'
 import { decodeSettlement, encodeSettlement, roundParams } from './route'
 import { describeAt } from '../../settlement/describe'
 import { terrainKey } from '../../settlement/terrain'
-import { cultureIds, planFits, planIds } from '../../settlement/culture'
+import { cultures, planFits, plans } from '../../settlement/culture'
 import { LAND_USES, landUseOf, landUseStats, type LandUse, type LandUseStat } from '../../settlement/landuse'
 import { peopleStats, type PeopleStat } from '../../settlement/people'
 import { defaultRegions, type SettleRegion } from '../../settlement/regions'
@@ -36,18 +36,25 @@ import { DEFAULT_TIME } from '../../render/aerial/daylight'
  * 世界已生成时可以选一个城镇，继承那里的环境。
  * 改参数只记下改动，点「生成」（或随机、回车）才重新生成；时间轴在当前这座城的成长史里穿梭。
  */
+/** 聚落参数、显示选项里对插件内容的引用（见 app.ts 的 resolveRefs） */
+const PARAM_REFS = { culture: cultures, plan: plans }
+const STYLE_REFS = { style: settleThemes }
+/** 读地址里的参数与绘图风格：其中引用的文明、形制、绘图风格不可用时换成默认的，并给出提示 */
+function fromQuery(q: URLSearchParams) {
+  const d = decodeSettlement(q)
+  const view = { style: d.style ?? settleThemes.defaultId() }
+  const notices = [...resolveRefs(d.params, PARAM_REFS, 'link'), ...resolveRefs(view, STYLE_REFS, 'link')]
+  return { params: d.params, style: view.style, notices }
+}
 // 地址里带了参数（刷新、分享链接）就以地址为准，否则沿用上次存下的参数
 const fromUrl = (() => {
   const q = initialQuery('settlement')
-  return q && [...q.keys()].length ? decodeSettlement(q) : null
+  return q && [...q.keys()].length ? fromQuery(q) : null
 })()
-const saved = (() => {
-  try {
-    return JSON.parse(storeGet('settleParams') ?? '{}') as Partial<SettlementParams> & { features?: Record<string, boolean> }
-  } catch {
-    return {}
-  }
-})()
+/** 打开页面时要显示的提示：地址里的，或上次存下的文明、形制、绘图风格、沙盘地面风格不可用 */
+const startNotices: Notice[] = fromUrl?.notices ?? []
+// 上次存下的参数（地址里带了参数时用不到，也就不读、不核对）
+const saved: Partial<SettlementParams> & { features?: Record<string, boolean> } = fromUrl ? {} : storedJson<SettlementParams>('settleParams', PARAM_REFS, startNotices)
 /** 旧版本的要素开关：关掉的换成数量 0 */
 const legacyCounts = Object.fromEntries(
   Object.entries(saved.features ?? {})
@@ -55,28 +62,6 @@ const legacyCounts = Object.fromEntries(
     .map(([k]) => [k === 'tower' ? 'magic' : k, 0]),
 ) as Partial<Record<FeatureId, number>>
 delete saved.features
-// 上次存下的文明、形制来自现在没有启用的插件：回到默认（存下的是本机的工作状态，不是分享出去的链接，不必提示）
-if (saved.culture !== undefined && !cultureIds().includes(saved.culture)) delete saved.culture
-if (saved.plan !== undefined && !planIds().includes(saved.plan)) delete saved.plan
-
-/**
- * 地址里的文明、形制、绘图风格没有登记（所属的插件没有启用）：解析时已经丢掉、换成默认值，这里给出要显示的提示。
- * 文明与形制只提示一条（文明不可用时形制多半跟着不可用）；别的参数取值不合法时照旧不提示
- */
-function rejectedNotices(rejected: { key: string; value: string }[]): Notice[] {
-  const out: Notice[] = []
-  const r = rejected.find((x) => x.key === 'culture') ?? rejected.find((x) => x.key === 'plan')
-  if (r)
-    out.push({
-      text: r.key === 'culture' ? '链接里的文明「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的文明。' : '链接里的城市形制「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的形制。',
-      id: r.value,
-    })
-  const s = rejected.find((x) => x.key === 'style')
-  if (s) out.push({ text: '链接里的绘图风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。', id: s.value })
-  return out
-}
-/** 打开页面时要显示的提示：地址里的文明、形制、绘图风格，以及上次选用的绘图风格、沙盘地面风格不可用 */
-const startNotices: Notice[] = fromUrl ? rejectedNotices(fromUrl.rejected) : []
 
 /** 从世界地点继承来的字段：名字与气候（不存档、换地址时清掉） */
 const INHERITED = { name: undefined, nameZh: undefined, nameJa: undefined, climate: undefined }
@@ -101,37 +86,13 @@ const initialParams: SettlementParams = fromUrl
 export type SettleTab = 'gen' | 'features' | 'style' | 'stats' | 'areas'
 export type SettleMode = 'map' | 'areas' | 'sandbox'
 
-/** 沙盘选项：存在本机（与世界沙盘的选项分开） */
-const town3dSaved = (() => {
-  try {
-    return JSON.parse(storeGet('town3d') ?? '{}') as Partial<Town3DOptions & { ground: SettleStyleId; lookId: string }>
-  } catch {
-    return {}
-  }
-})()
+/** 沙盘选项：存在本机（与世界沙盘的选项分开）；其中的地面风格是对聚落图主题的引用 */
+const town3dSaved = storedJson<Town3DOptions & { ground: SettleStyleId; lookId: string }>('town3d', { ground: groundStyles }, startNotices)
 const lookOf = (id: string): Look => structuredClone((LOOKS.find((l) => l.id === id) ?? LOOKS[0]).look)
-// 上次选用的绘图风格来自现在没有启用的插件：回到默认风格并提示。地址里带了参数时以地址为准，用不到存下的那个，也就不核对
-const storedStyle: SettleStyleId = fromUrl
-  ? DEFAULT_SETTLE_STYLE
-  : storedContent('settleStyle', hasSettleTheme, DEFAULT_SETTLE_STYLE, startNotices, '上次选用的绘图风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。')
-// 沙盘的地面风格同理（它存在沙盘选项里）
-const savedGround = town3dSaved.ground
-if (savedGround !== undefined && !hasSettleTheme(savedGround)) {
-  town3dSaved.ground = DIORAMA_STYLE
-  startNotices.push({
-    text: '上次选用的沙盘地面风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。',
-    id: String(savedGround),
-    store: { key: 'town3d', value: JSON.stringify(town3dSaved), stale: storeGet('town3d') ?? '' },
-  })
-}
-/** 收起舞台上的提示 */
-export function closeNotices() {
-  dismissNotices(ss.notices)
-  ss.notices = []
-}
 export const ss = reactive({
   params: initialParams,
-  style: fromUrl ? (fromUrl.style ?? DEFAULT_SETTLE_STYLE) : storedStyle,
+  // 绘图风格：地址里的，否则上次选用的（不可用时换成默认的并提示）
+  style: fromUrl ? fromUrl.style : stored('settleStyle', settleThemes, startNotices),
   opts: {
     labels: true,
     contours: true,
@@ -178,7 +139,7 @@ export const ss = reactive({
     shadowSoftness: town3dSaved.shadowSoftness ?? 2,
     look: lookOf(town3dSaved.lookId ?? LOOKS[0].id),
     lookId: town3dSaved.lookId ?? LOOKS[0].id,
-    ground: town3dSaved.ground ?? DIORAMA_STYLE,
+    ground: town3dSaved.ground ?? groundStyles.defaultId(),
   },
   /** 区域视图：编辑中的命名区域、选中的那个、是否改过（改过就不再用默认的片区） */
   regions: [] as SettleRegion[],
@@ -301,7 +262,7 @@ export function randomSeed() {
   if (ss.random.mode === 'keep') return run()
   // 人口按对数均匀，小村到大都会都有机会
   p.population = Math.round(Math.exp(Math.log(60) + Math.random() * (Math.log(40000) - Math.log(60))))
-  p.culture = pick<Culture>(cultureIds().map((c) => [c, 1]))
+  p.culture = pick<Culture>(cultures.ids().map((c) => [c, 1]))
   if (!planFits(p.culture, p.plan)) p.plan = 'organic'
   p.magic = pick<SettlementParams['magic']>([
     [0, 5],
@@ -429,7 +390,7 @@ async function refresh(fit = false, quiet = false) {
   const id = ++job
   if (!cache.has(ss.style) && !quiet) {
     ss.loading.show = true
-    ss.loading.stage = t('绘制{style}', { style: t(settleTheme(ss.style).name) })
+    ss.loading.stage = t('绘制{style}', { style: t(settleThemes.get(ss.style).name) })
     await new Promise((r) => setTimeout(r, 20))
   }
   const list = await listFor(s, ss.style, quiet ? 300 : 2500)
@@ -859,14 +820,14 @@ async function showTown() {
   ss.loading.stage = '搭建沙盘'
   let build: Awaited<ReturnType<typeof computeTown>> = null
   try {
-    build = await computeTown(h)
+    build = await computeTown(h, ss.town.ground)
   } catch (err) {
     if (!(err instanceof Superseded)) console.error(err)
   }
   // 期间换了城：交给新的那次
   if (id !== townJob || hist !== h) return
   // 推演线程里已经不是这一版：在主线程构建
-  build ??= buildTown(h.st, h.life)
+  build ??= buildTown(h.st, h.life, ss.town.ground)
   const s = markRaw(snapshot(h, ss.timeline.at))
   await town.setTown(h, build, s, ss.timeline.at, ss.town.ground, townTitle(s))
   if (hist !== h) return
@@ -884,8 +845,16 @@ function townSeek(pop: number, dur?: number) {
 let townSaveTimer = 0
 /** 沙盘选项：立即生效，稍后存下 */
 export function setTown3d(patch: Partial<typeof ss.town>) {
+  const look = dioramaOf(ss.town.ground)
   Object.assign(ss.town, patch)
-  if (patch.ground) town?.setGroundStyle(patch.ground)
+  if (patch.ground) {
+    town?.setGroundStyle(patch.ground)
+    // 体块的配色取地面主题的沙盘配色：换了一套配色就重建体块
+    if (!sameDiorama(look, dioramaOf(patch.ground))) {
+      townFor = null
+      void showTown()
+    }
+  }
   const { ground: _g, lookId: _l, ...o } = patch
   if (Object.keys(o).length) town?.setOptions(structuredClone(toRaw(o)))
   clearTimeout(townSaveTimer)
@@ -972,11 +941,11 @@ registerRoute('settlement', {
   // 前进后退或手改地址：换成地址里的参数重新生成；地址没带参数时保持现状
   apply(q) {
     if (![...q.keys()].length) return
-    const d = decodeSettlement(q)
-    ss.notices = rejectedNotices(d.rejected)
+    const d = fromQuery(q)
+    ss.notices = d.notices
     ss.from = -1
     Object.assign(ss.params, { ...DEFAULT_SETTLEMENT, ...INHERITED, ...d.params })
-    ss.style = d.style ?? DEFAULT_SETTLE_STYLE
+    ss.style = d.style
     storeSet('settleStyle', ss.style)
     if (host && app.module === 'settlement') run()
   },
@@ -994,11 +963,3 @@ onLang(() => {
   if (app.module === 'settlement') refresh(false, true)
 })
 
-defineStrings([
-  ['链接里的文明「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的文明。', 'The culture "{id}" in this link is not enabled (its plugin is disabled or not part of this version); the default culture is used instead.', 'リンクにある文明「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定の文明を使います。'],
-  ['链接里的城市形制「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的形制。', 'The city plan "{id}" in this link is not enabled (its plugin is disabled or not part of this version); the default plan is used instead.', 'リンクにある都市形制「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定の形制を使います。'],
-  ['点击关闭', 'Click to dismiss', 'クリックで閉じる'],
-  ['链接里的绘图风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。', 'The map style "{id}" in this link is not enabled (its plugin is disabled or not part of this version); the default style is used instead.', 'リンクにある描画スタイル「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定のスタイルを使います。'],
-  ['上次选用的绘图风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。', 'The map style "{id}" you used last time is not enabled (its plugin is disabled or not part of this version); the default style is used instead.', '前回選んだ描画スタイル「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定のスタイルを使います。'],
-  ['上次选用的沙盘地面风格「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的风格。', 'The diorama ground style "{id}" you used last time is not enabled (its plugin is disabled or not part of this version); the default style is used instead.', '前回選んだジオラマの地面スタイル「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定のスタイルを使います。'],
-])

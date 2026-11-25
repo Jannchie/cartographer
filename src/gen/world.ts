@@ -2,8 +2,9 @@ import { buildRoads } from './roads'
 import { JaNamer } from './names_ja'
 import { Namer, type Tri } from './naming'
 import { politicalMap, type PoliticalMap } from './political'
-import { polityDef } from './polity'
+import { polities } from './polity'
 import { settingOf } from './setting'
+import { worldTownCulture } from './townCulture'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
@@ -40,8 +41,10 @@ export interface WorldCache {
   stage?: TerrainStage
   /** 地名之前的地面（只改命名时沿用） */
   ground?: GroundStage
-  /** 政区划分（伯爵领、文化、国家）与道路（地点位置不变时沿用） */
-  places?: { key: string; map: PoliticalMap | null; roads: World['roads'] }
+  /** 政区划分（伯爵领、文化、国家）：地面、地点的位置与类型、世界观与世界的命名风格都没变时沿用 */
+  political?: { key: string; map: PoliticalMap }
+  /** 道路与航线：只取决于地面与地点的位置、类型，只改命名风格或世界观时沿用 */
+  roads?: { key: string; roads: World['roads'] }
 }
 
 /** 影响板块造山的参数与规划草图版本（不含地形画笔） */
@@ -115,23 +118,29 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   // 聚落阶段：关掉时去掉城镇；打开时若钉住的地点里没有城镇（在只有地形的阶段编辑过地点），补上生成的城镇
   if (!settle) labels = labels.filter((l) => !isSettlement(l))
   else if (edits.labels && !labels.some(isSettlement)) labels = [...labels, ...generated.filter(isSettlement)]
-  // 政区划分与道路取决于地面、地点的位置与类型，以及世界观与世界的命名风格（各文化的命名风格、制度、城镇形制由它们定），
-  // 与具体的名字无关：这些都没变时沿用
+  // 政区划分与道路都与具体的名字无关，分开缓存：
+  // 道路只取决于地面与地点的位置、类型；政区划分还取决于世界观与世界的命名风格（各文化的命名风格、制度、城镇形制由它们定）
   const setting = settingOf(p)
-  const pk = `${gk}|${setting.id}|${namer.style}|` + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
-  let places = cache?.places?.key === pk ? cache.places : undefined
-  if (!settle) places = { key: pk, map: null, roads: [] }
-  else if (!places) {
+  const rk = `${gk}|` + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
+  const pk = `${setting.id}|${namer.style}|${rk}`
+  let map: PoliticalMap | null = null
+  let roads: World['roads'] = []
+  if (settle) {
     // 国界、道路的坡度代价按晕渲同样的夸张比例算：全球图每格几十公里，真实坡度太缓，道路会直接翻山
     const slopeKm = reliefKm({ W, kmPerCell })
-    progress('划分政区', 0.96)
-    const map = politicalMap(elev, hydro.flow, biome, temperature, labels, W, H, slopeKm, kmPerCell, riverThreshold(W), namer.style, setting, (rSettle ?? rPlace).fork())
-    progress('道路与航线', 0.97)
-    const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, slopeKm, riverThreshold(W))
-    places = { key: pk, map, roads }
-    if (cache) cache.places = places
+    if (cache?.political?.key === pk) map = cache.political.map
+    else {
+      progress('划分政区', 0.96)
+      map = politicalMap(elev, hydro.flow, biome, temperature, labels, W, H, slopeKm, kmPerCell, riverThreshold(W), namer.style, setting, (rSettle ?? rPlace).fork())
+      if (cache) cache.political = { key: pk, map }
+    }
+    if (cache?.roads?.key === rk) roads = cache.roads.roads
+    else {
+      progress('道路与航线', 0.97)
+      roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, slopeKm, riverThreshold(W))
+      if (cache) cache.roads = { key: rk, roads }
+    }
   }
-  const map = places.map
   const realm = map ? map.realm.slice() : new Int16Array(N).fill(-1)
   // 各文化各用一个取名器：主体文化（0 号）沿用世界的取名器，其余文化另起一种语言
   const namers = map ? map.cultures.map((c, k) => (k === 0 ? namer : new Namer({ seed: p.seed, naming: c.naming, setting: p.setting }, new RNG(hashString(`${p.seed}|culture${k}`)), `|culture${k}`))) : []
@@ -160,10 +169,9 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     // 伯爵领以治所城镇命名，没有城镇的另起一个城镇名
     const counties: County[] = map.counties.map((c) => ({ ...c, ...(c.seat >= 0 ? { name: labels[c.seat].name, zh: labels[c.seat].zh, ja: labels[c.seat].ja } : tri(namers[c.culture].name('city'))) }))
     // 中层政区以治所伯爵领命名，按国家主体文化的制度加上称谓：某某公爵领、某州、某国
-    const provinces: Province[] = map.provinces.map((pv) => ({ ...pv, ...polityDef(map.cultures[map.realms[pv.realm].culture].polity).provinceName(counties[pv.county]) }))
+    const provinces: Province[] = map.provinces.map((pv) => ({ ...pv, ...polities.get(map.cultures[map.realms[pv.realm].culture].polity).provinceName(counties[pv.county]) }))
     political = { county: map.county.slice(), counties, provinces, cultures }
   }
-  const roads = places.roads
   const worldName = edits.worldName ?? genName.en
 
   let land = 0
@@ -196,6 +204,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     worldNameJa: edits.worldNameJa ?? (edits.worldName ? ja.name('world', edits.worldName) : genName.ja),
     kmPerCell,
     political,
+    townCulture: worldTownCulture(p),
     stats: {
       land: land / N,
       peak,

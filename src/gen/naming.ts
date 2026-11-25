@@ -49,23 +49,21 @@ export interface NamingStyleDef {
 }
 
 /** 扩展点：命名风格，按 id 登记 */
-export const NamingStyles = defineSlot<NamingStyleDef>('namingStyle')
+export const NamingStyles = defineSlot<NamingStyleDef>('namingStyle', { zh: '命名风格', en: 'naming style', ja: '命名スタイル' })
 
-const styles = registryOf(NamingStyles)
-
-/** 命名风格的定义；没有登记时抛 MissingContent */
-export const namingStyle = (id: NamingStyle): NamingStyleDef => styles.get(id)
+/** 命名风格的注册表 */
+export const namingStyles = registryOf(NamingStyles)
 
 /** 界面用：一个世界观里可选的命名风格（第一项是"随机"） */
-export function namingChoices(p: { setting?: string }): { id: NamingStyle; label: string; tip: string }[] {
-  return [{ id: 'auto', label: '随机', tip: '按种子挑一种命名风格' }, ...settingOf(p).naming.map((id) => ({ id, label: namingStyle(id).label, tip: namingStyle(id).tip }))]
+export function namingChoices(p: { setting: string }): { id: NamingStyle; label: string; tip: string }[] {
+  return [{ id: 'auto', label: '随机', tip: '按种子挑一种命名风格' }, ...settingOf(p).naming.map((id) => ({ id, label: namingStyles.get(id).label, tip: namingStyles.get(id).tip }))]
 }
 
 /**
  * 世界的命名风格：auto 按种子在世界观的池子里取一种；指定了池子里没有的风格时同样按 auto 取。
  * 池子由世界的参数定（见 gen/setting.ts），与启用了哪些插件无关
  */
-export function resolveNaming(p: { seed: string; naming?: NamingStyle; setting?: string }): NamingStyle {
+export function resolveNaming(p: { seed: string; naming?: NamingStyle; setting: string }): NamingStyle {
   const all = settingOf(p).naming
   const n = p.naming ?? 'auto'
   if (n !== 'auto' && all.includes(n)) return n
@@ -161,9 +159,9 @@ export class Namer {
   private used = new Set<string>()
 
   /** salt：另起一批名字（区域、海湾）时用自己的随机序列，不改动原有地名的抽取顺序 */
-  constructor(p: { seed: string; naming?: NamingStyle; setting?: string }, rNames: RNG, salt = '') {
+  constructor(p: { seed: string; naming?: NamingStyle; setting: string }, rNames: RNG, salt = '') {
     this.style = resolveNaming(p)
-    this.def = namingStyle(this.style)
+    this.def = namingStyles.get(this.style)
     this.rng = new RNG(hashString(`${p.seed}|naming|${this.style}${salt}`))
     this.root = this.def.roots({ rng: this.rng, rNames })
   }

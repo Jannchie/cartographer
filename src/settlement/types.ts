@@ -1,3 +1,4 @@
+import { cultures } from './culture'
 import type { CityFunction, FeatureId } from './features'
 import type { P, Poly } from './geom'
 import type { Motif } from './tensor'
@@ -102,7 +103,10 @@ export const DEFAULT_SETTLEMENT: SettlementParams = {
   seed: 'thornwick',
   population: 4000,
   size: 'town',
-  culture: 'western',
+  // 默认文明向注册表要（由插件登记，核心不写具体的文明）；取值时现查——注册表在启动插件之后才有内容
+  get culture() {
+    return cultures.defaultId()
+  },
   magic: 0,
   walls: 'auto',
   regularity: LAYOUT_DEFAULT.regularity,

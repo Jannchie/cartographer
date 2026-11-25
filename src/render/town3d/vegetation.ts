@@ -16,7 +16,7 @@ import { hex } from '../palette'
 import type { Life } from '../../settlement/history'
 import type { Settlement } from '../../settlement/types'
 import { NEVER } from './mesh'
-import { townKit } from './kits'
+import { townKits } from './kits'
 import { waterSampler } from './shared'
 import { ACCENT, SP, SPECIES, SPECIES_NAMES } from './treeSpecies'
 
@@ -318,7 +318,7 @@ class Bag {
 const CROWN = SPECIES.map((s) => Math.max(...s.profile.map((p) => p[0])))
 
 export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: number, z: number) => number): TreeBuild {
-  const flora = townKit(st.params.culture).flora
+  const flora = townKits.get(st.params.culture).flora
   const W = st.width
   const D = st.height
   const T = st.terrain
@@ -634,7 +634,7 @@ function scan(poly: Pt[], ux: number, uz: number, t: number): [number, number][]
  */
 function lowPlants(st: Settlement, low: Bag, env: LowEnv) {
   const { H, water, span, season, seed, temp, bGrid, rGrid, wGrid } = env
-  const flora = townKit(st.params.culture).flora
+  const flora = townKits.get(st.params.culture).flora
   const W = st.width
   const D = st.height
   const colour = (v: Variety, x: number, z: number) => {

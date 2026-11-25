@@ -1,4 +1,4 @@
-import { cultureOf, planById } from './culture'
+import { cultures, planById } from './culture'
 import { dice, hashAt, type Ctx } from './ctx'
 import { area, centroid, type Poly } from './geom'
 import { perHousehold, scaleOf, urbanT } from './scale'
@@ -53,7 +53,7 @@ export interface CulturePeople {
 /** 写职业表用：一个行当 */
 export const tradeDef = (group: string, id: string, zh: string, en: string, ja: string): Trade => ({ id, group, name: [zh, en, ja] })
 
-const schemeOf = (c: Culture) => cultureOf(c).people.scheme
+const schemeOf = (c: Culture) => cultures.get(c).people.scheme
 
 /** 职业名的三语写法（文明登记时一并登记给界面，见 register.ts） */
 export const schemeStrings = (s: Scheme): Tri[] => [...s.groups, ...s.trades].map((x) => x.name)
@@ -201,7 +201,7 @@ export function wardsFor(p: ProfileParams, type: keyof typeof DEDICATED) {
   for (const g of sc.groups) if (g.cls === d.cls) share += tg.get(g.id) ?? 0
   const patch = scaleOf(p.population).cfg.patch
   const m2 = patch * patch * 0.87
-  const cap = type === 'barracks' ? (m2 * 0.3) / 9 : (m2 / 10000) * cultureOf(p.culture).people.wardDensity[type]
+  const cap = type === 'barracks' ? (m2 * 0.3) / 9 : (m2 / 10000) * cultures.get(p.culture).people.wardDensity[type]
   return (share * p.population * d.live) / cap
 }
 
@@ -261,7 +261,7 @@ export function calibrateTrades(buildings: Building[], p: ProfileParams) {
 /**
  * 平均一户几口（各种大小、营生的户按一座城里常见的比例折算，实测值）：城区要多大按它把人口折成户数
  */
-export const perHome = (culture: Culture) => perHousehold(culture) * cultureOf(culture).people.homeK
+export const perHome = (culture: Culture) => perHousehold(culture) * cultures.get(culture).people.homeK
 
 /** 行当的名字（中文键，界面按语言翻译）与所属大类 */
 export function tradeInfo(culture: Culture, id: string) {

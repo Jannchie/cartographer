@@ -23,12 +23,15 @@ const style: Theme = {
     const y = o[0] * 0.3 + o[1] * 0.59 + o[2] * 0.11
     for (let k = 0; k < 3; k++) o[k] = y * SEPIA[k]
   },
-  vector(L, world, F, env) {
-    const after = base.vector(L, world, F, env)
-    // 矢量版做不到逐像素去色：整张图罩一层棕褐色
-    return () => {
-      if (after) after()
-      L.rect('rgb(112,66,20)', 0.32)
+  async vector() {
+    const draw = await base.vector()
+    return (L, world, F, env) => {
+      const after = draw(L, world, F, env)
+      // 矢量版做不到逐像素去色：整张图罩一层棕褐色
+      return () => {
+        if (after) after()
+        L.rect('rgb(112,66,20)', 0.32)
+      }
     }
   },
 }

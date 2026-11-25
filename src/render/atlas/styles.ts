@@ -92,6 +92,12 @@ export interface PoliticalLook {
   label?: (c: RGB) => string
 }
 
+/**
+ * 矢量底图：用图层工具（./svg/layers.ts）把与 pixel 对应的底色、色带、晕渲、线划画成矢量图层。
+ * 返回一个函数时，它留到政区着色之后再执行（政区专题风格的晕渲、湖泊与海岸线要压在色块之上）
+ */
+export type VectorDraw = (L: Layers, world: World, F: VectorFields, env: { opts: AtlasOpts; S: number }) => void | (() => void)
+
 export interface Theme {
   id: StyleId
   name: string
@@ -102,10 +108,9 @@ export interface Theme {
   /** 位图着色：逐像素算底色、晕渲与线划（o 是这个像素的 RGB，就地改写） */
   pixel: (p: Px, o: Float32Array, f: Fields, opts: AtlasOpts) => void
   /**
-   * 矢量底图：用图层工具（./svg/layers.ts）把与 pixel 对应的底色、色带、晕渲、线划画成矢量图层。
-   * 返回一个函数时，它留到政区着色之后再执行（政区专题风格的晕渲、湖泊与海岸线要压在色块之上）
+   * 矢量底图的画法：用到时才载入（位图渲染与启动都不需要它），由矢量引擎（./svg/vector.ts）等它载入后调用
    */
-  vector: (L: Layers, world: World, F: VectorFields, env: { opts: AtlasOpts; S: number }) => void | (() => void)
+  vector: () => Promise<VectorDraw>
   river: { color: string; width: number; minFlow: number; fitCoast?: boolean }
   /** 道路（干道；支线更细）与跨海航线（虚线）。dash 以 S=2 时的像素计 */
   roads: RoadStyle
@@ -142,19 +147,11 @@ export const SANS = '"Source Sans 3", "Helvetica Neue", Arial, sans-serif'
 export const BRUSH = '"Ma Shan Zheng", "Noto Serif SC", "STKaiti", "KaiTi", serif'
 export const SONG = '"Noto Serif SC", "Songti SC", "SimSun", serif'
 
-/** 扩展点：纸图风格，按 id 登记（界面上的色块按登记顺序） */
-export const AtlasStyles = defineSlot<Theme>('atlasStyle')
+/** 扩展点：纸图风格，按 id 登记（界面上的色块按登记顺序）。默认条目是没有选过、或选的风格不可用时用的那个 */
+export const AtlasStyles = defineSlot<Theme>('atlasStyle', { zh: '纸图风格', en: 'map style', ja: '紙地図のスタイル' })
 
-/** 没有选过、或选的风格不可用时用的那个：内置插件 cartography 登记 */
-export const DEFAULT_ATLAS_STYLE: StyleId = 'physical'
-
-const styles = registryOf(AtlasStyles)
-
-/** 已登记的纸图风格（按登记顺序） */
-export const atlasStyles = (): Theme[] => styles.all()
-
-/** 这个 id 的纸图风格有没有登记（界面读存下的选择时先核对，不可用就回到默认并提示） */
-export const hasAtlasStyle = (id: string): boolean => styles.has(id)
+/** 纸图风格的注册表（取用时套上字体方案的用 themeById） */
+export const atlasStyles = registryOf(AtlasStyles)
 
 // ———————————————————————— 字体方案 ————————————————————————
 
@@ -227,9 +224,9 @@ export function setFontPreset(id: string) {
 export const currentFontPreset = () => fontPreset
 
 const themed = new Map<string, Theme>()
-/** 风格（套上当前的字体方案）；没有登记时抛 MissingContent（所属的插件没有启用，或入口没有先启动插件） */
+/** 风格（套上当前的字体方案）；没有登记时抛错（所属的插件没有启用，或入口没有先启动插件） */
 export function themeById(id: StyleId): Theme {
-  const t = styles.get(id)
+  const t = atlasStyles.get(id)
   const f = fontPreset
   if (f.id === 'theme') return t
   const key = `${t.id}|${f.id}`

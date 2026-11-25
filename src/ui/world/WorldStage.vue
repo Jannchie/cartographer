@@ -4,12 +4,13 @@ import { computed, onMounted, ref } from 'vue'
 import { t } from '../i18n'
 import Icon from '../kit/Icon.vue'
 import Loading from '../kit/Loading.vue'
+import Notices from '../kit/Notices.vue'
 import Probe from '../kit/Probe.vue'
 import RegionOverlay from '../kit/RegionOverlay.vue'
 import { isFeatureArea, isWaterArea, type Area } from '../../gen/areas'
 import { placeName } from '../../i18n'
 import { langRef } from '../i18n'
-import { areaCheckpoint, closeNotices, commitAreas, mountWorld, selectArea, setMode, toggleTour, ws, type Mode } from './world'
+import { areaCheckpoint, commitAreas, mountWorld, selectArea, setMode, toggleTour, ws, type Mode } from './world'
 
 const stage = ref<HTMLElement>()
 const v3 = ref<HTMLElement>()
@@ -87,9 +88,7 @@ const hint = computed(() =>
     </button>
     <!-- 纸图的悬停读数画在图廓里（见 world.ts 的 probeCard） -->
     <Probe :data="ws.mode === '2d' || ws.mode === 'areas' ? null : ws.probe" />
-    <button v-if="ws.notices.length" type="button" class="notice" :title="t('点击关闭')" @click="closeNotices()">
-      <span v-for="n in ws.notices" :key="n.text + n.id">{{ t(n.text, { id: n.id }) }}</span>
-    </button>
+    <Notices v-model="ws.notices" />
     <div class="hint">{{ t(hint) }}</div>
     <Loading :show="ws.loading.show" title="正在塑造世界" :stage="ws.loading.stage" :frac="ws.loading.frac" />
   </main>

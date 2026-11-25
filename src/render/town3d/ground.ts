@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { buildGroundVector, clearGroundTiles, type GroundVector } from '../../settlement/render'
-import { DIORAMA_STYLE, dioramaGround, type SettleStyleId } from '../../settlement/themes'
+import { dioramaGround, type SettleStyleId } from '../../settlement/themes'
 import type { Settlement } from '../../settlement/types'
 import { NOISE_GLSL } from '../aerial/glsl'
 import { LIFE_GLSL } from './buildingShader'
@@ -630,7 +630,7 @@ export class TownGround {
   private measurer = document.createElement('canvas').getContext('2d')!
   private vec: GroundVector | null = null
   private st: Settlement | null = null
-  private style: SettleStyleId = DIORAMA_STYLE
+  private style: SettleStyleId = ''
   private maxTex: number
   private u: Uniforms
 

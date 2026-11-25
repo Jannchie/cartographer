@@ -1,8 +1,9 @@
 import { generateHistory } from '../../settlement/generate'
 import type { SettlementHistory } from '../../settlement/history'
+import type { SettleStyleId } from '../../settlement/themes'
 import type { SettlementParams } from '../../settlement/types'
 import { buildTown } from '../../render/town3d/massing'
-import { boot } from '../../kernel'
+import { bootWorker } from '../../kernel'
 import { PLUGINS } from '../../packs/manifest'
 import { SETTLEMENT } from '../../packs/settlement'
 import { TOWN3D } from '../../packs/town3d'
@@ -13,25 +14,17 @@ import { TOWN3D } from '../../packs/town3d'
  *
  * 最近一次的成长史留在线程里：进入沙盘时按它构建体块与树（见 render/town3d/massing.ts），
  * 结果（连同地形网格）以可转移的数组传回，不必把整个成长史再克隆一遍。
- *
- * 线程建好后的第一条消息是 init：主线程启用的插件。本线程载入它们的 settlement 与 town3d 层，之后的请求等启动完成再处理。
+ * town 请求里的 ground 是沙盘地面用的主题：体块的配色取它的沙盘配色。
  */
-export type HistoryRequest = { kind: 'init'; plugins: string[] } | { kind: 'history'; seq: number; params: SettlementParams } | { kind: 'town'; seq: number }
+export type HistoryRequest = { kind: 'history'; seq: number; params: SettlementParams } | { kind: 'town'; seq: number; ground: SettleStyleId }
 
 let last: { seq: number; hist: SettlementHistory } | null = null
-/** 插件的启动（收到 init 消息时开始）；null 为还没有收到 */
-let ready: Promise<void> | null = null
+// 插件在模块顶层启动（启用清单写在线程的名字里）：载入 settlement 与 town3d 层。每个请求先等它；启动失败由请求报告
+const ready = bootWorker(PLUGINS, { settlement: SETTLEMENT, town3d: TOWN3D })
 
 self.onmessage = async (e: MessageEvent<HistoryRequest>) => {
   const m = e.data
-  if (m.kind === 'init') {
-    ready = boot({ manifests: PLUGINS, enabled: m.plugins, layers: { settlement: SETTLEMENT, town3d: TOWN3D } })
-    // 失败留给之后的请求报告（每个请求都会等它）
-    ready.catch(() => {})
-    return
-  }
   try {
-    if (!ready) throw new Error('聚落线程还没有收到插件清单（init 消息）')
     await ready
   } catch (err) {
     console.error(err)
@@ -46,7 +39,7 @@ self.onmessage = async (e: MessageEvent<HistoryRequest>) => {
       return
     }
     try {
-      const town = buildTown(last.hist.st, last.hist.life)
+      const town = buildTown(last.hist.st, last.hist.life, m.ground)
       const transfer: ArrayBuffer[] = []
       for (const c of town.chunks) transfer.push(...[c.pos, c.nrm, c.col, c.uv, c.life, c.ids].map((a) => a.buffer as ArrayBuffer))
       for (const t of [town.trees.trees, town.trees.low]) transfer.push(...[t.inst, t.attr, t.start, t.yr].map((a) => a.buffer as ArrayBuffer))

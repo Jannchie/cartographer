@@ -1,5 +1,5 @@
 import { clamp } from '../gen/util'
-import { cultureOf } from './culture'
+import { cultures } from './culture'
 import { emitArea, hashAt, isFree, memo, type Ctx } from './ctx'
 import type { FeatureEnv, FeatureId } from './features'
 import { add, area, bboxOf, centroid, circlePoly, convexOverlap, dist, insetConvex, obb, pointInPoly, rect, type P, type Poly } from './geom'
@@ -143,7 +143,7 @@ const SHRINE_GAP = 36
  * 占用率按这个多留一点余量（见 generate.ts 的 occupancy），拆掉的住户退回预算后外围还有地方盖，人口仍对得上
  */
 export function tierReserve(c: Culture) {
-  const rate = cultureOf(c).tiers.rate
+  const rate = cultures.get(c).tiers.rate
   return 1 + 1.4 / rate.micro + 8 / rate.small + 1 / GARDEN_RATE
 }
 
@@ -172,7 +172,7 @@ export function wardExtras(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint) {
   const b0 = s.len.get('buildings')!
   const mine = ctx.out.buildings.slice(b0).filter(dwelling)
   if (!mine.length) return
-  const tiers = cultureOf(ctx.p.culture).tiers
+  const tiers = cultures.get(ctx.p.culture).tiers
   const rate = tiers.rate
   // 村里的人家不算城里的人口（units 为 0），按一栋一户算
   const hh = mine.reduce((n, b) => n + Math.max(1, b.units ?? 1), 0)
@@ -242,7 +242,7 @@ type MicroKind = 'shrine' | 'garden' | 'tower'
 function smallKind(ctx: Ctx, c: P, rural: boolean): SmallKind | null {
   const h = hashAt(ctx, snap(ctx, c), 'tiers.smallKind')
   const town = !isVillage(ctx.p.size)
-  const own = cultureOf(ctx.p.culture).tiers.small
+  const own = cultures.get(ctx.p.culture).tiers.small
   return rural ? (h < own.rural ? own.kind : 'manor') : h < own.town || !town ? own.kind : 'garden'
 }
 
@@ -300,7 +300,7 @@ function smallSite(ctx: Ctx, block: Poly, s: Checkpoint, w: number, d: number): 
 }
 
 function smallAt(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint, kind: SmallKind) {
-  const own = cultureOf(ctx.p.culture).tiers.small
+  const own = cultures.get(ctx.p.culture).tiers.small
   const [w, d] = kind === 'garden' || kind === 'manor' ? SMALL_SIZE[kind] : own.size
   // 盖不成就连拆掉的人家一起撤回
   const cp = checkpoint(ctx)
@@ -339,7 +339,7 @@ function smallAt(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint, kind: SmallKi
  * 伊斯兰是四角碉楼的堡（qasr / tighremt）。
  */
 function manor(ctx: Ctx, poly: Poly, front: P, key: string): boolean {
-  const form = cultureOf(ctx.p.culture).tiers.manor
+  const form = cultures.get(ctx.p.culture).tiers.manor
   const c = centroid(poly)
   const f: P = [-front[0], -front[1]]
   const l: P = [-f[1], f[0]]
@@ -410,7 +410,7 @@ export function waysideAt(ctx: Ctx, c: P, d: P): boolean {
 }
 
 function microBuild(ctx: Ctx, b: Building, c: P, d: P, kind: MicroKind, outside = false): boolean {
-  const tiers = cultureOf(ctx.p.culture).tiers
+  const tiers = cultures.get(ctx.p.culture).tiers
   const l: P = [-d[1], d[0]]
   const at = (a: number, s: number): P => [c[0] + d[0] * a + l[0] * s, c[1] + d[1] * a + l[1] * s]
   const ob = obb(b.poly)

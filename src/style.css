@@ -37,6 +37,8 @@
   --accent: #3f6e62;
   --accent-2: #30574d;
   --accent-ink: #fbf4e8;
+  /* 警示：删除、不可用的提示 */
+  --danger: #a3412c;
   --night: #1a1815;
   --night-2: #221f1b;
   --night-line: rgba(242, 236, 223, 0.2);
@@ -2817,8 +2819,8 @@ select.lang:hover {
   flex: none;
 }
 
-/* ———————————————————— 世界库 ———————————————————— */
-.library {
+/* ———————————————————— 浮层（kit/Sheet.vue）与世界库 ———————————————————— */
+.modal {
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -2829,7 +2831,7 @@ select.lang:hover {
   background: rgba(20, 18, 15, 0.55);
   animation: rise 0.25s var(--ease);
 }
-.library-sheet {
+.modal-sheet {
   display: flex;
   flex-direction: column;
   width: min(1120px, 100%);
@@ -2840,7 +2842,7 @@ select.lang:hover {
   color: var(--ink);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
 }
-.library-head {
+.modal-head {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -2849,24 +2851,24 @@ select.lang:hover {
   padding-bottom: 12px;
   border-bottom: 1px solid var(--rule-2);
 }
-.library-head h2 {
+.modal-head h2 {
   margin: 0;
   font-family: var(--cjk-serif);
   font-size: 18px;
   font-weight: 600;
   letter-spacing: 0.06em;
 }
-.library-actions {
+.modal-actions {
   display: flex;
   align-items: center;
   gap: 16px;
 }
-.library-close {
+.modal-close {
   display: inline-flex;
   padding: 2px;
   color: var(--ink-2);
 }
-.library-close:hover {
+.modal-close:hover {
   color: var(--ink);
 }
 /* 左栏新建、右栏世界库；窄屏上下排列、整体滚动 */
@@ -3066,8 +3068,8 @@ select.lang:hover {
   gap: 14px;
 }
 .danger-link:hover {
-  color: #a3412c;
-  text-decoration-color: #a3412c;
+  color: var(--danger);
+  text-decoration-color: var(--danger);
 }
 /* 侧边栏里的定稿说明 */
 .frozen-note {
@@ -3090,7 +3092,7 @@ select.lang:hover {
 }
 
 /* ———————————————————— 插件 ———————————————————— */
-.plugins-sheet {
+.plugins .modal-sheet {
   width: min(640px, 100%);
 }
 .plugins-note {
@@ -3136,7 +3138,7 @@ select.lang:hover {
 }
 .plugin-warn {
   font-size: 11.5px;
-  color: #a3412c;
+  color: var(--danger);
 }
 .plugin-locked,
 .plugin-switch {
@@ -3186,7 +3188,7 @@ select.lang:hover {
   max-width: min(560px, calc(100% - 60px));
   padding: 8px 14px;
   background: var(--paper);
-  border: 1px solid #a3412c;
+  border: 1px solid var(--danger);
   color: var(--ink);
   font-size: 12.5px;
   line-height: 1.55;

@@ -1,4 +1,4 @@
-import { cultureOf, traitsOf } from './culture'
+import { cultures } from './culture'
 import { emitArea, clipWater, isFree, placeable, whereOf, mark, type Ctx } from './ctx'
 import { area, centroid, circlePoly, dist, insetConvex, obb, rect, type P, type Poly } from './geom'
 import { amphitheater, arenaAt, hospitalAt, pulpitAt, schoolAt, stageAt, tavernAt, wineryAt } from './civic'
@@ -391,7 +391,7 @@ export const FEATURES: FeatureDef[] = [
           const cand = rect(q, b.axis, 16 * s, 8 * s)
           if (!ch && inside(cand, block) && isFree(ctx, cand, { pad: 1.5 })) ch = cand
         }
-      const east = traitsOf(ctx.p.culture).eastAsian
+      const east = cultures.get(ctx.p.culture).traits.eastAsian
       if (ch && addBuilding(ctx, ch, east ? 'hall' : 'temple', 1.5))
         mark(ctx, centroid(ch), 'temple', east ? 'shrine' : 'chapel')
       urban(ctx, block, 'village', ch ? [rect(centroid(ch), b.axis, 26, 16)] : [])
@@ -643,7 +643,7 @@ export const FEATURE: Record<FeatureId, FeatureDef> = Object.fromEntries(FEATURE
 
 /** 要素在某个文明下的叫法 */
 export function featureName(f: FeatureDef, c: Culture) {
-  return cultureOf(c).featureNames?.[f.id] ?? f.name
+  return cultures.get(c).featureNames?.[f.id] ?? f.name
 }
 
 export function featureEnv(p: SettlementParams, walled = p.walls !== 'none'): FeatureEnv {
@@ -676,7 +676,7 @@ export function resolveCounts(p: SettlementParams, e: FeatureEnv): Record<Featur
       continue
     }
     const manual = p.counts[f.id]
-    const foreign = traitsOf(e.culture).exclude?.includes(f.id)
+    const foreign = cultures.get(e.culture).traits.exclude?.includes(f.id)
     out[f.id] = manual !== undefined && manual !== null ? Math.max(0, Math.min(f.max, manual)) : foreign ? 0 : f.auto(e)
   }
   return out

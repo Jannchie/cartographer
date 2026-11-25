@@ -1,4 +1,4 @@
-import { cultureOf } from './culture'
+import { cultures } from './culture'
 import { area, bboxOf, dist, pointInPoly, polylineDist, type P, type Poly } from './geom'
 import { residentsOf, tradeInfo } from './people'
 import type { Building, Culture, Field, Settlement, Ward, WardType } from './types'
@@ -61,7 +61,7 @@ const RURAL = new Set<WardType>(['farm', 'wild', 'suburb'])
 
 /** 建筑的用途：由类型、所在片区与住户推断 */
 function buildingRole(st: Settlement, b: Building, ward: Ward | undefined, inGrave: boolean): string {
-  const lex = cultureOf(st.params.culture).lexicon
+  const lex = cultures.get(st.params.culture).lexicon
   const wt = ward?.type
   const a = area(b.poly)
   // 盖的时候写明了用途（祠、路边十字架、奥宫……）
@@ -134,7 +134,7 @@ function cropOf(kind: Field['kind'], c: Culture, cl: Climate): string {
     case 'meadow':
       return '割草晒干草'
     default: {
-      const crop = cultureOf(c).lexicon.crops[kind]
+      const crop = cultures.get(c).lexicon.crops[kind]
       return typeof crop === 'string' ? crop : crop({ warm: cl.temp > 16, dry: cl.rain < 600 })
     }
   }
@@ -170,7 +170,7 @@ export function describeAt(st: Settlement, q: P, ward: Ward | undefined): Descri
   if (lm?.name) return { title: '地标', name: lm.name, rows: [] }
   const green = st.greens.find((g) => g.kind !== 'courtyard' && hit(g.poly, q))
   if (green) {
-    const title = (green.kind === 'cemetery' && !ward?.inner ? cultureOf(c).lexicon.ruralCemetery : undefined) ?? GREEN_NAME[green.kind]
+    const title = (green.kind === 'cemetery' && !ward?.inner ? cultures.get(c).lexicon.ruralCemetery : undefined) ?? GREEN_NAME[green.kind]
     return { title, rows: [['面积', ha(area(green.poly)), false]] }
   }
   const f = st.fields.find((f) => hit(f.poly, q))

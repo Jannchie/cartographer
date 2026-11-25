@@ -2,7 +2,7 @@ import { centroid, insetConvex, area, type P, type Poly } from './geom'
 import { emitArea, clipWater, mark, siteDice, type Ctx } from './ctx'
 import { checkpoint, rollback } from './undo'
 import type { Ward } from './types'
-import { cultureOf } from './culture'
+import { cultures } from './culture'
 import { composer } from './compose/core'
 import { garden, type GardenPreset, type GardenTradition, type Skel } from './garden/kit'
 import { bySlot } from './garden/elements'
@@ -181,7 +181,7 @@ export function park(ctx: Ctx, ward: Ward, block: Poly) {
   const V = siteDice(ctx, centroid(g), 'garden')
   const A = area(g)
   const tier = ctx.tier
-  const trad = cultureOf(ctx.p.culture).garden
+  const trad = cultures.get(ctx.p.culture).garden
   let pool = CANDIDATES.filter((v) => v.trad === trad && A >= v.min && A <= (v.max ?? Infinity) && (!v.tiers || v.tiers.includes(tier))).map((v) => (v.wAt ? { ...v, w: v.wAt(ctx, g) } : v))
   for (let k = 0; ; k++) {
     // 按园址抽签（作曲者先抽预设）；抽中的放不下就从候选里去掉再抽（第 k 次）

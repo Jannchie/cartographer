@@ -1,7 +1,6 @@
 import { FEATURE, FUNCTIONS, type FeatureId } from '../../settlement/features'
 import { MOTIF_INFO } from '../../settlement/tensor'
-import { cultureIds, planIds } from '../../settlement/culture'
-import { DEFAULT_SETTLE_STYLE, hasSettleTheme, type SettleStyleId } from '../../settlement/themes'
+import { settleThemes, type SettleStyleId } from '../../settlement/themes'
 import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
 
 /**
@@ -12,15 +11,13 @@ import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/type
  * 规模档位 size 由人口推出，不写。
  */
 const SKIP = new Set<keyof SettlementParams>(['size', 'counts', 'climate'])
-/** 各参数允许的取值；文明与形制来自注册表，解析时现取（启用了哪些插件就有哪些） */
-const enums = (): Partial<Record<keyof SettlementParams, readonly unknown[]>> => ({
-  culture: cultureIds(),
+/** 各参数允许的取值。文明、形制是对插件内容的引用，不在这里核对（调用方用 resolveRefs） */
+const ENUMS: Partial<Record<keyof SettlementParams, readonly unknown[]>> = {
   magic: [0, 1, 2],
   walls: ['auto', 'none', 'palisade', 'stone'],
   function: FUNCTIONS.map((f) => f.id),
-  plan: planIds(),
   motif: MOTIF_INFO.map((f) => f.id),
-})
+}
 const DEF = DEFAULT_SETTLEMENT as unknown as Record<string, unknown>
 
 /** 数值保留到四位小数（气候两位）：写进地址的值与生成用的值完全一致，刷新得到同一座聚落 */
@@ -53,19 +50,16 @@ export function encodeSettlement(p: SettlementParams, style: SettleStyleId) {
     q.set('biome', String(p.climate.biome))
   }
   for (const [id, n] of Object.entries(p.counts)) if (n !== null && n !== undefined) q.set(`n.${id}`, String(n))
-  if (style !== DEFAULT_SETTLE_STYLE) q.set('style', style)
+  if (style !== settleThemes.defaultId()) q.set('style', style)
   return q
 }
 
 /**
  * 解析查询串：只返回合法的参数，缺的由调用方用默认值补。
- * rejected 是取值不在允许范围里而被丢掉的参数（原样的键与值）：文明、形制、绘图风格来自没有启用的插件时，调用方据此提示，
- * 而不是不声不响地换成默认值
+ * 文明、形制、绘图风格是对插件内容的引用，照原样返回：可不可用由调用方核对（界面用 resolveRefs，不可用时换成默认的并提示）
  */
-export function decodeSettlement(q: URLSearchParams): { params: Partial<SettlementParams>; style?: SettleStyleId; rejected: { key: string; value: string }[] } {
+export function decodeSettlement(q: URLSearchParams): { params: Partial<SettlementParams>; style?: SettleStyleId } {
   const out: Record<string, unknown> = {}
-  const rejected: { key: string; value: string }[] = []
-  const ENUMS = enums()
   const counts: Partial<Record<FeatureId, number>> = {}
   let style: SettleStyleId | undefined
   for (const [k, v] of q) {
@@ -76,9 +70,7 @@ export function decodeSettlement(q: URLSearchParams): { params: Partial<Settleme
       continue
     }
     if (k === 'style') {
-      // 绘图风格没有登记（所属的插件没有启用）：丢掉，记进 rejected
-      if (hasSettleTheme(v)) style = v
-      else if (v) rejected.push({ key: k, value: v })
+      if (v) style = v
       continue
     }
     if (k === 'name' || k === 'nameZh' || k === 'nameJa') {
@@ -93,10 +85,7 @@ export function decodeSettlement(q: URLSearchParams): { params: Partial<Settleme
       if (v === '' || !Number.isFinite(x)) continue
     } else if (typeof d === 'boolean') x = v === '1' || v === 'true'
     const allowed = ENUMS[k as keyof SettlementParams]
-    if (allowed && !allowed.includes(x)) {
-      rejected.push({ key: k, value: v })
-      continue
-    }
+    if (allowed && !allowed.includes(x)) continue
     out[k] = x
   }
   const temp = Number(q.get('temp'))
@@ -107,5 +96,5 @@ export function decodeSettlement(q: URLSearchParams): { params: Partial<Settleme
   if (out.seed === undefined) delete out.seed
   if (typeof out.population === 'number') out.population = Math.max(1, Math.round(out.population))
   out.counts = counts
-  return { params: out as Partial<SettlementParams>, style, rejected }
+  return { params: out as Partial<SettlementParams>, style }
 }

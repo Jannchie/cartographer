@@ -7,6 +7,7 @@ import { ATLAS_STYLES } from './paper/styles'
  * 登记顺序决定界面上色块的顺序。
  */
 const setup: LayerSetup = (host) => {
-  for (const s of ATLAS_STYLES) host.add(AtlasStyles, s.id, s)
+  // 第一种（自然地理）是默认风格
+  ATLAS_STYLES.forEach((s, i) => host.add(AtlasStyles, s.id, s, { default: i === 0 }))
 }
 export default setup

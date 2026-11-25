@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { P } from '../../settlement/geom'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
-import { DIORAMA_STYLE, type SettleStyleId } from '../../settlement/themes'
+import type { SettleStyleId } from '../../settlement/themes'
 import type { MapLabel, Settlement } from '../../settlement/types'
 import { isTypingTarget } from '../../ui/keys'
 import { PostPipeline } from '../aerial/post'
@@ -23,7 +23,7 @@ import { HeightField } from './heightField'
 import { SunShadows } from './sunShadows'
 import { TownLabels } from './labels'
 import { createTownLights } from './townLights'
-import { townKit } from './kits'
+import { townKits } from './kits'
 
 /**
  * 聚落沙盘：成长史中出现过的全部体块与树一次建好（见 massing.ts，在 Worker 里构建），
@@ -111,7 +111,7 @@ export class TownScene {
   /** 地面：贴图、高清块与每座城的地形、水面网格 */
   private ground: TownGround
   private trees: TreeLayer | null = null
-  private style: SettleStyleId = DIORAMA_STYLE
+  private style: SettleStyleId = ''
   /** 指针按着（拖动中，即使这一帧没动也不算停下） */
   private held = false
   /** 共享的 uniform：成长与夜里的窗灯 */
@@ -340,7 +340,7 @@ export class TownScene {
       if (h[i] > hi) hi = h[i]
     }
     this.hRange = [lo, hi]
-    const kit = townKit(hist.st.params.culture)
+    const kit = townKits.get(hist.st.params.culture)
     this.u.uStorey.value = kit.storey
     const cult = kit.facade
     // 建筑着色器按立面细部的着色器族编译（见 buildingShader.ts）：换了要重新编译

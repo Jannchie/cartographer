@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import { settleThemes } from '../../settlement/themes'
 import { FEATURES, FUNCTIONS, GROUPS, featureEnv, featureName as nameOf, resolveCounts, type FeatureDef } from '../../settlement/features'
 import { MOTIF_INFO } from '../../settlement/tensor'
-import { cultureIds, cultureOf, planChoices } from '../../settlement/culture'
+import { cultures, planChoices } from '../../settlement/culture'
 import { POP_MAX, POP_MIN, sizeLabel } from '../../settlement/scale'
 import { LAND_USES } from '../../settlement/landuse'
 import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
@@ -29,7 +29,7 @@ import { ss } from './settlement'
 const p = ss.params
 /** 当前这座城生成时的参数：生成参数的滑杆双击回到这里 */
 const gen = computed(() => ss.applied ?? DEFAULT_SETTLEMENT)
-const CULTURE_OPTS = cultureIds().map((c) => ({ value: c, label: cultureOf(c).name, title: cultureOf(c).desc }))
+const CULTURE_OPTS = cultures.ids().map((c) => ({ value: c, label: cultures.get(c).name, title: cultures.get(c).desc }))
 // 形制跟着文明：只列本文明的
 const planOpts = computed(() => planChoices(p.culture).map((f) => ({ value: f.id, label: f.name, desc: f.desc })))
 const MOTIF_OPTS = MOTIF_INFO.map((m) => ({ value: m.id, label: m.name, desc: m.desc }))
@@ -74,7 +74,7 @@ const places = computed(() => [
     return { value: pl.i, label: `${pl.capital ? '★ ' : ''}${name}${name !== pl.name ? ` · ${pl.name}` : ''}` }
   }),
 ])
-const swatches = settleThemes().map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: th.ground, ink: th.ink }))
+const swatches = settleThemes.all().map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: th.ground, ink: th.ink }))
 const RANDOM_MODE = [
   { value: 'all', label: '全部参数', title: '种子、规模、文明、功效、布局与环境都随机' },
   { value: 'keep', label: '保留配置', title: '只换种子，其余参数不变' },

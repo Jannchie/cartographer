@@ -4,7 +4,7 @@
  */
 import { sampleField } from '../../gen/util'
 import { hex } from '../palette'
-import { settleTheme } from '../../settlement/themes'
+import type { BuildingPalette } from '../../settlement/themes'
 import type { Settlement } from '../../settlement/types'
 import type { Writer } from './mesh'
 import type { TownKit } from './kits'
@@ -89,7 +89,7 @@ export const GILT = hex('#c8a040')
 export const GRANITE = hex('#9c9a95')
 export const GRAVE_EARTH = hex('#8a7a5c')
 
-export type Palette = ReturnType<ReturnType<typeof settleTheme>['buildings']>
+export type Palette = BuildingPalette
 
 export interface Ctx {
   w: Writer

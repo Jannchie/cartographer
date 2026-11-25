@@ -1,6 +1,6 @@
 import { blur, clamp } from '../gen/util'
 import * as dmath from '../gen/dmath'
-import { cultureOf } from './culture'
+import { cultures } from './culture'
 import { hashAt, type Core, type Ctx } from './ctx'
 import { dist, polylineLength, resample, segDist, type P } from './geom'
 
@@ -82,7 +82,7 @@ export interface FieldTraits {
 /** 按种子、文明与地形抽母题：没有河、海就不抽顺河，平地不抽梯台 */
 function pickMotif(ctx: Ctx): Motif {
   const { T, p } = ctx
-  const b = cultureOf(p.culture).motifBias
+  const b = cultures.get(p.culture).motifBias
   const w: [Motif, number][] = [
     ['concentric', b.concentric],
     ['spine', b.spine],
