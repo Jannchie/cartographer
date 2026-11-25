@@ -1,7 +1,7 @@
 import { Noise } from './noise'
 import { RNG } from './rng'
 import { polities, type Polity, type PolityRule } from './polity'
-import type { SettingDef } from './setting'
+import { HIGHLAND_KM, type CultureRegion, type CultureSpec, type SettingDef } from './setting'
 import { Biome, isSettlement, type Label, type NamingStyle, type Realm, type TownCulture } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
 import * as dmath from './dmath'
@@ -429,12 +429,56 @@ export function politicalMap(
     const b = biome[i]
     if (temperature[i] > 18 && (b === Biome.HotDesert || b === Biome.Shrubland || b === Biome.Savanna || b === Biome.SaltFlat)) arid[k]++
   }
+  // 世界观有整体规则时，各文化的三项属性由它看着全部文化区的地理概况一次定下；
+  // 否则照旧：命名风格按上面洗好的顺序取，制度查表，城镇文明问 townCulture
+  let specs: CultureSpec[] | null = null
+  if (setting.cultures) {
+    const biomeKinds = Object.keys(Biome).length
+    // 边远程度：各文化中心到主体文化中心的路程（伯爵领图上的最短路），隔海到不了的是无穷远
+    const far = nK ? flood([cultSeeds[0]], (_a, _b, e) => e.w).d : new Float64Array(0)
+    let farMax = 0
+    for (const s of cultSeeds) if (Number.isFinite(far[s]) && far[s] > farMax) farMax = far[s]
+    const regions: CultureRegion[] = cultSeeds.map((s, k) => ({
+      index: k,
+      cells: 0,
+      biomes: new Array<number>(biomeKinds).fill(0),
+      aridCells: arid[k],
+      highCells: 0,
+      meanElev: 0,
+      meanTemp: 0,
+      remoteness: k === 0 ? 0 : Number.isFinite(far[s]) && farMax > 0 ? far[s] / farMax : 1,
+      towns: 0,
+    }))
+    for (let i = 0; i < N; i++) {
+      const k = cultRaster[i]
+      if (k < 0) continue
+      const r = regions[k]
+      r.cells++
+      ;(r.biomes as number[])[biome[i]]++
+      if (elev[i] > HIGHLAND_KM) r.highCells++
+      r.meanElev += elev[i]
+      r.meanTemp += temperature[i]
+    }
+    for (const r of regions) {
+      r.meanElev /= Math.max(1, r.cells)
+      r.meanTemp /= Math.max(1, r.cells)
+    }
+    for (const l of labels) {
+      if (!isSettlement(l)) continue
+      const c = county[Math.floor(l.y) * W + Math.floor(l.x)]
+      if (c >= 0) regions[counties[c].culture].towns++
+    }
+    specs = setting.cultures(regions, { style: worldStyle })
+    if (specs.length !== nK) throw new Error(`世界观 ${setting.id} 的 cultures 规则返回了 ${specs.length} 项，文化区有 ${nK} 个`)
+  }
   const cultures: CultureBase[] = cultSeeds.map((_, k) => {
+    const p = cPole.pole[k]
+    const place = { color: cColor[k], x: p >= 0 ? p % W : 0, y: p >= 0 ? Math.floor(p / W) : 0, area: cPole.area[k], room: cPole.room[k] }
+    if (specs) return { naming: specs[k].naming, polity: specs[k].polity, town: specs[k].town, ...place }
     // 文化比命名风格多时，多出来的用池子里的第一种
     const naming: NamingStyle = k === 0 ? worldStyle : (others[k - 1] ?? setting.naming[0])
     const town: TownCulture = setting.townCulture({ naming, aridCells: arid[k], cells: cPole.area[k] })
-    const p = cPole.pole[k]
-    return { naming, polity: setting.polity[naming], town, color: cColor[k], x: p >= 0 ? p % W : 0, y: p >= 0 ? Math.floor(p / W) : 0, area: cPole.area[k], room: cPole.room[k] }
+    return { naming, polity: setting.polity[naming], town, ...place }
   })
   const rules = cultures.map((c) => polities.get(c.polity).rule)
   const rule = (k: number) => rules[k]

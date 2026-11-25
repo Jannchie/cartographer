@@ -142,9 +142,11 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     }
   }
   const realm = map ? map.realm.slice() : new Int16Array(N).fill(-1)
-  // 各文化各用一个取名器：主体文化（0 号）沿用世界的取名器，其余文化另起一种语言
-  const namers = map ? map.cultures.map((c, k) => (k === 0 ? namer : new Namer({ seed: p.seed, naming: c.naming, setting: p.setting }, new RNG(hashString(`${p.seed}|culture${k}`)), `|culture${k}`))) : []
-  const realms: Realm[] = map ? map.realms.map((r, i) => ({ ...r, ...tri(namers[r.culture].name('realm', map.hints[i])) })) : []
+  // 各文化各用一个取名器：主体文化（0 号）沿用世界的取名器，其余文化另起一种语言。
+  // 世界观有整体规则时，文化的命名风格可以在池子之外，直接按规则给的用；否则仍按池子解析
+  const namers = map ? map.cultures.map((c, k) => (k === 0 ? namer : new Namer({ seed: p.seed, naming: c.naming, setting: p.setting }, new RNG(hashString(`${p.seed}|culture${k}`)), `|culture${k}`, setting.cultures ? c.naming : undefined))) : []
+  // 国名的通名：国家主体文化的制度有自己的国名模板就用它的（魔王领），否则用命名风格的
+  const realms: Realm[] = map ? map.realms.map((r, i) => ({ ...r, ...tri(namers[r.culture].name('realm', map.hints[i], polities.get(map.cultures[r.culture].polity).realm)) })) : []
   const genName = namer.name('world')
   // 城镇按所在文化改名（地点编辑过就保留用户的名字）；主体文化的城镇名不变
   const original = labels.map((l) => l.name)

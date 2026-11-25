@@ -34,6 +34,18 @@ const cartography: PluginManifest = {
   },
 }
 
+/** 日式异世界：一个可停用的世界观插件。人类的城借用 classic 的西式文明，所以依赖 classic；聚落图与沙盘的配色来自 cartography */
+const isekai: PluginManifest = {
+  id: 'isekai',
+  name: { zh: '异世界', en: 'Isekai', ja: '異世界' },
+  desc: {
+    zh: '世界观「异世界」：片假名地名的人类王国，按地理分布的精灵、矮人、兽人，以及唯一的魔王领；贵族制、部族制、魔王领三种制度',
+    en: 'The "Isekai" setting: human kingdoms with katakana place names; elves, dwarves and beastfolk placed by geography; a single Demon Realm; and three polities (aristocratic, tribal, Demon Realm)',
+    ja: '世界観「異世界」：カタカナ地名の人間の王国、地理に応じて配されるエルフ・ドワーフ・獣人、ただ一つの魔王領。制度は貴族制・部族制・魔王領の三種',
+  },
+  requires: ['classic', 'cartography'],
+}
+
 /** 示例插件：只在开发构建里出现，用来验证启停与缺失引用的处理 */
 const sample: PluginManifest = {
   id: 'sample',
@@ -50,4 +62,4 @@ const sample: PluginManifest = {
 // 只在开发构建里出现的插件按 import.meta.env?.DEV 判断（离线脚本里没有 import.meta.env，按非开发构建处理）。
 // 入口表里同样就地写这个判断，不从这里导出一个常量共用：打包器只在同一个模块里把它折叠成常量，
 // 跨模块引用时示例插件的入口会被打进生产构建
-export const PLUGINS: readonly PluginManifest[] = [classic, cartography, ...(import.meta.env?.DEV ? [sample] : [])]
+export const PLUGINS: readonly PluginManifest[] = [classic, cartography, isekai, ...(import.meta.env?.DEV ? [sample] : [])]

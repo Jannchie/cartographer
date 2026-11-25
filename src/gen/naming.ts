@@ -158,9 +158,13 @@ export class Namer {
   private rng: RNG
   private used = new Set<string>()
 
-  /** salt：另起一批名字（区域、海湾）时用自己的随机序列，不改动原有地名的抽取顺序 */
-  constructor(p: { seed: string; naming?: NamingStyle; setting: string }, rNames: RNG, salt = '') {
-    this.style = resolveNaming(p)
+  /**
+   * salt：另起一批名字（区域、海湾）时用自己的随机序列，不改动原有地名的抽取顺序。
+   * style：已经定下的命名风格，不再按参数解析。各文化的取名器用它——世界观的整体规则（SettingDef.cultures）
+   * 可以给文化分配池子之外的命名风格（各种族各自的地名），这些风格选不到、"随机"也抽不到，只能这样指定
+   */
+  constructor(p: { seed: string; naming?: NamingStyle; setting: string }, rNames: RNG, salt = '', style?: NamingStyle) {
+    this.style = style ?? resolveNaming(p)
     this.def = namingStyles.get(this.style)
     this.rng = new RNG(hashString(`${p.seed}|naming|${this.style}${salt}`))
     this.root = this.def.roots({ rng: this.rng, rNames })
@@ -173,9 +177,10 @@ export class Namer {
   /**
    * 取一个地名。variant 用来挑通名模板（如 "X Mountains" / "The Xs"），
    * 不给就用自己的随机数；西幻沿用调用方原来的随机数，旧种子的名字不变。
+   * templates：不用这种命名风格的通名模板、改用给定的（制度自己的国名模板）；词根仍按 kind 取
    */
-  name(kind: NameKind | 'saltLake', variant?: number): Tri {
-    return this.pick(kind === 'saltLake' ? 'lake' : kind, this.templates(kind), variant)
+  name(kind: NameKind | 'saltLake', variant?: number, templates?: Tpl[]): Tri {
+    return this.pick(kind === 'saltLake' ? 'lake' : kind, templates ?? this.templates(kind), variant)
   }
 
   /** 海湾名：各命名风格一律用"湾"（海的通名模板里未必有） */

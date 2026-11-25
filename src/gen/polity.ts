@@ -1,4 +1,5 @@
 import { defineSlot, registryOf } from '../kernel'
+import type { Tpl } from './naming'
 import { defaultPolity, type SettingDef } from './setting'
 
 /**
@@ -48,6 +49,8 @@ export interface PolityDef {
   rule: PolityRule
   /** 中层政区的名字：治所基本单位的名字加上制度的称谓 */
   provinceName(seat: Named): { name: string; zh: string; ja: string }
+  /** 这种制度的国家自己的国名模板（如"魔王领 #"）；不给就用国家主体文化的命名风格的国名模板 */
+  realm?: Tpl[]
 }
 
 /** 扩展点：制度，按 id 登记 */

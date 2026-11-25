@@ -6,6 +6,7 @@ import classic from './classic/settlement'
 export const SETTLEMENT: LayerTable = {
   classic: eager(classic),
   cartography: eager(cartography),
+  isekai: () => import('./isekai/settlement'),
   // 示例插件只在开发构建里出现（与清单一致；判断要就地写，见 manifest.ts）
   ...(import.meta.env?.DEV ? { sample: () => import('./sample/settlement') } : {}),
 }

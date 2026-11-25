@@ -8,6 +8,7 @@ import classic from './classic/world'
  */
 export const WORLD: LayerTable = {
   classic: eager(classic),
+  isekai: () => import('./isekai/world'),
   // 示例插件只在开发构建里出现（与清单一致；判断要就地写，见 manifest.ts）
   ...(import.meta.env?.DEV ? { sample: () => import('./sample/world') } : {}),
 }
