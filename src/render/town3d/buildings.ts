@@ -10,17 +10,13 @@ import { MAT, WIN, block, cone, flat, frameOf, gable, lathe, prism, rectOf, shad
 import type { Facade } from './facade'
 import { groupOf } from './groups'
 import { finial, hashOf, type Site } from './kit'
-import { western } from './western'
-import { eastern } from './eastern'
-import { wa } from './wa'
-import { islamic } from './islamic'
 import { EARTH, GILT, ROOF, STONE, STONE_DARK, TIMBER, frac, hex, pick, type Ctx } from './shared'
 
 /**
  * 一栋建筑。st 用来把带部件名的建筑并成组（见 groups.ts）；不给时各部件各自按尺寸推导
  */
 export function building(c: Ctx, b: Building, fac: Facade, st?: Settlement) {
-  const { w, culture, H } = c
+  const { w, H } = c
   const poly = b.poly
   // 地基：脚下最低处往下埋 0.6 米，墙顶按最高处算（坡地上的房子不悬空）
   let g0 = Infinity
@@ -52,20 +48,18 @@ export function building(c: Ctx, b: Building, fac: Facade, st?: Settlement) {
   if (b.kind === 'shed') return shed(c, s)
   if (b.kind === 'magic') return magic(c, s)
   const g = st ? groupOf(st, b) : null
-  if (culture === 'western') western(c, s, g)
-  else if (culture === 'eastern') eastern(c, s, g)
-  else if (culture === 'wa') wa(c, s, g)
-  else islamic(c, s, g)
+  c.kit.building(c, s, g)
 }
 
 /** 棚屋、仓房；很小的是墓碑（墓地里一块块的"棚"） */
 function shed(c: Ctx, s: Site) {
-  const { w, culture } = c
+  const { w } = c
   const { b, f, fac, g1, base, tone, t2, t3 } = s
   if (f.a < 1.3) return grave(c, s)
-  const adobe = culture === 'islamic'
-  // 和式的土藏：白壁、瓦顶、厚墙的仓
-  const kura = culture === 'wa' && f.b > 2.2 && t3 > 0.55
+  const look = c.kit.shed
+  const adobe = !!look.adobe
+  // 土藏：白壁、瓦顶、厚墙的仓
+  const kura = !look.adobe && !!look.kura && f.b > 2.2 && t3 > 0.55
   const y = g1 + (kura ? 4.4 : 2.5 + t2 * 0.5)
   const col = adobe ? pick(EARTH, t3) : kura ? hex('#e6e1d4') : shade(TIMBER, 0.9 + t3 * 0.3)
   w.c = col
@@ -73,42 +67,25 @@ function shed(c: Ctx, s: Site) {
   w.gableFace = adobe ? MAT.adobe : kura ? MAT.plaster : MAT.board
   walls(w, b.poly, base, y, { win: [], door: fac.door })
   w.face = 0
-  if (adobe) {
+  if (look.adobe) {
     flat(w, f, y, shade(col, 0.95), col, 0.3)
     return
   }
-  const east = culture !== 'western'
   w.roofTh = kura ? 0.26 : 0.1
-  w.roofFace = kura ? MAT.tileEast : east ? (t2 > 0.5 ? MAT.shingle : MAT.tileEast) : t2 > 0.6 ? MAT.thatch : MAT.shingle
-  const roof = w.roofFace === MAT.tileEast ? pick(culture === 'wa' ? ROOF.kawara : ROOF.grey, tone) : w.roofFace === MAT.thatch ? pick(ROOF.thatch, tone) : pick(ROOF.shingle, tone)
+  w.roofFace = kura ? MAT.tileEast : t2 > look.roof.split ? look.roof.hi : look.roof.lo
+  const roof = w.roofFace === MAT.tileEast ? pick(look.tile, tone) : w.roofFace === MAT.thatch ? pick(ROOF.thatch, tone) : pick(ROOF.shingle, tone)
   if (w.roofFace === MAT.thatch) w.roofTh = 0.3
-  gable(w, f, y, kura ? 0.62 : east ? 0.5 : 0.75, kura ? 0.45 : 0.28, roof, col, kura ? 'curved' : 'straight')
+  gable(w, f, y, kura ? 0.62 : look.pitch, kura ? 0.45 : 0.28, roof, col, kura ? 'curved' : 'straight')
 }
 
-/** 墓：西式的墓石与立碑，东亚的碑与土冢，伊斯兰的低墓台 */
+/** 墓：文明自己的做法（碑与土冢、墓石，见 GraveKit.marker），否则是一方墓台与立在一头的碑 */
 function grave(c: Ctx, s: Site) {
-  const { w, culture } = c
+  const { w } = c
   const { f, g1, base, t2 } = s
+  const kit = c.kit.grave
   w.face = MAT.stone
-  if (culture === 'eastern') {
-    // 土冢与碑
-    w.c = hex('#7d8a5c')
-    w.face = MAT.plain
-    lathe(w, f.c, g1 - 0.1, [[Math.min(f.a, f.b) * 0.95, 0], [Math.min(f.a, f.b) * 0.7, 0.35], [0, 0.6]], 8)
-    w.c = STONE
-    w.face = MAT.stone
-    prism(w, rectOf({ ...f, c: [f.c[0] + f.u[0] * f.a * 0.9, f.c[1] + f.u[1] * f.a * 0.9], a: 0.08, b: 0.22 }), base, g1 + 0.8)
-    return
-  }
-  if (culture === 'wa') {
-    // 墓石：台座上一根方柱
-    w.c = shade(STONE, 0.9 + t2 * 0.2)
-    const sq = { ...f, a: 0.3, b: 0.3 }
-    prism(w, rectOf(sq), base, g1 + 0.25)
-    prism(w, rectOf({ ...f, a: 0.14, b: 0.14 }), g1 + 0.25, g1 + 0.95 + t2 * 0.3)
-    return
-  }
-  w.c = shade(culture === 'islamic' ? hex('#d9d2c0') : STONE, 0.88 + t2 * 0.2)
+  if (kit.marker) return kit.marker(c, s)
+  w.c = shade(kit.stone ?? STONE, 0.88 + t2 * 0.2)
   // 墓台与立在一头的碑
   prism(w, rectOf({ ...f, a: f.a * 0.85, b: f.b * 0.7 }), base, g1 + 0.18)
   const head = { ...f, c: [f.c[0] - f.u[0] * f.a * 0.8, f.c[1] - f.u[1] * f.a * 0.8] as [number, number], a: 0.07, b: f.b * 0.6 }

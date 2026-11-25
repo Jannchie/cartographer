@@ -1,4 +1,4 @@
-import { eastAsian } from './culture'
+import { traitsOf } from './culture'
 import { contours, simplify, type Ring } from '../render/atlas/svg/contour'
 import { DisplayList, rasterArea, rasterPoly, type BBox, type Fill, type Item, type LabelArea, type PathItem, type Stroke } from '../render/atlas/svg/displayList'
 import { blur } from '../gen/util'
@@ -823,7 +823,7 @@ function crossingLayers(R: Painter, st: Settlement, th: SettleTheme) {
       ]
       R.poly(
         boat.map((p) => [p[0], p[1]] as P),
-        { color: th.buildings('western').shed[0], alpha: 1 },
+        { color: th.buildings().shed[0], alpha: 1 },
         { color: th.ink, alpha: 1, width: 0.8 },
       )
       // 两岸的小码头
@@ -864,7 +864,7 @@ function boatLayers(R: Painter, st: Settlement, th: SettleTheme) {
     if (b.len > 10) masts.push([at(L * 0.1, -w * 1.9), at(L * 0.1, w * 1.9)])
   }
   if (th.shadow) R.polys(hulls.map((h) => h.map(([x, y]) => [x + 1, y + 1] as P)), { color: th.shadow, alpha: 1 })
-  R.polys(hulls, { color: th.buildings('western').shed[0], alpha: 1 }, { color: th.ink, alpha: 1, width: 0.7, join: 'round' })
+  R.polys(hulls, { color: th.buildings().shed[0], alpha: 1 }, { color: th.ink, alpha: 1, width: 0.7, join: 'round' })
   R.lines(masts, { color: th.ink, alpha: 0.9, width: 1.1, cap: 'round' })
 }
 
@@ -1860,7 +1860,7 @@ function titleBlock(list: DisplayList, st: Settlement, th: SettleTheme, X: numbe
   const ty = Y + 22
   // 东式城名用毛笔字（中文）；英文用标题字体
   const title = settlementTitle(st, lg)
-  const zhFont = lg === 'en' ? `600 40px ${th.font.title}` : eastAsian(st.params.culture) && th.brushTitle !== false && lg === 'zh' ? `400 44px "Ma Shan Zheng", ${th.font.label}` : `600 40px ${th.font.label}`
+  const zhFont = lg === 'en' ? `600 40px ${th.font.title}` : traitsOf(st.params.culture).brushTitle && th.brushTitle !== false && lg === 'zh' ? `400 44px "Ma Shan Zheng", ${th.font.label}` : `600 40px ${th.font.label}`
   measurer.font = zhFont
   const tw = Math.max(measurer.measureText(title).width, 200)
   const bw = tw + 60
@@ -2010,7 +2010,7 @@ export async function ensureSettleFonts(st: Settlement, style: SettleStyleId, lg
   const text = [st.nameZh, st.name, st.nameJa, ...st.labels.map((l) => l.text[lg] + (l.sub?.[lg] ?? '')), SIZE_NAME[lg][st.params.size], CAPITAL_NAME[lg], POP_TEXT[lg]('0123456789,'), tr('区划', lg), ...LAND_USES.map((d) => tr(d.name, lg))].join('')
   const fams = new Set<string>()
   for (const f of [th.font.title, th.font.label]) for (const x of langFont(f, lg).split(',')) if (x.includes('"')) fams.add(x.trim().replace(/^italic /, ''))
-  if (eastAsian(st.params.culture) || th.seal) fams.add('"Ma Shan Zheng"')
+  if (traitsOf(st.params.culture).brushTitle || th.seal) fams.add('"Ma Shan Zheng"')
   const loads: Promise<unknown>[] = []
   for (const fam of fams) for (const w of ['400', '600', 'italic 400']) loads.push(document.fonts.load(`${w} 20px ${fam}`, text))
   // 字体加载失败回退系统字体

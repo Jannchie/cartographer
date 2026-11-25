@@ -11,7 +11,8 @@
  * 尺寸以冠径为 1，外形与 treeSpecies.ts 的远景轮廓一致。
  */
 import { hash3, mulberry32 } from '../../gen/rng'
-import { smoothstep } from '../../gen/util'
+import { lerp, smoothstep } from '../../gen/util'
+import { hex } from '../palette'
 import { SP, SPECIES } from './treeSpecies'
 
 type V3 = [number, number, number]
@@ -32,19 +33,17 @@ export interface TreeMeshData {
 }
 
 // —— 随机数与噪声 ——
-const fade = (t: number) => t * t * (3 - 2 * t)
 /** 三维值噪声（0 ~ 1） */
 function noise3(x: number, y: number, z: number) {
   const i = Math.floor(x)
   const j = Math.floor(y)
   const k = Math.floor(z)
-  const u = fade(x - i)
-  const v = fade(y - j)
-  const w = fade(z - k)
-  const l = (a: number, b: number, t: number) => a + (b - a) * t
-  return l(
-    l(l(hash3(i, j, k), hash3(i + 1, j, k), u), l(hash3(i, j + 1, k), hash3(i + 1, j + 1, k), u), v),
-    l(l(hash3(i, j, k + 1), hash3(i + 1, j, k + 1), u), l(hash3(i, j + 1, k + 1), hash3(i + 1, j + 1, k + 1), u), v),
+  const u = smoothstep(0, 1, x - i)
+  const v = smoothstep(0, 1, y - j)
+  const w = smoothstep(0, 1, z - k)
+  return lerp(
+    lerp(lerp(hash3(i, j, k), hash3(i + 1, j, k), u), lerp(hash3(i, j + 1, k), hash3(i + 1, j + 1, k), u), v),
+    lerp(lerp(hash3(i, j, k + 1), hash3(i + 1, j, k + 1), u), lerp(hash3(i, j + 1, k + 1), hash3(i + 1, j + 1, k + 1), u), v),
     w,
   )
 }
@@ -59,10 +58,6 @@ const norm = (a: V3): V3 => {
 }
 const lerp3 = (a: V3, b: V3, t: number): V3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
-const hexRGB = (s: string): RGB => {
-  const n = parseInt(s.slice(1, 7), 16)
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
-}
 const WHITE: RGB = [255, 255, 255]
 
 // —— 细分二十面体（单位球） ——
@@ -784,7 +779,7 @@ export function treeMesh(species: number, lod: TreeLod): TreeMeshData {
   if (!m) {
     // 各级用同一个种子：团块的位置、大小一致，只是细分不同
     const b = new Builder(977 + species * 131, lod)
-    MAKERS[species](b, hexRGB(SPECIES[species].bark))
+    MAKERS[species](b, hex(SPECIES[species].bark))
     m = b.finish()
     CACHE.set(key, m)
   }

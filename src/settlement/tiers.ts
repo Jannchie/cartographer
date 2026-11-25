@@ -1,15 +1,13 @@
 import { clamp } from '../gen/util'
+import { cultureOf } from './culture'
 import { emitArea, hashAt, isFree, memo, type Ctx } from './ctx'
 import type { FeatureEnv, FeatureId } from './features'
 import { add, area, bboxOf, centroid, circlePoly, convexOverlap, dist, insetConvex, obb, pointInPoly, rect, type P, type Poly } from './geom'
 import { isVillage } from './scale'
 import type { Building, BuildingKind, Culture, Tier, Wall, Ward } from './types'
-import { addGroup, inside, place, plantTree } from './wards'
+import { inside, place, plantTree } from './wards'
 import { attempt, checkpoint, clearYards, demolish, dwelling, removable, rollback, type Checkpoint } from './undo'
-import { westChurch } from './compose/church'
-import { placeMosque } from './plans/medina'
 import { park } from './parks'
-import { villageShrine } from './styles/wa'
 import { addWall, connectDoor } from './walls'
 import * as dmath from '../gen/dmath'
 
@@ -23,7 +21,80 @@ import * as dmath from '../gen/dmath'
  * small 与 micro 在每块住人的片区盖好之后撒进去（wardExtras），数量随住户与文明：和风的祠最多，
  * 西式约几百户一座堂区教堂。取舍都按位置哈希（片区中心、房子中心），人口变了已有的不挪；
  * 拆掉的人家退回民居预算（后面的片区多盖几户），人口仍对得上目标。
+ *
+ * 这里是撒的规矩（多少户一座、落在哪、拆哪户）与各文明共用的两种（街心花园、设防庄园的围墙）；
+ * 各文明自己的 small（村社、堂区教堂、祠堂、街区清真寺）与 micro（路边的祠、神龛）怎么盖，
+ * 写在文明定义的 tiers 里（CultureTiers）。
  */
+
+/** 文明自己的 small：占片区一角的宗教小地标 */
+export interface SmallLandmark {
+  /** 种类名（间距检查、统计用） */
+  kind: string
+  /** 占多大：沿街面宽 × 进深（米） */
+  size: [number, number]
+  /** 抽到它的份额：乡下（其余是设防庄园）、城里（其余是街心花园；村落里总是它） */
+  rural: number
+  town: number
+  /** 在地块上盖：front 是正面（朝街）的方向，key 是取名用的位置键；盖不成返回 false（调用方整个撤回） */
+  build(ctx: Ctx, poly: Poly, front: P, key: string): boolean
+}
+
+/** 设防庄园（small 的城堡）的样式：一圈小围墙，门朝路 */
+export interface ManorForm {
+  /** 围墙里的建筑：h 是院子的半边长，box(a0, a1, s0, s1) 给出"进深 a、横向 s"范围的矩形（a 向里为正） */
+  parts(h: number, box: (a0: number, a1: number, s0: number, s1: number) => Poly): [Poly, BuildingKind][]
+  /** 角上的塔：四角都有、只在一条对角线上、没有 */
+  towers: 'all' | 'diagonal' | 'none'
+  /** 围墙：厚度（米）与做法（石墙、木栅土垒） */
+  thick: number
+  wall: Wall['kind']
+  /** 主楼（parts 里的 keep）的叫法 */
+  keepRole?: string
+  /** 围墙背后种一排树 */
+  treeRow?: boolean
+}
+
+/** micro 的落脚处：一户宅地（城里）或大路边的一小块地（城外） */
+export interface MicroSite {
+  /** 中心、朝路的方向 */
+  c: P
+  d: P
+  /** 局部坐标：a 朝路为正，s 向左为正 */
+  at(a: number, s: number): P
+  /** 宅地的短边（米） */
+  room: number
+  /** 在城外的大路边（而不是拆了一户人家腾出的宅地） */
+  outside: boolean
+  /** 这一处在乡下（城外、村里） */
+  rural(): boolean
+  /** 放一栋小建筑（不压路、水、别的建筑才放得下） */
+  put(poly: Poly, kind: BuildingKind, role?: string): boolean
+}
+
+/** 文明定义里规模档的部分 */
+export interface CultureTiers {
+  /** 多少户一座：micro（路边的祠、神龛）、small（村社、堂区教堂、祠堂、街区清真寺） */
+  rate: { micro: number; small: number }
+  /** micro 按多大的格点撒（米，缺省 40）；同类的 small、同类的祠之间至少隔多远（米，缺省 220、36） */
+  microCell?: number
+  smallGap?: number
+  shrineGap?: number
+  small: SmallLandmark
+  manor: ManorForm
+  /** 占一户宅地的祠、神龛、路边的十字架（micro）；放不下返回 false */
+  wayside(ctx: Ctx, site: MicroSite): boolean
+  /** 口袋花园当中是喷泉还是井 */
+  pocketGarden: 'fountain' | 'well'
+  /** 塔楼民居：乡下多少户一座、边长（米）与叫法；不给就没有 */
+  towerHouse?: { rate: number; size: number; role: string }
+}
+
+/** 塔楼庄园的布置：一座方塔（keep）、一座厅 */
+export const keepManor: ManorForm['parts'] = (h, box) => [
+  [box(h * 0.2, h * 0.2 + 8.5, -h * 0.7, -h * 0.7 + 8.5), 'keep'],
+  [box(h * 0.3, h * 0.85, -h * 0.05, h * 0.75), 'hall'],
+]
 
 // —————————————————————— grand：合成的大地标 ——————————————————————
 
@@ -60,22 +131,21 @@ export function grandSize(ctx: Ctx, id: FeatureId): number {
 
 // —————————————————————— small 与 micro ——————————————————————
 
-/** 各文明多少户一座：micro（路边的祠、神龛）、small（村社、堂区教堂、祠堂、街区清真寺） */
-const RATE: Record<Culture, { micro: number; small: number }> = {
-  wa: { micro: 26, small: 200 },
-  eastern: { micro: 55, small: 280 },
-  western: { micro: 95, small: 300 },
-  islamic: { micro: 85, small: 170 },
-}
-/** 口袋花园（城镇）、塔楼民居（乡下）：多少户一处 */
+/** 口袋花园（城镇）：多少户一处 */
 const GARDEN_RATE = 320
-const TOWER_RATE: Record<Culture, number> = { western: 90, eastern: 110, islamic: 100, wa: Infinity }
+/** 文明没有另给时：micro 的格距，同类 small、同类祠的最小间距（米） */
+const MICRO_CELL = 40
+const SMALL_GAP = 220
+const SHRINE_GAP = 36
 
 /**
  * 撒 small / micro 要拆掉的住户约占几成（祠、礼拜龛占一户，村社、堂区教堂占片区一角约六七户）：
  * 占用率按这个多留一点余量（见 generate.ts 的 occupancy），拆掉的住户退回预算后外围还有地方盖，人口仍对得上
  */
-export const tierReserve = (c: Culture) => 1 + 1.4 / RATE[c].micro + 8 / RATE[c].small + 1 / GARDEN_RATE
+export function tierReserve(c: Culture) {
+  const rate = cultureOf(c).tiers.rate
+  return 1 + 1.4 / rate.micro + 8 / rate.small + 1 / GARDEN_RATE
+}
 
 /** 这次生成里撒下的 small / micro（间距检查、统计用） */
 export interface TierRecord {
@@ -102,8 +172,8 @@ export function wardExtras(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint) {
   const b0 = s.len.get('buildings')!
   const mine = ctx.out.buildings.slice(b0).filter(dwelling)
   if (!mine.length) return
-  const cult = ctx.p.culture
-  const rate = RATE[cult]
+  const tiers = cultureOf(ctx.p.culture).tiers
+  const rate = tiers.rate
   // 村里的人家不算城里的人口（units 为 0），按一栋一户算
   const hh = mine.reduce((n, b) => n + Math.max(1, b.units ?? 1), 0)
   const rural = ruralWard(ctx, ward)
@@ -114,20 +184,20 @@ export function wardExtras(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint) {
   const pSmall = Math.min(0.85, hh / rate.small)
   if (hashAt(ctx, snap(ctx, c), 'tiers.small') < pSmall) {
     const kind = smallKind(ctx, c, rural)
-    const gap = kind === 'garden' ? 160 : cult === 'wa' ? 150 : 220
+    const gap = kind === 'garden' ? 160 : (tiers.smallGap ?? SMALL_GAP)
     if (kind && !tierLog(ctx).some((r) => r.tier === 'small' && r.kind === kind && dist(r.p, c) < gap)) smallAt(ctx, ward, block, s, kind)
   }
-  // —— micro：片区里按以地图中心对齐的格点撒（和风 28 米一格，别处 40 米），每格按格点的哈希定有没有、是什么，
+  // —— micro：片区里按以地图中心对齐的格点撒（格距随文明：和风 28 米一格，别处 40 米），每格按格点的哈希定有没有、是什么，
   // 落在离格点最近的一户上。城长大时同一格总在同一处附近（房子挪了几米，祠也只挪几米） ——
   const town = !rural && !isVillage(ctx.p.size)
   const alive = new Set(ctx.out.buildings.slice(b0))
-  const g = cult === 'wa' ? 28 : 40
+  const g = tiers.microCell ?? MICRO_CELL
   const pts = cells(ctx, block, g)
   if (!pts.length) return
   const per = hh / pts.length
   const pm = per / rate.micro
   const pg = town ? per / GARDEN_RATE : 0
-  const pt = rural ? per / TOWER_RATE[cult] : 0
+  const pt = rural && tiers.towerHouse ? per / tiers.towerHouse.rate : 0
   const used = new Set<Building>()
   for (const q of pts) {
     const h = hashAt(ctx, q, 'tiers.micro')
@@ -136,7 +206,7 @@ export function wardExtras(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint) {
     let best: (typeof cands)[number] | null = null
     for (const x of cands) if (alive.has(x.b) && !used.has(x.b) && dist(x.c, q) < g * 0.7 && (!best || dist(x.c, q) < dist(best.c, q))) best = x
     if (!best) continue
-    const gap = kind === 'shrine' ? (cult === 'wa' ? 24 : 36) : kind === 'garden' ? 100 : 140
+    const gap = kind === 'shrine' ? (tiers.shrineGap ?? SHRINE_GAP) : kind === 'garden' ? 100 : 140
     if (tierLog(ctx).some((r) => r.tier === 'micro' && r.kind === kind && dist(r.p, best!.c) < gap)) continue
     used.add(best.b)
     microAt(ctx, best.b, kind, b0)
@@ -165,32 +235,21 @@ function snap(ctx: Ctx, q: P): P {
   return [ox + Math.round((q[0] - ox) / g) * g, oy + Math.round((q[1] - oy) / g) * g]
 }
 
-type SmallKind = 'shrine' | 'church' | 'ci' | 'masjid' | 'garden' | 'manor'
+/** small 的种类：文明自己的那一种（SmallLandmark.kind），或共用的街心花园、设防庄园 */
+type SmallKind = string
 type MicroKind = 'shrine' | 'garden' | 'tower'
 
 function smallKind(ctx: Ctx, c: P, rural: boolean): SmallKind | null {
   const h = hashAt(ctx, snap(ctx, c), 'tiers.smallKind')
   const town = !isVillage(ctx.p.size)
-  switch (ctx.p.culture) {
-    case 'wa':
-      return rural ? (h < 0.88 ? 'shrine' : 'manor') : h < 0.78 || !town ? 'shrine' : 'garden'
-    case 'western':
-      return rural ? (h < 0.72 ? 'church' : 'manor') : h < 0.62 || !town ? 'church' : 'garden'
-    case 'eastern':
-      return rural ? (h < 0.75 ? 'ci' : 'manor') : h < 0.7 || !town ? 'ci' : 'garden'
-    case 'islamic':
-      return rural ? (h < 0.8 ? 'masjid' : 'manor') : h < 0.72 || !town ? 'masjid' : 'garden'
-  }
+  const own = cultureOf(ctx.p.culture).tiers.small
+  return rural ? (h < own.rural ? own.kind : 'manor') : h < own.town || !town ? own.kind : 'garden'
 }
 
 // —————————————————————— small ——————————————————————
 
-/** 各种 small 占多大（沿街面宽 × 进深） */
-const SMALL_SIZE: Record<SmallKind, [number, number]> = {
-  shrine: [26, 36],
-  church: [24, 38],
-  ci: [20, 27],
-  masjid: [24, 27],
+/** 共用的两种 small 占多大（沿街面宽 × 进深）；文明自己的那一种见 SmallLandmark.size */
+const SMALL_SIZE: Record<'garden' | 'manor', [number, number]> = {
   garden: [26, 28],
   manor: [26, 26],
 }
@@ -241,7 +300,8 @@ function smallSite(ctx: Ctx, block: Poly, s: Checkpoint, w: number, d: number): 
 }
 
 function smallAt(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint, kind: SmallKind) {
-  const [w, d] = SMALL_SIZE[kind]
+  const own = cultureOf(ctx.p.culture).tiers.small
+  const [w, d] = kind === 'garden' || kind === 'manor' ? SMALL_SIZE[kind] : own.size
   // 盖不成就连拆掉的人家一起撤回
   const cp = checkpoint(ctx)
   const site = smallSite(ctx, block, s, w, d)
@@ -254,21 +314,6 @@ function smallAt(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint, kind: SmallKi
   let ok = false
   try {
     switch (kind) {
-      case 'shrine':
-        ok = !!villageShrine(ctx, poly, front, key)
-        break
-      case 'church':
-        ok = westChurch(ctx, poly, insetConvex(poly, 2.5), { fill: false, key })
-        break
-      case 'ci':
-        ok = ancestralHall(ctx, poly, front, key)
-        break
-      case 'masjid': {
-        const m = placeMosque(ctx, insetConvex(poly, 1), poly, 26, 22, false)
-        if (m) ctx.out.landmarks.push({ p: centroid(m), name: ctx.namer.sacred('masjid', key), kind: 'temple' })
-        ok = !!m
-        break
-      }
       case 'garden': {
         const g0 = ctx.out.greens.length
         park(ctx, ward, poly)
@@ -278,6 +323,8 @@ function smallAt(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint, kind: SmallKi
       case 'manor':
         ok = manor(ctx, poly, front, key)
         break
+      default:
+        ok = own.build(ctx, poly, front, key)
     }
   } finally {
     ctx.tier = tier0
@@ -286,40 +333,13 @@ function smallAt(ctx: Ctx, ward: Ward, block: Poly, s: Checkpoint, kind: SmallKi
   else rollback(ctx, cp)
 }
 
-/** 祠堂 / 小庙（东方的 small）：一圈院墙，门屋、正堂、两厢，院里一棵树 */
-function ancestralHall(ctx: Ctx, poly: Poly, front: P, key: string): boolean {
-  const c = centroid(poly)
-  const f: P = [-front[0], -front[1]]
-  const l: P = [-f[1], f[0]]
-  const b = obb(poly)
-  const W = Math.min(b.len, b.wid) - 3
-  const D = Math.max(b.len, b.wid) - 3
-  const at = (a: number, s: number): P => [c[0] + f[0] * a + l[0] * s, c[1] + f[1] * a + l[1] * s]
-  const box = (a0: number, a1: number, s0: number, s1: number): Poly => [at(a0, s0), at(a1, s0), at(a1, s1), at(a0, s1)]
-  const wall = box(-D / 2, D / 2, -W / 2, W / 2)
-  const parts: [Poly, BuildingKind][] = [
-    [box(-D / 2 + 0.5, -D / 2 + 5, -W * 0.22, W * 0.22), 'hall'],
-    [box(D / 2 - 9.5, D / 2 - 0.8, -W * 0.36, W * 0.36), 'temple'],
-    [box(-D / 2 + 8, D / 2 - 12, -W / 2 + 0.6, -W / 2 + 4.6), 'hall'],
-    [box(-D / 2 + 8, D / 2 - 12, W / 2 - 4.6, W / 2 - 0.6), 'hall'],
-  ]
-  if (!parts.every(([p]) => inside(p, wall) && isFree(ctx, p, { pad: 0.3 }))) return false
-  addGroup(ctx, parts, 0.3)
-  const main = ctx.out.buildings[ctx.out.buildings.length - 3]
-  main.role = '祠堂'
-  emitArea(ctx, 'enclosures', wall)
-  emitArea(ctx, 'plazas', box(-D / 2 + 5.5, D / 2 - 10, -W / 2 + 5, W / 2 - 5))
-  plantTree(ctx, at(0, 0), 3.2)
-  ctx.out.landmarks.push({ p: at(D / 2 - 5, 0), name: ctx.namer.sacred(isVillage(ctx.p.size) || ctx.p.size === 'town' ? 'tudi' : 'villageShrine', key), kind: 'shrine' })
-  return true
-}
-
 /**
  * 设防庄园（small 的城堡）：一圈小围墙（四角的塔或碉楼），当中一座塔楼、一座厅，门朝路。
- * 西式是塔楼庄园（tower house 与它的 barmkin），东方是土堡，和风是馆（土垒与板屋），伊斯兰是四角碉楼的堡（qasr / tighremt）。
+ * 样式随文明（ManorForm）：西式是塔楼庄园（tower house 与它的 barmkin），东方是土堡，和风是馆（土垒与板屋），
+ * 伊斯兰是四角碉楼的堡（qasr / tighremt）。
  */
 function manor(ctx: Ctx, poly: Poly, front: P, key: string): boolean {
-  const cult = ctx.p.culture
+  const form = cultureOf(ctx.p.culture).tiers.manor
   const c = centroid(poly)
   const f: P = [-front[0], -front[1]]
   const l: P = [-f[1], f[0]]
@@ -327,22 +347,7 @@ function manor(ctx: Ctx, poly: Poly, front: P, key: string): boolean {
   const at = (a: number, s: number): P => [c[0] + f[0] * a + l[0] * s, c[1] + f[1] * a + l[1] * s]
   const box = (a0: number, a1: number, s0: number, s1: number): Poly => [at(a0, s0), at(a1, s0), at(a1, s1), at(a0, s1)]
   const h = S / 2
-  const parts: [Poly, BuildingKind][] =
-    cult === 'wa'
-      ? [
-          [box(h * 0.05, h * 0.8, -h * 0.55, h * 0.35), 'hall'],
-          [box(-h * 0.5, -h * 0.05, h * 0.2, h * 0.75), 'shed'],
-        ]
-      : cult === 'eastern'
-        ? [
-            [box(h * 0.25, h * 0.85, -h * 0.6, h * 0.6), 'hall'],
-            [box(-h * 0.6, h * 0.1, -h * 0.85, -h * 0.5), 'house'],
-            [box(-h * 0.6, h * 0.1, h * 0.5, h * 0.85), 'house'],
-          ]
-        : [
-            [box(h * 0.2, h * 0.2 + 8.5, -h * 0.7, -h * 0.7 + 8.5), 'keep'],
-            [box(h * 0.3, h * 0.85, -h * 0.05, h * 0.75), 'hall'],
-          ]
+  const parts = form.parts(h, box)
   if (!parts.every(([p]) => isFree(ctx, p, { pad: 0.5 }))) return false
   // 围墙：一圈，正面当中留门
   const corners = [at(-h, -h), at(h, -h), at(h, h), at(-h, h)]
@@ -350,17 +355,17 @@ function manor(ctx: Ctx, poly: Poly, front: P, key: string): boolean {
   const g1 = at(-h, 2.2)
   const loop: P[] = [g1, corners[3], corners[2], corners[1], corners[0], g0]
   const solid = loop.map((_, i) => i !== loop.length - 1)
-  const towers = cult === 'wa' ? [] : cult === 'eastern' ? [corners[1], corners[3]] : corners
-  const thick = cult === 'western' || cult === 'islamic' ? 1.8 : 2.2
-  const wall: Wall = { loop, solid, towers, gates: [], kind: cult === 'wa' ? 'palisade' : 'stone', thickness: thick }
+  const towers = form.towers === 'none' ? [] : form.towers === 'diagonal' ? [corners[1], corners[3]] : corners
+  const thick = form.thick
+  const wall: Wall = { loop, solid, towers, gates: [], kind: form.wall, thickness: thick }
   for (let i = 0; i < loop.length; i++) if (solid[i] && ctx.corridors.hitsPoly([loop[i], loop[(i + 1) % loop.length]], thick / 2 + 0.3, ['road', 'river', 'wall'])) return false
-  for (const [p, k] of parts) place(ctx, p, k, { pad: 0.5 }, dwelling({ kind: k } as Building) ? { floors: 1, units: 0 } : { role: k === 'keep' ? (cult === 'islamic' ? '碉楼' : '塔楼') : undefined })
+  for (const [p, k] of parts) place(ctx, p, k, { pad: 0.5 }, dwelling({ kind: k } as Building) ? { floors: 1, units: 0 } : { role: k === 'keep' ? form.keepRole : undefined })
   addWall(ctx, wall, 'compound')
   // 门口接上路
   connectDoor(ctx, wall, at(-h, 0))
   ctx.occ.add(box(-h, h, -h, h))
   emitArea(ctx, 'plazas', box(-h + 1.5, h - 1.5, -h + 1.5, h - 1.5))
-  if (cult === 'wa') for (let k = 0; k < 8; k++) plantTree(ctx, at(h + 3, (k / 7 - 0.5) * S), 2.4)
+  if (form.treeRow) for (let k = 0; k < 8; k++) plantTree(ctx, at(h + 3, (k / 7 - 0.5) * S), 2.4)
   ctx.out.landmarks.push({ p: c, name: ctx.namer.sacred('manor', key), kind: 'shrine' })
   return true
 }
@@ -405,58 +410,22 @@ export function waysideAt(ctx: Ctx, c: P, d: P): boolean {
 }
 
 function microBuild(ctx: Ctx, b: Building, c: P, d: P, kind: MicroKind, outside = false): boolean {
-  const cult = ctx.p.culture
+  const tiers = cultureOf(ctx.p.culture).tiers
   const l: P = [-d[1], d[0]]
   const at = (a: number, s: number): P => [c[0] + d[0] * a + l[0] * s, c[1] + d[1] * a + l[1] * s]
   const ob = obb(b.poly)
   const room = Math.min(ob.len, ob.wid)
   const put = (poly: Poly, kind: BuildingKind, role?: string) => place(ctx, poly, kind, { pad: 0.2 }, role ? { role } : undefined)
   switch (kind) {
-    case 'shrine': {
-      if (cult === 'wa') {
-        // 祠（ほこら）：小小的一间，前面一座小鸟居，背后一棵神木
-        if (!put(rect(at(-1, 0), d, 2.2, 1.9), 'temple', '祠')) return false
-        put(rect(at(1.9, 0), d, 0.45, 2.6), 'torii')
-        plantTree(ctx, at(-4, 0.5), 2.6)
-        return true
-      }
-      if (cult === 'eastern') {
-        // 土地庙：一间小庙、门前一方小坪
-        if (!put(rect(at(-0.8, 0), d, 3, 3.2), 'temple', '土地庙')) return false
-        const fore = rect(at(1.8, 0), d, 2, 3.2)
-        if (isFree(ctx, fore, { pad: 0.1 })) emitArea(ctx, 'plazas', fore)
-        plantTree(ctx, at(-3.5, 2.5), 3)
-        return true
-      }
-      if (cult === 'islamic') {
-        // 城外：圣徒的墓（库巴，koubba），白色的小穹顶，旁边一棵树
-        if (outside) {
-          if (!put(circlePoly(c, 2.8, 10), 'temple', '圣徒墓（库巴）')) return false
-          plantTree(ctx, at(-4, 2), 3)
-          return true
-        }
-        // 施水亭（sabil）：街角的小亭，路人取水
-        return put(rect(c, d, clamp(room * 0.7, 3.2, 4.5), clamp(room * 0.7, 3.2, 4.5)), 'civic', '施水亭（萨比勒）')
-      }
-      // 西式：城里是临街的礼拜龛（小小的路边礼拜堂），乡下是路边的十字架与一棵椴树
-      if (outside || ruralRole(ctx, c)) {
-        const pad = rect(at(0.5, 0), d, 4, 4)
-        if (!isFree(ctx, pad, { pad: 0.1 })) return false
-        emitArea(ctx, 'plazas', pad)
-        // 石十字：一竖一横（两块可以相交，一起落地）
-        if (addGroup(ctx, [[rect(at(0.4, 0), d, 3, 0.7), 'tower'], [rect(at(0.9, 0), d, 0.7, 2), 'tower']], 0.1))
-          for (const x of ctx.out.buildings.slice(-2)) x.role = '路边十字架'
-        plantTree(ctx, at(-2.5, 1.5), 3.2)
-        return true
-      }
-      return put(rect(at(0.5, 0), d, 3.4, 2.6), 'temple', '路边礼拜龛')
-    }
+    case 'shrine':
+      // 祠、土地庙、施水亭、礼拜龛与路边的十字架：各文明自己盖
+      return tiers.wayside(ctx, { c, d, at, room, outside, rural: () => ruralRole(ctx, c), put })
     case 'garden': {
       // 口袋花园：房子原来的地方铺成一小块绿地，几棵树，当中一口井或一座雕像
       const g = circlePoly(c, clamp(room * 0.75, 4, 8), 12)
       if (!isFree(ctx, g, { pad: 0.2, tags: ['road', 'river', 'wall'] })) return false
       emitArea(ctx, 'greens', g, 'park')
-      ctx.out.landmarks.push({ p: c, kind: cult === 'western' || cult === 'islamic' ? 'fountain' : 'well' })
+      ctx.out.landmarks.push({ p: c, kind: tiers.pocketGarden })
       ctx.occ.add(circlePoly(c, 2, 8))
       for (let k = 0; k < 3; k++) {
         const a = hashAt(ctx, c, 'tiers.garden.tree', k) * Math.PI * 2
@@ -466,8 +435,8 @@ function microBuild(ctx: Ctx, b: Building, c: P, d: P, kind: MicroKind, outside 
     }
     case 'tower': {
       // 塔楼民居：一座方塔住人（边境的 tower house、碉楼、burj），旁边一道小院墙
-      const s = cult === 'western' ? 7.5 : 6
-      return put(rect(c, ob.axis, s, s), 'tower', cult === 'western' ? '塔楼民居' : '碉楼')
+      const tower = tiers.towerHouse
+      return !!tower && put(rect(c, ob.axis, tower.size, tower.size), 'tower', tower.role)
     }
   }
 }

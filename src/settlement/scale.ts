@@ -1,7 +1,7 @@
 import type { SizeCfg } from './ctx'
 import { clamp, lerp } from '../gen/util'
 import type { Culture, Density, SettlementParams, SettlementSize, WardType } from './types'
-import { CULTURE_INFO } from './culture'
+import { cultureOf, traitsOf } from './culture'
 import * as dmath from '../gen/dmath'
 
 /**
@@ -97,7 +97,7 @@ export function scaleOf(pop: number): { size: SettlementSize; cfg: SizeCfg; exte
 export const planPopOf = (p: Pick<SettlementParams, 'population' | 'planPop'>) => Math.max(p.population, p.planPop ?? 0)
 
 /** 每户人数（见 culture.ts） */
-export const perHousehold = (culture: Culture) => CULTURE_INFO[culture].perHousehold
+export const perHousehold = (culture: Culture) => traitsOf(culture).perHousehold
 
 /**
  * 每公顷城区（城内陆地）的民居户数：实测的经验值，含城外城郊与农舍，城区按它来定生长到多大。
@@ -106,14 +106,16 @@ export const perHousehold = (culture: Culture) => CULTURE_INFO[culture].perHouse
  * - regular：规整时变稀的比例（东亚的院落之间空地多，按占用率部分盖时更明显）
  * - trade：商贸城的系数（宽街、仓栈只在西式的街坊里明显压低密度）
  */
-const HOUSING: Record<Culture, { farm: number; street: number; town: number; regular: number; trade: number }> = {
-  western: { farm: 8.5, street: 38, town: 38, regular: 0, trade: 0.85 },
-  eastern: { farm: 12, street: 33, town: 33, regular: 0.1, trade: 1 },
-  wa: { farm: 8.5, street: 33, town: 36, regular: 0.1, trade: 1 },
-  islamic: { farm: 4.5, street: 38, town: 38, regular: 0, trade: 0.85 },
+export interface CultureHousing {
+  perHa: { farm: number; street: number; town: number; regular: number; trade: number }
+  /**
+   * 片区盖满时每公顷（片区全面积）的住户数，按功能与密度档实测（见下面 fullPerHa 的说明）；
+   * 没列的片区类型按 common
+   */
+  full: Partial<Record<WardType, Record<Density, number>>>
 }
 export function housesPerHa(p: Pick<SettlementParams, 'population' | 'culture' | 'function' | 'regularity'>) {
-  const h = HOUSING[p.culture]
+  const h = cultureOf(p.culture).housing.perHa
   const town = h.town * (1 - h.regular * p.regularity) * (p.function === 'fortress' ? 0.95 : p.function === 'trade' ? h.trade : 1)
   // 农家与街坊按全村平均的街坊占比混合，街坊的密度随城镇化从村里的七成升到城镇：村 → 镇连续过渡，没有分界上的跳变
   const s = townShare(p.population, 2 / 3)
@@ -121,53 +123,17 @@ export function housesPerHa(p: Pick<SettlementParams, 'population' | 'culture' |
 }
 
 /** 零散农家的片区每公顷住多少户（盖满时） */
-export const farmPerHa = (culture: Culture) => HOUSING[culture].farm
+export const farmPerHa = (culture: Culture) => cultureOf(culture).housing.perHa.farm
 
 /**
  * 片区盖满时每公顷（片区全面积）的住户数，按功能与密度档实测（成长史里各形态都是按盖满盖的：统计各形态的户数 ÷ 片区陆地面积）。
  * 盖法（地块尺寸、街距、宅地形态）改过以后要重测：城区长到多大、城墙圈多大都按它估，估高了城墙会圈不下该住在墙里的人。
  * 城区生长用的 housesPerHa 是全城平均（含广场、寺庙这些不住人的片区），占用率估算要的是单块片区盖满能住多少。
  */
-const FULL: Record<Culture, Partial<Record<WardType, Record<Density, number>>>> = {
-  // 疏档是贴着街、屋后带长院子的一排屋子，中档、密档是共用山墙的连排
-  western: {
-    common: { low: 14, mid: 44, high: 118 },
-    merchant: { low: 9, mid: 34, high: 70 },
-    market: { low: 53, mid: 53, high: 102 },
-    craft: { low: 5, mid: 31, high: 72 },
-    slum: { low: 80, mid: 80, high: 80 },
-    noble: { low: 6.5, mid: 6.5, high: 6.5 },
-  },
-  // 院落：疏档的大宅是一家人住好几座屋
-  eastern: {
-    common: { low: 7.5, mid: 20, high: 44 },
-    merchant: { low: 11, mid: 30, high: 60 },
-    market: { low: 41, mid: 41, high: 75 },
-    craft: { low: 3.5, mid: 26, high: 68 },
-    slum: { low: 80, mid: 80, high: 80 },
-    noble: { low: 20, mid: 20, high: 20 },
-  },
-  // 町家：面宽窄、进深长的连排；武家屋敷大而疏
-  wa: {
-    common: { low: 14, mid: 18, high: 36 },
-    merchant: { low: 8, mid: 10, high: 25 },
-    market: { low: 25, mid: 25, high: 60 },
-    craft: { low: 14, mid: 18, high: 32 },
-    slum: { low: 26, mid: 26, high: 26 },
-    noble: { low: 8, mid: 8, high: 8 },
-  },
-  // 内院住宅挤满街坊，只留尽端巷
-  islamic: {
-    common: { low: 16, mid: 51, high: 100 },
-    merchant: { low: 10, mid: 32, high: 80 },
-    // 集市是摊位与商队客栈，住户很少
-    market: { low: 22, mid: 22, high: 22 },
-    craft: { low: 15, mid: 49, high: 85 },
-    slum: { low: 104, mid: 104, high: 104 },
-    noble: { low: 11, mid: 11, high: 11 },
-  },
+export function fullPerHa(culture: Culture, type: WardType, d: Density) {
+  const full = cultureOf(culture).housing.full
+  return full[type]?.[d] ?? full.common![d]
 }
-export const fullPerHa = (culture: Culture, type: WardType, d: Density) => FULL[culture][type]?.[d] ?? FULL[culture].common![d]
 
 /**
  * 片区的密度档。按三件事打分：

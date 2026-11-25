@@ -1,4 +1,4 @@
-import { CULTURE_INFO, eastAsian } from './culture'
+import { traitsOf } from './culture'
 import { clear } from './civic'
 import { emitArea, centerDist, hashAt, isFree, mark, type Ctx } from './ctx'
 import { isVillage } from './scale'
@@ -49,7 +49,7 @@ export function ruralExtras(ctx: Ctx) {
   if (counts.kiln > 0) kilns(ctx, counts.kiln)
   if (counts.lighthouse > 0) lighthouse(ctx, counts.lighthouse)
   waysides(ctx)
-  if (CULTURE_INFO[ctx.p.culture].tombs) {
+  if (traitsOf(ctx.p.culture).tombs) {
     const pop = ctx.p.population
     hillTombs(ctx, isVillage(ctx.p.size) ? (pop > 150 ? 2 : 1) : Math.min(10, Math.max(3, Math.round(pop / 2500) + 2)))
   }
@@ -226,7 +226,7 @@ function roadsideOutside(ctx: Ctx, s0: number, s1: number, tag: string): { p: P;
  * 大路每隔一段一处（和风最密），按路边点的位置哈希挑，彼此隔开。
  */
 function waysides(ctx: Ctx) {
-  const gap = { wa: 220, eastern: 300, western: 380, islamic: 420 }[ctx.p.culture]
+  const gap = traitsOf(ctx.p.culture).waysideGap
   const made: P[] = []
   let budget = 0
   for (const r of ctx.out.roads) if (r.kind === 'highway') budget += polylineLength(r.line)
@@ -256,8 +256,8 @@ function gallows(ctx: Ctx, n: number) {
     const c: P = [p[0] + nrm[0] * 18, p[1] + nrm[1] * 18]
     const ground = rect(c, u, 16, 14)
     if (crowded(ctx, c) || !isFree(ctx, ground, { pad: 1 })) continue
-    if (!eastAsian(ctx.p.culture) && !build(ctx, [[rect(c, u, 4, 4), 'shed']], ground)) continue
-    if (eastAsian(ctx.p.culture)) clear(ctx, ground)
+    if (!traitsOf(ctx.p.culture).eastAsian && !build(ctx, [[rect(c, u, 4, 4), 'shed']], ground)) continue
+    if (traitsOf(ctx.p.culture).eastAsian) clear(ctx, ground)
     emitArea(ctx, 'plazas', ground)
     ctx.occ.add(ground)
     mark(ctx, c, 'gallows')

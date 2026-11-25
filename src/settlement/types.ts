@@ -8,8 +8,9 @@ export type SettlementSize = 'hamlet' | 'village' | 'town' | 'city'
 /**
  * 文明设定：决定聚落"长成什么样"（布局规则、建筑尺度、街区与地标种类）。
  * 与绘图风格正交——同一座城可以画成羊皮纸，也可以画成彩绘。
+ * 取值是注册表里的文明 id（见 culture.ts）：内置的文化包提供 western、eastern、wa、islamic。
  */
-export type Culture = 'western' | 'eastern' | 'wa' | 'islamic'
+export type Culture = string
 
 /** 奇幻程度：0 写实；1 奇幻（法师塔、魔法阵 / 宗门、仙阁）；2 高魔（再加浮空岛、灵脉等奇观） */
 export type Magic = 0 | 1 | 2

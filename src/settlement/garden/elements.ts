@@ -1,20 +1,19 @@
 import { clamp } from '../../gen/util'
 import { mark } from '../ctx'
 import { add, at, box, cbox, chaikin, frameAt, lerpP, local, neg, perp, segDist, sub, unit, type P, type Poly, type RectFrame } from '../geom'
-import type { Culture } from '../types'
 import { inside } from '../wards'
 import type { Elem } from '../compose/core'
 import {
   area, blob, bld, centroid, circlePoly, clump, crosses, dist, edgeDist, fitShape, gates, insetConvex, kiosk,
   landmark, loop, ngon, northward, offWater, part, pave, pointInPoly, reach, rock, rocks, row, scatter, shore, spur, touch,
-  tree, walk, wall, dry, rectIn, type Garden, type Skel,
+  tree, walk, wall, dry, rectIn, type Garden, type GardenTradition, type Skel,
 } from './kit'
 import * as dmath from '../../gen/dmath'
 
 /**
  * 元素池：园子里能放的每样东西（水面、园路、亭榭、花木、小品），各自标明
  * - 能占哪种槽位（slot：轴端、园心、池岸、岛、园路节点、园角……，由骨架给出位置、朝向与大小）
- * - 属于哪些文明（cult）、能用在哪些骨架（skel）
+ * - 属于哪些造园传统（trad）、能用在哪些骨架（skel）
  * - 需要多大的槽（min）、占多深（depth：轴端、园边），以及怎么盖（build）
  * 骨架在每个槽位按园址抽签选一样（预设给权重偏好），盖不下就换下一样；于是同一套骨架能拼出许多种园子，
  * 而不合规矩的搭配（自然式里的绿篱花坛、规则式里的曲岸湖）根本不在候选里。
@@ -69,7 +68,7 @@ export interface Spot {
 /** 园林元素：组合式的元素（compose/core.ts 的 Elem：id、权重、槽位、min 是槽位大小 s 至少多少、tiers）另带园子自己的几项 */
 export interface El extends Elem<string, SlotType> {
   slots: readonly SlotType[]
-  cult?: Culture[]
+  trad?: GardenTradition[]
   skel?: Skel[]
   /** 占的进深（轴端、园边往里收多少） */
   depth?: number
@@ -82,17 +81,17 @@ export interface El extends Elem<string, SlotType> {
   build: (K: Garden, s: Spot) => boolean
 }
 
-const W: Culture = 'western'
-const E: Culture = 'eastern'
-const J: Culture = 'wa'
-const I: Culture = 'islamic'
+const W: GardenTradition = 'western'
+const E: GardenTradition = 'eastern'
+const J: GardenTradition = 'wa'
+const I: GardenTradition = 'islamic'
 const ok = () => true
 
 // —————————————————————— 抽签 ——————————————————————
 
-/** 元素 e 能不能放进这座园子的槽位 s（文明、骨架、槽位大小与进深） */
+/** 元素 e 能不能放进这座园子的槽位 s（造园传统、骨架、槽位大小与进深） */
 const fits = (K: Garden, s: Spot, e: El) =>
-  (!e.cult || e.cult.includes(K.cult)) && (!e.skel || e.skel.includes(K.P.skel)) && (e.min ?? 0) <= s.s && (e.depth ?? 0) <= (s.room ?? Infinity)
+  (!e.trad || e.trad.includes(K.trad)) && (!e.skel || e.skel.includes(K.P.skel)) && (e.min ?? 0) <= s.s && (e.depth ?? 0) <= (s.room ?? Infinity)
 
 /**
  * 在槽位 s 的候选里经作曲者抽一样（元素基础权重 × 预设对这种槽位的偏好；偏好为 0 的不要）。
@@ -127,10 +126,10 @@ export function fill(K: Garden, s: Spot, skip: string[] = []): El | null {
 
 // —————————————————————— 共用的小动作 ——————————————————————
 
-/** 按文明的亭：东方方亭、和风东屋（小方亭）、西式八角凉亭、伊斯兰八角 köşk */
+/** 按造园传统的亭：东方方亭、和风东屋（小方亭）、西式八角凉亭、伊斯兰八角 köşk */
 function pavilion(K: Garden, p: P, s: number, wet = false, d: P = K.f) {
-  if (K.cult === 'western' || K.cult === 'islamic') return kiosk(K, p, s, 'civic', 8, wet, d)
-  return kiosk(K, p, K.cult === 'wa' ? s * 0.8 : s, 'pagoda', 4, wet, d)
+  if (K.trad === 'western' || K.trad === 'islamic') return kiosk(K, p, s, 'civic', 8, wet, d)
+  return kiosk(K, p, K.trad === 'wa' ? s * 0.8 : s, 'pagoda', 4, wet, d)
 }
 const seat = (K: Garden, p: P) => {
   K.seat ??= p
@@ -187,9 +186,9 @@ function narrowest(K: Garden, q: Poly, minW = 6): [P, P] | null {
 // —————————————————————— 规则式：格局与轴线 ——————————————————————
 
 const LAYOUT: El[] = [
-  { id: 'single', slots: ['layout'], cult: [W, I], build: ok },
-  { id: 'cross', slots: ['layout'], cult: [W, I], w: 1.5, build: ok },
-  { id: 'parallel', slots: ['layout'], cult: [W], w: 0.6, min: 18, build: ok },
+  { id: 'single', slots: ['layout'], trad: [W, I], build: ok },
+  { id: 'cross', slots: ['layout'], trad: [W, I], w: 1.5, build: ok },
+  { id: 'parallel', slots: ['layout'], trad: [W], w: 0.6, min: 18, build: ok },
 ]
 
 /** 轴线段：s.F 的 u 沿轴、hx 半长、hy 半宽 */
@@ -198,7 +197,7 @@ const AXIS: El[] = [
   {
     id: 'tapis',
     slots: ['axis'],
-    cult: [W],
+    trad: [W],
     wide: 1.6,
     build: (K, s) => {
       // 草毯（tapis vert）：当中一条草带，两边是园路
@@ -211,7 +210,7 @@ const AXIS: El[] = [
   {
     id: 'canal',
     slots: ['axis'],
-    cult: [I, W],
+    trad: [I, W],
     wide: 1.3,
     build: (K, s) => {
       const F = s.F!
@@ -226,7 +225,7 @@ const AXIS: El[] = [
   {
     id: 'rill',
     slots: ['axis'],
-    cult: [I],
+    trad: [I],
     build: (K, s) => {
       // 细渠（chadar）：甬道当中一道窄水
       const F = s.F!
@@ -235,7 +234,7 @@ const AXIS: El[] = [
       return true
     },
   },
-  { id: 'mall', slots: ['axis'], cult: [W], wide: 1.8, build: (K, s) => (pave(K, cbox(s.F!, 0, 0, s.F!.hx * 2, s.F!.hy * 2)), true) },
+  { id: 'mall', slots: ['axis'], trad: [W], wide: 1.8, build: (K, s) => (pave(K, cbox(s.F!, 0, 0, s.F!.hx * 2, s.F!.hy * 2)), true) },
 ]
 
 // —————————————————————— 园边 ——————————————————————
@@ -244,7 +243,7 @@ const EDGE: El[] = [
   {
     id: 'allee',
     slots: ['edge'],
-    cult: [W],
+    trad: [W],
     skel: ['axial', 'field'],
     min: 28,
     depth: 7,
@@ -262,7 +261,7 @@ const EDGE: El[] = [
   {
     id: 'hedge',
     slots: ['edge'],
-    cult: [W],
+    trad: [W],
     skel: ['axial'],
     depth: 3.5,
     build: (K, s) => (ringRows(K, ringOf(K, s, 1.6), 3, 1, true), true),
@@ -270,7 +269,7 @@ const EDGE: El[] = [
   {
     id: 'cypressRing',
     slots: ['edge'],
-    cult: [I, W],
+    trad: [I, W],
     skel: ['axial', 'field'],
     w: 1,
     depth: 4,
@@ -279,7 +278,7 @@ const EDGE: El[] = [
   {
     id: 'ringwalk',
     slots: ['edge'],
-    cult: [W],
+    trad: [W],
     skel: ['axial', 'field'],
     depth: 7,
     build: (K, s) => {
@@ -294,7 +293,7 @@ const EDGE: El[] = [
   {
     id: 'belt',
     slots: ['edge'],
-    cult: [W],
+    trad: [W],
     skel: ['natural', 'field', 'procession'],
     build: (K) => {
       // 林带：沿园边，按方位留出几处望远的缺口
@@ -307,7 +306,7 @@ const EDGE: El[] = [
   {
     id: 'bambooWall',
     slots: ['edge'],
-    cult: [E, J],
+    trad: [E, J],
     skel: ['natural', 'field'],
     build: (K) => {
       // 墙根竹：沿长边几丛
@@ -318,7 +317,7 @@ const EDGE: El[] = [
   {
     id: 'gallery',
     slots: ['edge'],
-    cult: [E],
+    trad: [E],
     skel: ['natural'],
     min: 16,
     build: (K) => {
@@ -340,14 +339,14 @@ const EDGE: El[] = [
   {
     id: 'mixedwood',
     slots: ['edge'],
-    cult: [J, E],
+    trad: [J, E],
     skel: ['natural', 'field', 'procession'],
     build: (K) => (scatter(K, K.inner, 0.022, 1.6, 3, (p) => edgeDist(p, K.g) < 8), true),
   },
   {
     id: 'sacredwood',
     slots: ['edge'],
-    cult: [J],
+    trad: [J],
     skel: ['procession', 'field'],
     build: (K) => (scatter(K, K.inner, 0.032, 2.4, 4.4), true),
   },
@@ -369,7 +368,7 @@ const CENTRE: El[] = [
   {
     id: 'basin',
     slots: ['centre', 'hub'],
-    cult: [W, I],
+    trad: [W, I],
     build: (K, s) => {
       const r = clamp(s.s * 0.55, 3.5, 9)
       if (s.t === 'hub') round(K, s.p, r + 2)
@@ -382,7 +381,7 @@ const CENTRE: El[] = [
   {
     id: 'octPool',
     slots: ['centre', 'hub'],
-    cult: [I, W],
+    trad: [I, W],
     w: 0.8,
     build: (K, s) => {
       // 八角池与喷泉，池边一圈铺地（奥斯曼的 şadırvan、游憩园的园心）；成片园里池北一座凉亭
@@ -403,7 +402,7 @@ const CENTRE: El[] = [
   {
     id: 'poolKiosk',
     slots: ['centre'],
-    cult: [I],
+    trad: [I],
     min: 5,
     build: (K, s) => {
       // 池中亭（kushk）：方池当中一座凉亭
@@ -417,7 +416,7 @@ const CENTRE: El[] = [
   {
     id: 'tomb',
     slots: ['centre'],
-    cult: [I],
+    trad: [I],
     min: 8,
     build: (K, s) => {
       // 陵园（胡马雍陵式）：台基上的陵，四角小亭
@@ -436,7 +435,7 @@ const CENTRE: El[] = [
   {
     id: 'bandstand',
     slots: ['centre', 'hub'],
-    cult: [W],
+    trad: [W],
     build: (K, s) => {
       const r = clamp(s.s * 0.6, 6, 11)
       round(K, s.p, r)
@@ -449,7 +448,7 @@ const CENTRE: El[] = [
   {
     id: 'statueRound',
     slots: ['centre', 'hub'],
-    cult: [W],
+    trad: [W],
     w: 0.7,
     build: (K, s) => {
       const r = clamp(s.s * 0.45, 4, 8)
@@ -468,7 +467,7 @@ const END: El[] = [
   {
     id: 'orangery',
     slots: ['axisEnd'],
-    cult: [W],
+    trad: [W],
     min: 14,
     depth: 11,
     build: (K, s) => {
@@ -480,7 +479,7 @@ const END: El[] = [
   {
     id: 'belvedere',
     slots: ['axisEnd'],
-    cult: [W],
+    trad: [W],
     min: 6,
     depth: 10,
     build: (K, s) => {
@@ -493,7 +492,7 @@ const END: El[] = [
   {
     id: 'exedra',
     slots: ['axisEnd'],
-    cult: [W],
+    trad: [W],
     min: 9,
     depth: 9,
     build: (K, s) => {
@@ -508,11 +507,11 @@ const END: El[] = [
       return landmark(K, add(c, s.d, 2), 'statue')
     },
   },
-  { id: 'endStatue', slots: ['axisEnd'], cult: [W, I], depth: 2, build: (K, s) => landmark(K, add(s.p, s.d, 1), 'statue') },
+  { id: 'endStatue', slots: ['axisEnd'], trad: [W, I], depth: 2, build: (K, s) => landmark(K, add(s.p, s.d, 1), 'statue') },
   {
     id: 'kushk',
     slots: ['axisEnd'],
-    cult: [I],
+    trad: [I],
     min: 5,
     depth: 10,
     build: (K, s) => {
@@ -524,7 +523,7 @@ const END: El[] = [
   {
     id: 'endPool',
     slots: ['axisEnd'],
-    cult: [I, W],
+    trad: [I, W],
     w: 0.8,
     depth: 7,
     build: (K, s) => {
@@ -536,7 +535,7 @@ const END: El[] = [
   {
     id: 'gatehouse',
     slots: ['axisEnd'],
-    cult: [W, I],
+    trad: [W, I],
     w: 0.7,
     min: 5,
     depth: 5,
@@ -547,11 +546,11 @@ const END: El[] = [
 
 /** 沿轴两侧（s.line 是半条轴，s.s 是轴的半宽） */
 const ALONG: El[] = [
-  { id: 'limeRows', slots: ['along'], cult: [W], build: (K, s) => (pairRows(K, s, s.s + 2, 6.5, 2.3), true) },
+  { id: 'limeRows', slots: ['along'], trad: [W], build: (K, s) => (pairRows(K, s, s.s + 2, 6.5, 2.3), true) },
   {
     id: 'doubleRows',
     slots: ['along'],
-    cult: [W],
+    trad: [W],
     min: 3,
     build: (K, s) => {
       pairRows(K, s, s.s + 2, 6.5, 2.3)
@@ -559,10 +558,10 @@ const ALONG: El[] = [
       return true
     },
   },
-  { id: 'cypressRows', slots: ['along'], cult: [I, W], build: (K, s) => (pairRows(K, s, s.s + 0.9, 4.5, 1), true) },
-  { id: 'cypressPlane', slots: ['along'], cult: [I], build: (K, s) => (pairRows(K, s, s.s + 1.2, 4.5, (k) => (k % 2 ? 2.4 : 1)), true) },
-  { id: 'topiary', slots: ['along'], cult: [W], build: (K, s) => (pairRows(K, s, s.s + 1.2, 5, 0.9), true) },
-  { id: 'statuePairs', slots: ['along'], cult: [W], w: 0.7, build: (K, s) => pairs(K, s, s.s + 0.8, 14) },
+  { id: 'cypressRows', slots: ['along'], trad: [I, W], build: (K, s) => (pairRows(K, s, s.s + 0.9, 4.5, 1), true) },
+  { id: 'cypressPlane', slots: ['along'], trad: [I], build: (K, s) => (pairRows(K, s, s.s + 1.2, 4.5, (k) => (k % 2 ? 2.4 : 1)), true) },
+  { id: 'topiary', slots: ['along'], trad: [W], build: (K, s) => (pairRows(K, s, s.s + 1.2, 5, 0.9), true) },
+  { id: 'statuePairs', slots: ['along'], trad: [W], w: 0.7, build: (K, s) => pairs(K, s, s.s + 0.8, 14) },
   { id: 'along-none', slots: ['along'], w: 0.5, build: ok },
 ]
 
@@ -575,7 +574,7 @@ const COMPART: El[] = [
   {
     id: 'cutBeds',
     slots: ['compartment'],
-    cult: [W],
+    trad: [W],
     pave: true,
     build: (K, s) => {
       part(K, s.q!, 'bed')
@@ -587,7 +586,7 @@ const COMPART: El[] = [
   {
     id: 'broderie',
     slots: ['compartment'],
-    cult: [W],
+    trad: [W],
     pave: true,
     build: (K, s) => {
       // 刺绣花坛：坛心菱形，中间一株修剪的小树
@@ -602,7 +601,7 @@ const COMPART: El[] = [
   {
     id: 'nested',
     slots: ['compartment'],
-    cult: [W],
+    trad: [W],
     pave: true,
     build: (K, s) => {
       // 回字形套坛
@@ -615,7 +614,7 @@ const COMPART: El[] = [
   {
     id: 'splitBeds',
     slots: ['compartment'],
-    cult: [W, I],
+    trad: [W, I],
     pave: true,
     min: 4,
     build: (K, s) => {
@@ -623,7 +622,7 @@ const COMPART: El[] = [
       const F = s.F!
       const g = 0.8
       for (const x of [-1, 1]) for (const y of [-1, 1]) part(K, box(F, x < 0 ? -F.hx : g, x < 0 ? -g : F.hx, y < 0 ? -F.hy : g, y < 0 ? -g : F.hy), 'bed')
-      if (K.cult === 'islamic') tree(K, F.o, 1.6, true)
+      if (K.trad === 'islamic') tree(K, F.o, 1.6, true)
       else landmark(K, F.o, 'statue')
       return true
     },
@@ -631,13 +630,13 @@ const COMPART: El[] = [
   {
     id: 'orchardGrid',
     slots: ['compartment'],
-    cult: [I, W],
+    trad: [I, W],
     pave: true,
     build: (K, s) => {
       // 下沉的果园：成行的果树
       part(K, s.q!, 'bed')
       const F = s.F!
-      const step = K.cult === 'islamic' ? 4.6 : 5.5
+      const step = K.trad === 'islamic' ? 4.6 : 5.5
       for (let x = -F.hx + 2.2; x < F.hx - 1.6; x += step) for (let y = -F.hy + 2.2; y < F.hy - 1.6; y += step) if (pointInPoly(at(F, x, y), s.q!)) tree(K, at(F, x, y), 1.8, true)
       return true
     },
@@ -645,7 +644,7 @@ const COMPART: El[] = [
   {
     id: 'basins',
     slots: ['compartment'],
-    cult: [I],
+    trad: [I],
     pave: true,
     min: 6,
     build: (K, s) => {
@@ -664,7 +663,7 @@ const COMPART: El[] = [
   {
     id: 'flowerRows',
     slots: ['compartment'],
-    cult: [I, W],
+    trad: [I, W],
     w: 0.6,
     pave: true,
     min: 4,
@@ -680,7 +679,7 @@ const COMPART: El[] = [
   {
     id: 'lawnRound',
     slots: ['compartment'],
-    cult: [W],
+    trad: [W],
     build: (K, s) => {
       // 草坪当中一座圆花坛
       const q = circlePoly(s.F!.o, clamp(small(s) * 0.45, 2, 4.5), 16)
@@ -689,11 +688,11 @@ const COMPART: El[] = [
       return true
     },
   },
-  { id: 'lawnSpecimen', slots: ['compartment'], cult: [W], build: (K, s) => (tree(K, s.F!.o, clamp(small(s) * 0.5, 2.4, 4.5)), true) },
+  { id: 'lawnSpecimen', slots: ['compartment'], trad: [W], build: (K, s) => (tree(K, s.F!.o, clamp(small(s) * 0.5, 2.4, 4.5)), true) },
   {
     id: 'bosquet',
     slots: ['compartment'],
-    cult: [W],
+    trad: [W],
     min: 9,
     build: (K, s) => {
       // 小林（bosquet）：格里密植的树，当中一方林间空地与雕像
@@ -708,7 +707,7 @@ const COMPART: El[] = [
   {
     id: 'maze',
     slots: ['compartment', 'corner'],
-    cult: [W],
+    trad: [W],
     min: 9,
     build: (K, s) => {
       // 迷园：一圈套一圈的绿篱，每圈在不同的边上留口
@@ -741,10 +740,10 @@ const WATER: El[] = [
   {
     id: 'lake',
     slots: ['water'],
-    cult: [W, E, J],
+    trad: [W, E, J],
     build: (K, s) => {
       // 东亚的园林以水为心（池占园子的三分之一上下），西式风景园的湖只是草地里的一景
-      const big = K.cult !== 'western'
+      const big = K.trad !== 'western'
       const c = local(K, s.p)
       const wob = K.C.nth.num('lake.wob', 1.2, 1.9)
       const kx = K.C.nth.num('lake.kx', big ? 0.48 : 0.4, big ? 0.62 : 0.56)
@@ -757,7 +756,7 @@ const WATER: El[] = [
   {
     id: 'serpentine',
     slots: ['water'],
-    cult: [W, E],
+    trad: [W, E],
     min: 22,
     build: (K, s) => {
       // 蛇形湖：顺长轴弯两弯，宽窄不一
@@ -788,7 +787,7 @@ const WATER: El[] = [
   {
     id: 'twin',
     slots: ['water'],
-    cult: [E, J],
+    trad: [E, J],
     min: 18,
     build: (K, s) => {
       // 葫芦形的池：当中收腰（桥多架在腰上）
@@ -816,7 +815,7 @@ const WATER: El[] = [
   {
     id: 'pondlet',
     slots: ['water'],
-    cult: [E, J],
+    trad: [E, J],
     w: 0.5,
     build: (K, s) => {
       // 小池（小园子里的一方曲池）
@@ -827,7 +826,7 @@ const WATER: El[] = [
       return !!q && setLake(K, q)
     },
   },
-  { id: 'water-none', slots: ['water'], cult: [W], w: 0.3, build: ok },
+  { id: 'water-none', slots: ['water'], trad: [W], w: 0.3, build: ok },
 ]
 function setLake(K: Garden, q: Poly) {
   part(K, q, 'pond')
@@ -840,7 +839,7 @@ const ISLAND: El[] = [
   {
     id: 'islePalace',
     slots: ['island'],
-    cult: [E],
+    trad: [E],
     min: 5,
     tiers: ['grand'],
     build: (K, s) => {
@@ -857,11 +856,11 @@ const ISLAND: El[] = [
       return true
     },
   },
-  { id: 'isleClump', slots: ['island'], cult: [W, E], build: (K, s) => (clump(K, centroid(s.q!), s.s * 0.6, 4, 1.8, 2.6), true) },
+  { id: 'isleClump', slots: ['island'], trad: [W, E], build: (K, s) => (clump(K, centroid(s.q!), s.s * 0.6, 4, 1.8, 2.6), true) },
   {
     id: 'isleFolly',
     slots: ['island'],
-    cult: [W],
+    trad: [W],
     min: 3.5,
     build: (K, s) => {
       const c = centroid(s.q!)
@@ -873,7 +872,7 @@ const ISLAND: El[] = [
   {
     id: 'islePine',
     slots: ['island'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 鹤岛、龟岛：岛上一棵松，岸边一块石
       tree(K, centroid(s.q!), 2.2)
@@ -881,15 +880,15 @@ const ISLAND: El[] = [
       return true
     },
   },
-  { id: 'isleRocks', slots: ['island'], cult: [J, E], w: 0.7, build: (K, s) => rocks(K, centroid(s.q!), s.s * 0.5, 4, 0.5, 1.1) > 0 },
+  { id: 'isleRocks', slots: ['island'], trad: [J, E], w: 0.7, build: (K, s) => rocks(K, centroid(s.q!), s.s * 0.5, 4, 0.5, 1.1) > 0 },
   {
     id: 'islePavilion',
     slots: ['island'],
-    cult: [E, J],
+    trad: [E, J],
     min: 3,
     build: (K, s) => {
       const c = centroid(s.q!)
-      if (!kiosk(K, c, clamp(s.s * 0.5, 3.2, 7), 'pagoda', K.cult === 'eastern' ? 8 : 4, true)) return false
+      if (!kiosk(K, c, clamp(s.s * 0.5, 3.2, 7), 'pagoda', K.trad === 'eastern' ? 8 : 4, true)) return false
       K.seat ??= c
       clump(K, c, s.s * 0.8, 4, 1.4, 2.2)
       return true
@@ -898,7 +897,7 @@ const ISLAND: El[] = [
   {
     id: 'isleLantern',
     slots: ['island'],
-    cult: [J],
+    trad: [J],
     w: 0.6,
     build: (K, s) => {
       landmark(K, centroid(s.q!), 'statue')
@@ -913,7 +912,7 @@ const CROSS: El[] = [
   {
     id: 'zigzag',
     slots: ['crossing'],
-    cult: [E, J],
+    trad: [E, J],
     build: (K, s) => {
       // 九曲桥：横过池面，折几折
       const l = narrowest(K, s.q!, 8)
@@ -942,7 +941,7 @@ const CROSS: El[] = [
   {
     id: 'stepping',
     slots: ['crossing'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 泽渡（汀步）：一溜踏石
       const l = narrowest(K, s.q!)
@@ -957,7 +956,7 @@ const CROSS: El[] = [
   {
     id: 'causeway',
     slots: ['crossing'],
-    cult: [E, W],
+    trad: [E, W],
     min: 14,
     build: (K, s) => {
       // 长堤：顺着长轴横过湖面，堤上夹岸种柳
@@ -1006,7 +1005,7 @@ const HALL: El[] = [
   {
     id: 'goten',
     slots: ['hall'],
-    cult: [J],
+    trad: [J],
     tiers: ['grand'],
     build: (K, s) => {
       // 离宫的御殿：古书院、中书院、新御殿雁行错开（桂离宫），各自前面一溜缘侧，一旁月见台
@@ -1028,7 +1027,7 @@ const HALL: El[] = [
   {
     id: 'mainHall',
     slots: ['hall'],
-    cult: [E],
+    trad: [E],
     build: (K, s) => {
       // 主厅：坐北朝南，前面临水一方月台
       const F = frameAt(s.p, perp(s.d))
@@ -1047,7 +1046,7 @@ const HALL: El[] = [
   {
     id: 'shoin',
     slots: ['hall'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 书院：雁行错开的两栋，前面一溜缘侧的石板
       const F = frameAt(s.p, perp(s.d))
@@ -1068,7 +1067,7 @@ const HALL: El[] = [
   {
     id: 'manor',
     slots: ['hall'],
-    cult: [W],
+    trad: [W],
     min: 30,
     build: (K, s) => {
       // 庄园主宅：面朝湖，宅前一片铺地
@@ -1089,12 +1088,12 @@ const HALL: El[] = [
 
 /** 池岸的景点：s.p 在岸线上，s.d 朝外（离开水） */
 const SHORE: El[] = [
-  { id: 'shuixie', slots: ['shore'], cult: [E], build: (K, s) => kiosk(K, add(s.p, s.d, 0.8), 6, 'hall', 4, true, s.d) },
-  { id: 'ting', slots: ['shore', 'node'], cult: [E], build: (K, s) => kiosk(K, add(s.p, s.d, 3.5), 4.5, 'pagoda', K.C.nth.chance('ting.hex', 0.3) ? 6 : 4, false, s.d) },
+  { id: 'shuixie', slots: ['shore'], trad: [E], build: (K, s) => kiosk(K, add(s.p, s.d, 0.8), 6, 'hall', 4, true, s.d) },
+  { id: 'ting', slots: ['shore', 'node'], trad: [E], build: (K, s) => kiosk(K, add(s.p, s.d, 3.5), 4.5, 'pagoda', K.C.nth.chance('ting.hex', 0.3) ? 6 : 4, false, s.d) },
   {
     id: 'teahouse',
     slots: ['shore', 'node'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 茶屋：旁边一盏灯笼、一块踏石
       const p = add(s.p, s.d, 5.5)
@@ -1103,13 +1102,13 @@ const SHORE: El[] = [
       return true
     },
   },
-  { id: 'azumaya', slots: ['shore', 'node'], cult: [J], build: (K, s) => kiosk(K, add(s.p, s.d, 4), 3.8, 'pagoda', 4, false, s.d) },
-  { id: 'boathouse', slots: ['shore'], cult: [W], w: 0.7, build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 7, 4), 'shed', true) },
-  { id: 'follyShore', slots: ['shore'], cult: [W], build: (K, s) => kiosk(K, add(s.p, s.d, 7), 6.5, 'temple', 8) },
+  { id: 'azumaya', slots: ['shore', 'node'], trad: [J], build: (K, s) => kiosk(K, add(s.p, s.d, 4), 3.8, 'pagoda', 4, false, s.d) },
+  { id: 'boathouse', slots: ['shore'], trad: [W], w: 0.7, build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 7, 4), 'shed', true) },
+  { id: 'follyShore', slots: ['shore'], trad: [W], build: (K, s) => kiosk(K, add(s.p, s.d, 7), 6.5, 'temple', 8) },
   {
     id: 'willows',
     slots: ['shore'],
-    cult: [W, E, J],
+    trad: [W, E, J],
     build: (K, s) => {
       const n = perp(s.d)
       for (const k of [-1, 0, 1]) tree(K, add(add(s.p, s.d, 2.5), n, k * 4), 2.3)
@@ -1119,7 +1118,7 @@ const SHORE: El[] = [
   {
     id: 'revetment',
     slots: ['shore'],
-    cult: [J, E],
+    trad: [J, E],
     build: (K, s) => {
       // 护岸石组：一大两小
       const n = perp(s.d)
@@ -1132,7 +1131,7 @@ const SHORE: El[] = [
   {
     id: 'yukimi',
     slots: ['shore'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 雪见灯笼：探向水面，脚下一块石
       rock(K, add(s.p, s.d, 0.3), 0.8)
@@ -1142,7 +1141,7 @@ const SHORE: El[] = [
   {
     id: 'platform',
     slots: ['shore'],
-    cult: [E, J],
+    trad: [E, J],
     w: 0.7,
     build: (K, s) => {
       // 临水的石台（钓台、观鱼台）
@@ -1156,13 +1155,13 @@ const SHORE: El[] = [
 
 /** 园路上的景点：s.p 在园路边，s.d 离开水 */
 const NODE: El[] = [
-  { id: 'gazebo', slots: ['node'], cult: [W], build: (K, s) => kiosk(K, add(s.p, s.d, 4), 5, 'civic', 8) },
-  { id: 'statueNode', slots: ['node'], cult: [W], build: (K, s) => landmark(K, add(s.p, s.d, 2), 'statue') },
-  { id: 'lanternNode', slots: ['node'], cult: [J], build: (K, s) => landmark(K, add(s.p, s.d, 1.8), 'statue') },
-  { id: 'rockGroup', slots: ['node'], cult: [E, J], build: (K, s) => rocks(K, add(s.p, s.d, 3.5), 2.2, 3, 0.6, 1.3) > 0 },
-  { id: 'specimen', slots: ['node'], build: (K, s) => tree(K, add(s.p, s.d, 5), K.cult === 'western' ? 4.5 : 3.2) },
-  { id: 'wellNode', slots: ['node'], cult: [W, E], w: 0.4, build: (K, s) => landmark(K, add(s.p, s.d, 2.2), 'well') },
-  { id: 'stele', slots: ['node'], cult: [E], w: 0.6, build: (K, s) => kiosk(K, add(s.p, s.d, 3), 2.6, 'pagoda', 4, false, s.d) },
+  { id: 'gazebo', slots: ['node'], trad: [W], build: (K, s) => kiosk(K, add(s.p, s.d, 4), 5, 'civic', 8) },
+  { id: 'statueNode', slots: ['node'], trad: [W], build: (K, s) => landmark(K, add(s.p, s.d, 2), 'statue') },
+  { id: 'lanternNode', slots: ['node'], trad: [J], build: (K, s) => landmark(K, add(s.p, s.d, 1.8), 'statue') },
+  { id: 'rockGroup', slots: ['node'], trad: [E, J], build: (K, s) => rocks(K, add(s.p, s.d, 3.5), 2.2, 3, 0.6, 1.3) > 0 },
+  { id: 'specimen', slots: ['node'], build: (K, s) => tree(K, add(s.p, s.d, 5), K.trad === 'western' ? 4.5 : 3.2) },
+  { id: 'wellNode', slots: ['node'], trad: [W, E], w: 0.4, build: (K, s) => landmark(K, add(s.p, s.d, 2.2), 'well') },
+  { id: 'stele', slots: ['node'], trad: [E], w: 0.6, build: (K, s) => kiosk(K, add(s.p, s.d, 3), 2.6, 'pagoda', 4, false, s.d) },
 ]
 
 /** 园角：s.p 在离池最远的角上，s.d 朝池 */
@@ -1170,7 +1169,7 @@ const CORNER: El[] = [
   {
     id: 'rockery',
     slots: ['corner'],
-    cult: [E],
+    trad: [E],
     build: (K, s) => {
       // 叠石假山，山顶一座小亭
       pavilion(K, s.p, 3.5)
@@ -1180,7 +1179,7 @@ const CORNER: El[] = [
   {
     id: 'study',
     slots: ['corner'],
-    cult: [E],
+    trad: [E],
     min: 12,
     build: (K, s) => {
       // 书斋小院：院墙里一座书斋、铺地的小院、一棵树
@@ -1200,11 +1199,11 @@ const CORNER: El[] = [
       return false
     },
   },
-  { id: 'pagodaTower', slots: ['corner'], cult: [E], build: (K, s) => kiosk(K, s.p, 8, 'pagoda', 8) && seat(K, s.p) },
+  { id: 'pagodaTower', slots: ['corner'], trad: [E], build: (K, s) => kiosk(K, s.p, 8, 'pagoda', 8) && seat(K, s.p) },
   {
     id: 'tsukiyama',
     slots: ['corner'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 筑山：树丛与石
       rocks(K, s.p, 4, 4, 0.7, 1.4)
@@ -1215,7 +1214,7 @@ const CORNER: El[] = [
   {
     id: 'follyMound',
     slots: ['corner'],
-    cult: [W],
+    trad: [W],
     build: (K, s) => {
       if (!kiosk(K, s.p, 6.5, 'temple', 8)) return false
       clump(K, add(s.p, s.d, -6), 6, 6, 2.2, 3.4)
@@ -1225,7 +1224,7 @@ const CORNER: El[] = [
   {
     id: 'grotto',
     slots: ['corner'],
-    cult: [W],
+    trad: [W],
     w: 0.7,
     build: (K, s) => {
       rocks(K, s.p, 4, 6, 0.8, 1.6)
@@ -1236,13 +1235,13 @@ const CORNER: El[] = [
   {
     id: 'smallShrine',
     slots: ['corner'],
-    cult: [J, E],
+    trad: [J, E],
     w: 0.6,
     build: (K, s) => {
       // 园里的小祠：祠前一座鸟居（和风）或一对石灯
       const F = frameAt(s.p, s.d)
-      if (!bld(K, cbox(F, 0, 0, 3, 3.6), 'temple', false, { role: K.cult === 'wa' ? '祠' : '小庙' })) return false
-      if (K.cult === 'wa') bld(K, cbox(F, 4.5, 0, 0.7, 3.6), 'torii')
+      if (!bld(K, cbox(F, 0, 0, 3, 3.6), 'temple', false, { role: K.trad === 'wa' ? '祠' : '小庙' })) return false
+      if (K.trad === 'wa') bld(K, cbox(F, 4.5, 0, 0.7, 3.6), 'torii')
       else for (const y of [-1.8, 1.8]) landmark(K, at(F, 3.5, y), 'statue')
       return true
     },
@@ -1255,7 +1254,7 @@ const SHORELINE: El[] = [
   {
     id: 'willowRing',
     slots: ['shoreline'],
-    cult: [W, E, J],
+    trad: [W, E, J],
     build: (K, s) => {
       const n = Math.round(Math.sqrt(area(s.q!)) * 0.45)
       const ph = K.C.nth.h('willowRing.phase') * 6.28
@@ -1266,7 +1265,7 @@ const SHORELINE: El[] = [
   {
     id: 'rockShore',
     slots: ['shoreline'],
-    cult: [J, E],
+    trad: [J, E],
     build: (K, s) => {
       // 护岸石组，一处三块
       const lr = Math.sqrt(area(s.q!) / Math.PI)
@@ -1282,7 +1281,7 @@ const SHORELINE: El[] = [
   {
     id: 'pineShore',
     slots: ['shoreline'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 洲浜：岸边几棵斜探的松，松下一两块石
       const ph = K.C.nth.h('pineShore.phase') * 6.28
@@ -1302,7 +1301,7 @@ const LAWN: El[] = [
   {
     id: 'clumps',
     slots: ['lawn'],
-    cult: [W, I],
+    trad: [W, I],
     build: (K) => {
       // 草地上的树丛与孤植树
       const zone = insetConvex(K.g, 8)
@@ -1320,13 +1319,13 @@ const LAWN: El[] = [
     },
   },
   // 规则园外的小林（bosquet）：花坛区四周一圈密林，林里几条直的林间路
-  { id: 'bosquets', slots: ['lawn'], cult: [W], skel: ['axial'], w: 1.2, build: (K) => (scatter(K, K.inner, 0.022, 2, 3.4), true) },
+  { id: 'bosquets', slots: ['lawn'], trad: [W], skel: ['axial'], w: 1.2, build: (K) => (scatter(K, K.inner, 0.022, 2, 3.4), true) },
   { id: 'sparse', slots: ['lawn'], build: (K) => (scatter(K, K.inner, 0.006, 2.2, 4), true) },
-  { id: 'pines', slots: ['lawn'], cult: [J, E], build: (K) => (scatter(K, K.inner, 0.009, 1.6, 3), true) },
+  { id: 'pines', slots: ['lawn'], trad: [J, E], build: (K) => (scatter(K, K.inner, 0.009, 1.6, 3), true) },
   {
     id: 'planes',
     slots: ['lawn'],
-    cult: [I, W],
+    trad: [I, W],
     build: (K) => {
       // 遮荫的大树（悬铃木）
       const n = clamp(Math.round(K.A / 800), 3, 12)
@@ -1340,7 +1339,7 @@ const FIELD: El[] = [
   {
     id: 'huntwood',
     slots: ['field'],
-    cult: [W, E],
+    trad: [W, E],
     tiers: ['grand'],
     build: (K) => {
       // 猎苑的林：大片的密林，几片林间空地（鹿吃草的地方），骑道从林里直穿
@@ -1353,7 +1352,7 @@ const FIELD: El[] = [
   {
     id: 'plumGrid',
     slots: ['field'],
-    cult: [E, J],
+    trad: [E, J],
     build: (K) => {
       // 梅林：疏朗的格点，稍有错落
       const step = 6.5
@@ -1368,7 +1367,7 @@ const FIELD: El[] = [
   {
     id: 'bamboo',
     slots: ['field'],
-    cult: [E, J],
+    trad: [E, J],
     w: 0.7,
     build: (K) => {
       // 竹丛：成簇的细竹，簇与簇之间留出空地
@@ -1380,7 +1379,7 @@ const FIELD: El[] = [
   {
     id: 'pineWood',
     slots: ['field'],
-    cult: [E, J],
+    trad: [E, J],
     build: (K) => {
       scatter(K, K.inner, 0.012, 2.2, 3.4)
       rocks(K, at(K, K.C.nth.num('pineWood.x', -0.3, 0.3) * K.hx, K.C.nth.num('pineWood.y', -0.3, 0.3) * K.hy), 4, 5, 0.8, 1.6)
@@ -1390,7 +1389,7 @@ const FIELD: El[] = [
   {
     id: 'cherry',
     slots: ['field'],
-    cult: [J, E],
+    trad: [J, E],
     build: (K) => {
       // 樱林：一团团的樱树，团与团之间是赏花的空地
       const n = clamp(Math.round(K.A / 500), 3, 20)
@@ -1398,11 +1397,11 @@ const FIELD: El[] = [
       return true
     },
   },
-  { id: 'maple', slots: ['field'], cult: [J], build: (K) => (scatter(K, K.inner, 0.016, 1.5, 2.6), true) },
+  { id: 'maple', slots: ['field'], trad: [J], build: (K) => (scatter(K, K.inner, 0.016, 1.5, 2.6), true) },
   {
     id: 'orchard',
     slots: ['field'],
-    cult: [I, W, E],
+    trad: [I, W, E],
     build: (K) => {
       // 果园：顺园地长轴的方格
       const step = 5
@@ -1413,7 +1412,7 @@ const FIELD: El[] = [
   {
     id: 'planeShade',
     slots: ['field'],
-    cult: [I, W],
+    trad: [I, W],
     build: (K) => {
       const n = clamp(Math.round(K.A / 700), 4, 14)
       for (let k = 0, made = 0; k < n * 6 && made < n; k++) if (tree(K, at(K, (K.rng.next() - 0.5) * K.hx * 1.8, (K.rng.next() - 0.5) * K.hy * 1.8), 5 + K.rng.next() * 1.5)) made++
@@ -1423,7 +1422,7 @@ const FIELD: El[] = [
   {
     id: 'meadow',
     slots: ['field'],
-    cult: [W],
+    trad: [W],
     build: (K) => {
       // 草地上几棵孤植的大树（橡树、椴树）
       const n = clamp(Math.round(K.A / 900), 3, 9)
@@ -1434,7 +1433,7 @@ const FIELD: El[] = [
   {
     id: 'moss',
     slots: ['field'],
-    cult: [J],
+    trad: [J],
     w: 0.6,
     build: (K) => {
       // 苔庭：一片片的苔地，枫与石散在其间
@@ -1453,7 +1452,7 @@ const FIELD: El[] = [
   {
     id: 'rosebeds',
     slots: ['field'],
-    cult: [I, W],
+    trad: [I, W],
     build: (K) => {
       // 玫瑰园（golestan）：成行的小花坛，行间种几棵果树
       const zone = insetConvex(K.g, 5)
@@ -1476,7 +1475,7 @@ const FIELD: El[] = [
   {
     id: 'raked',
     slots: ['field'],
-    cult: [J],
+    trad: [J],
     solo: true,
     min: 8,
     build: (K) => karesansui(K),
@@ -1554,7 +1553,7 @@ const HUB: El[] = [
   {
     id: 'lodge',
     slots: ['hub'],
-    cult: [W, E],
+    trad: [W, E],
     tiers: ['grand'],
     build: (K, s) => {
       // 猎苑当中的狩猎行宫：一座主楼、一排马厩围着前院
@@ -1567,12 +1566,12 @@ const HUB: El[] = [
       return seat(K, s.p)
     },
   },
-  { id: 'pavilionHub', slots: ['hub'], cult: [E, J], build: (K, s) => pavilion(K, s.p, 5) && seat(K, s.p) },
-  { id: 'wellHub', slots: ['hub'], cult: [W, E], w: 0.8, build: (K, s) => landmark(K, s.p, 'well') && seat(K, s.p) },
+  { id: 'pavilionHub', slots: ['hub'], trad: [E, J], build: (K, s) => pavilion(K, s.p, 5) && seat(K, s.p) },
+  { id: 'wellHub', slots: ['hub'], trad: [W, E], w: 0.8, build: (K, s) => landmark(K, s.p, 'well') && seat(K, s.p) },
   {
     id: 'marketCross',
     slots: ['hub'],
-    cult: [W],
+    trad: [W],
     build: (K, s) => {
       round(K, s.p, 3.5, 12)
       s.r = 3
@@ -1582,17 +1581,17 @@ const HUB: El[] = [
   {
     id: 'lanternHub',
     slots: ['hub'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       rocks(K, add(s.p, K.f, 2.5), 1.8, 2, 0.6, 1.1)
       return landmark(K, s.p, 'statue') && seat(K, s.p)
     },
   },
-  { id: 'kushkHub', slots: ['hub'], cult: [I], build: (K, s) => kiosk(K, s.p, 8, 'civic', 8) && seat(K, s.p) },
+  { id: 'kushkHub', slots: ['hub'], trad: [I], build: (K, s) => kiosk(K, s.p, 8, 'civic', 8) && seat(K, s.p) },
   {
     id: 'hauz',
     slots: ['hub'],
-    cult: [I],
+    trad: [I],
     min: 6,
     build: (K, s) => {
       // 长方的水池（hauz），池边铺地，池的一头一座凉亭照影
@@ -1622,7 +1621,7 @@ const PATHS: El[] = [
         const d = unit(sub(gt.p, s.p))
         const end = add(s.p, d, Math.max(0, (s.r ?? 0) - 0.5))
         const mid = offWater(K, add(lerpP(gt.p, end, 0.5), perp(d), (K.rng.next() - 0.5) * 6), 2)
-        walk(K, dry(K, [gt.p, mid, end]), K.cult === 'western' ? 1.8 : 1.6, true)
+        walk(K, dry(K, [gt.p, mid, end]), K.trad === 'western' ? 1.8 : 1.6, true)
       }
       return gs.length > 0
     },
@@ -1630,7 +1629,7 @@ const PATHS: El[] = [
   {
     id: 'meander',
     slots: ['paths'],
-    cult: [E, J, W, I],
+    trad: [E, J, W, I],
     build: (K) => {
       // 曲径：两座园门之间，摆几摆
       const gs = gates(K)
@@ -1648,7 +1647,7 @@ const PATHS: El[] = [
   {
     id: 'crossPaths',
     slots: ['paths'],
-    cult: [W, I],
+    trad: [W, I],
     build: (K, s) => {
       // 十字路：从节点顺园地的长短轴直通园边
       for (const d of [K.f, neg(K.f), K.l, neg(K.l)] as P[]) {
@@ -1661,7 +1660,7 @@ const PATHS: El[] = [
   {
     id: 'ringPath',
     slots: ['paths'],
-    cult: [W, J, E, I],
+    trad: [W, J, E, I],
     w: 0.7,
     build: (K) => {
       const l = loop(K, 5, 2.5, 1.6)
@@ -1670,7 +1669,7 @@ const PATHS: El[] = [
       return true
     },
   },
-  { id: 'paths-none', slots: ['paths'], cult: [J, E], w: 0.3, build: ok },
+  { id: 'paths-none', slots: ['paths'], trad: [J, E], w: 0.3, build: ok },
 ]
 
 /** 成片园角上的小池 */
@@ -1678,7 +1677,7 @@ const POND: El[] = [
   {
     id: 'duckPond',
     slots: ['pond'],
-    cult: [W],
+    trad: [W],
     build: (K) => {
       const r = Math.min(13, K.hy * 0.4)
       if (r < 4.5) return false
@@ -1694,11 +1693,11 @@ const POND: El[] = [
   {
     id: 'cornerPond',
     slots: ['pond'],
-    cult: [E, J, I],
+    trad: [E, J, I],
     min: 12,
     build: (K) => {
       // 园角一方小池，池岸几块石（伊斯兰：园角一方水池）
-      const sq = K.cult === 'islamic'
+      const sq = K.trad === 'islamic'
       const [sx, sy, ph] = [K.C.nth.side('cornerPond.x'), K.C.nth.side('cornerPond.y'), K.C.nth.h('cornerPond.phase')]
       const q = fitShape(K, (f) => (sq ? cbox(K, sx * K.hx * 0.5 * f, sy * K.hy * 0.4 * f, 10 * f, 7 * f) : blob(K, sx * K.hx * 0.45 * f, sy * K.hy * 0.35 * f, 7 * f, 5.5 * f, ph * 6.28, 1.4, 22)), 3)
       if (!q) return false
@@ -1714,11 +1713,11 @@ const POND: El[] = [
 
 /** 参道口、中途的门：s.p 在参道上，s.d 顺参道，s.s 是参道两旁可用的半宽 */
 const GATE: El[] = [
-  { id: 'torii', slots: ['entry', 'marker'], cult: [J], build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 0.9, Math.min(5.5, s.s * 1.6)), 'torii') },
+  { id: 'torii', slots: ['entry', 'marker'], trad: [J], build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 0.9, Math.min(5.5, s.s * 1.6)), 'torii') },
   {
     id: 'paifang',
     slots: ['entry', 'marker'],
-    cult: [E],
+    trad: [E],
     build: (K, s) => {
       // 牌坊：宽而薄，前面一对石狮
       if (!bld(K, cbox(frameAt(s.p, s.d), 0, 0, 1.2, Math.min(9, s.s * 2)), 'civic')) return false
@@ -1726,21 +1725,21 @@ const GATE: El[] = [
       return true
     },
   },
-  { id: 'archGate', slots: ['entry'], cult: [W], build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 2.6, Math.min(8, s.s * 1.8)), 'civic') },
-  { id: 'portal', slots: ['entry', 'marker'], cult: [I], build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 4, Math.min(9, s.s * 2)), 'hall') },
-  { id: 'lychgate', slots: ['entry'], cult: [W], w: 0.5, build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 3, 4.5), 'hall') },
+  { id: 'archGate', slots: ['entry'], trad: [W], build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 2.6, Math.min(8, s.s * 1.8)), 'civic') },
+  { id: 'portal', slots: ['entry', 'marker'], trad: [I], build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 4, Math.min(9, s.s * 2)), 'hall') },
+  { id: 'lychgate', slots: ['entry'], trad: [W], w: 0.5, build: (K, s) => bld(K, cbox(frameAt(s.p, s.d), 0, 0, 3, 4.5), 'hall') },
   { id: 'marker-none', slots: ['marker'], w: 0.8, build: ok },
 ]
 
 /** 参道两旁：s.line 是参道，s.s 是参道半宽 */
 const FLANK: El[] = [
-  { id: 'lanternPairs', slots: ['flank'], cult: [J], build: (K, s) => pairs(K, s, s.s + 1.2, 9, 9) },
-  { id: 'stoneBeasts', slots: ['flank'], cult: [E], build: (K, s) => pairs(K, s, s.s + 1.4, 7, 8) },
-  { id: 'cedarRows', slots: ['flank'], cult: [J, E], build: (K, s) => (pairRows(K, s, s.s + 3, 6, 2.4, false), true) },
+  { id: 'lanternPairs', slots: ['flank'], trad: [J], build: (K, s) => pairs(K, s, s.s + 1.2, 9, 9) },
+  { id: 'stoneBeasts', slots: ['flank'], trad: [E], build: (K, s) => pairs(K, s, s.s + 1.4, 7, 8) },
+  { id: 'cedarRows', slots: ['flank'], trad: [J, E], build: (K, s) => (pairRows(K, s, s.s + 3, 6, 2.4, false), true) },
   {
     id: 'toriiTunnel',
     slots: ['flank'],
-    cult: [J],
+    trad: [J],
     w: 0.5,
     build: (K, s) => {
       // 千本鸟居：参道上一座挨一座
@@ -1751,9 +1750,9 @@ const FLANK: El[] = [
       return made > 3
     },
   },
-  { id: 'obeliskPairs', slots: ['flank'], cult: [W], build: (K, s) => pairs(K, s, s.s + 1.5, 12, 8) },
-  { id: 'avenue', slots: ['flank'], cult: [W], build: (K, s) => (pairRows(K, s, s.s + 3, 7, 2.6, false), true) },
-  { id: 'cypressFlank', slots: ['flank'], cult: [I, W], build: (K, s) => (pairRows(K, s, s.s + 1.5, 4, 1, false), true) },
+  { id: 'obeliskPairs', slots: ['flank'], trad: [W], build: (K, s) => pairs(K, s, s.s + 1.5, 12, 8) },
+  { id: 'avenue', slots: ['flank'], trad: [W], build: (K, s) => (pairRows(K, s, s.s + 3, 7, 2.6, false), true) },
+  { id: 'cypressFlank', slots: ['flank'], trad: [I, W], build: (K, s) => (pairRows(K, s, s.s + 1.5, 4, 1, false), true) },
 ]
 
 /** 参道尽头：s.F 是前庭（o 在前庭的前沿中点，u 顺参道，hx 进深，hy 半宽） */
@@ -1761,7 +1760,7 @@ const TERMINAL: El[] = [
   {
     id: 'shrine',
     slots: ['terminal'],
-    cult: [J],
+    trad: [J],
     build: (K, s) => {
       // 社：白砂的社地，拜殿在前、本殿在后，手水舍，本殿后一棵神木
       const F = s.F!
@@ -1780,7 +1779,7 @@ const TERMINAL: El[] = [
   {
     id: 'ancestral',
     slots: ['terminal'],
-    cult: [E],
+    trad: [E],
     build: (K, s) => {
       // 祠堂：铺地的院子，正殿在后，两厢对峙
       const F = s.F!
@@ -1796,7 +1795,7 @@ const TERMINAL: El[] = [
   {
     id: 'tumulus',
     slots: ['terminal'],
-    cult: [E],
+    trad: [E],
     w: 0.7,
     min: 8,
     build: (K, s) => {
@@ -1821,7 +1820,7 @@ const TERMINAL: El[] = [
   {
     id: 'mausoleum',
     slots: ['terminal'],
-    cult: [W],
+    trad: [W],
     build: (K, s) => {
       // 纪念堂：一圈铺地当中一座圆顶的小殿
       const F = s.F!
@@ -1836,7 +1835,7 @@ const TERMINAL: El[] = [
   {
     id: 'chapel',
     slots: ['terminal'],
-    cult: [W],
+    trad: [W],
     build: (K, s) => {
       const F = s.F!
       pave(K, box(F, 0, F.hx * 0.3, -F.hy * 0.6, F.hy * 0.6))
@@ -1849,7 +1848,7 @@ const TERMINAL: El[] = [
   {
     id: 'monument',
     slots: ['terminal'],
-    cult: [W, I],
+    trad: [W, I],
     w: 0.7,
     build: (K, s) => {
       // 纪念柱：圆场当中一尊雕像，周围一圈树
@@ -1865,7 +1864,7 @@ const TERMINAL: El[] = [
   {
     id: 'turbe',
     slots: ['terminal'],
-    cult: [I],
+    trad: [I],
     build: (K, s) => {
       // 陵（türbe）：铺地的院子当中一座方陵，四角柏树
       const F = s.F!

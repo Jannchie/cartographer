@@ -1,9 +1,14 @@
+import { cultureOf } from './culture'
 import type { BuildingKind, Culture, Field } from './types'
 
 export type SettleStyleId = 'parchment' | 'color' | 'ink' | 'blueprint' | 'kiriezu' | 'nolli' | 'fangzhi' | 'survey'
 
+/** 建筑配色：每种建筑一组颜色（按建筑的 tone 挑） */
+export type BuildingPalette = Record<Exclude<BuildingKind, 'torii'>, string[]>
+
 /**
- * 聚落地图的绘图风格。与文明设定正交；个别颜色（屋顶）随文明而变。
+ * 聚落地图的绘图风格。与文明设定正交；个别颜色（屋顶）随文明而变：
+ * 风格给出默认的建筑配色，文明在自己的定义里改其中几项（CultureDef.palettes）。
  */
 export interface SettleTheme {
   id: SettleStyleId
@@ -28,7 +33,8 @@ export interface SettleTheme {
   /** 街区内未建的院落 */
   yard: string
   plaza: string
-  buildings: (culture: Culture) => Record<Exclude<BuildingKind, 'torii'>, string[]>
+  /** 建筑配色：按文明（文明可以改默认配色的几项）；不给文明时是这种风格的默认配色 */
+  buildings: (culture?: Culture) => BuildingPalette
   /** 鸟居、神桥的朱红（缺省 #c8412a） */
   vermilion?: string
   buildingStroke: { color: string; width: number }
@@ -61,6 +67,9 @@ export interface SettleTheme {
 
 const shades = (...c: string[]) => c
 
+/** 这种风格的建筑配色：默认配色，盖上文明的改动 */
+const palette = (id: SettleStyleId, base: BuildingPalette) => (c?: Culture): BuildingPalette => ({ ...base, ...(c === undefined ? undefined : cultureOf(c).palettes?.[id]) })
+
 export const SETTLE_THEMES: SettleTheme[] = [
   {
     id: 'parchment',
@@ -79,7 +88,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f8f1de',
     yard: '#e2d4b2',
     plaza: '#ede1c4',
-    buildings: () => ({
+    buildings: palette('parchment', {
       house: shades('#c7b18c', '#c2aa83', '#cbb693'),
       large: shades('#bba47d'),
       temple: shades('#b09a74'),
@@ -129,60 +138,18 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f4ecd5',
     yard: '#cfd6ac',
     plaza: '#e8dcc0',
-    buildings: (c) =>
-      c === 'wa'
-        ? {
-            // 瓦顶的町家是深灰，天守、寺社的白壁黑瓦
-            house: shades('#5d6167', '#565a60', '#63676d', '#51555b'),
-            large: shades('#4c5056'),
-            temple: shades('#7a5a3c'),
-            keep: shades('#e9e4d6'),
-            tower: shades('#e2ddcf'),
-            hall: shades('#8a3b2e'),
-            shed: shades('#8f8574'),
-            pagoda: shades('#8a3b2e'),
-            magic: shades('#4c8a8f'),
-            civic: shades('#b0452f'),
-          }
-        : c === 'islamic'
-          ? {
-              // 土坯、石灰抹面的平顶，清真寺的绿与白
-              house: shades('#e3d3b1', '#dccaa4', '#e8dbbd', '#d6c39b', '#ead9b3'),
-              large: shades('#cdb68c'),
-              temple: shades('#3f8a78'),
-              keep: shades('#b98e5d'),
-              tower: shades('#f0e9d8'),
-              hall: shades('#c49a62'),
-              shed: shades('#c9b38e'),
-              pagoda: shades('#f0e9d8'),
-              magic: shades('#4c6fa8'),
-              civic: shades('#3f6f8a'),
-            }
-          : c === 'eastern'
-        ? {
-            house: shades('#747b82', '#6a7178', '#7d838a', '#666d74'),
-            large: shades('#5f666e'),
-            temple: shades('#c9963a'),
-            keep: shades('#c79a3c'),
-            tower: shades('#8f4a3a'),
-            hall: shades('#4f7e62'),
-            shed: shades('#9a8f7e'),
-            pagoda: shades('#8f4a3a'),
-            magic: shades('#4c8a8f'),
-            civic: shades('#b0452f'),
-          }
-        : {
-            house: shades('#c0674a', '#b65c42', '#c9764f', '#a9543d', '#c26e56'),
-            large: shades('#8a7f76'),
-            temple: shades('#9aa0a6'),
-            keep: shades('#8c8f94'),
-            tower: shades('#8c8f94'),
-            hall: shades('#a35f45'),
-            shed: shades('#b69b7a'),
-            pagoda: shades('#9aa0a6'),
-            magic: shades('#7b64a8'),
-            civic: shades('#4a6f86'),
-          },
+    buildings: palette('color', {
+      house: shades('#c0674a', '#b65c42', '#c9764f', '#a9543d', '#c26e56'),
+      large: shades('#8a7f76'),
+      temple: shades('#9aa0a6'),
+      keep: shades('#8c8f94'),
+      tower: shades('#8c8f94'),
+      hall: shades('#a35f45'),
+      shed: shades('#b69b7a'),
+      pagoda: shades('#9aa0a6'),
+      magic: shades('#7b64a8'),
+      civic: shades('#4a6f86'),
+    }),
     buildingStroke: { color: '#3b3833', width: 0.5 },
     roofLines: 'rgba(40,30,25,0.35)',
     shadow: 'rgba(40,40,30,0.28)',
@@ -221,7 +188,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f7f4ec',
     yard: '#ece8dc',
     plaza: '#f7f4ec',
-    buildings: () => ({
+    buildings: palette('ink', {
       house: shades('url(#hatch)'),
       large: shades('url(#hatch)'),
       temple: shades('url(#hatch2)'),
@@ -273,7 +240,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#2e5a88',
     yard: '#234a72',
     plaza: '#2b5682',
-    buildings: () => ({
+    buildings: palette('blueprint', {
       house: shades('#3d6c98'),
       large: shades('#4574a0'),
       temple: shades('#5a86b0'),
@@ -325,14 +292,14 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#e6c25a',
     yard: '#b4ada0',
     plaza: '#e9ca6c',
-    buildings: (c) => ({
-      // 切绘图的图例：町屋鼠灰、武家屋敷白地、寺社朱；伊斯兰的土坯城换成浅一些的灰褐
-      house: c === 'islamic' ? shades('#a49a88', '#9d9382', '#aaa08e') : shades('#8e8a82', '#86827a', '#96928a'),
+    buildings: palette('kiriezu', {
+      // 切绘图的图例：町屋鼠灰、武家屋敷白地、寺社朱；个别文明改其中一两项（伊斯兰的土坯城换成浅一些的灰褐，东亚的厅堂用朱）
+      house: shades('#8e8a82', '#86827a', '#96928a'),
       large: shades('#f3eee0'),
       temple: shades('#c8452d'),
       keep: shades('#f3eee0'),
       tower: shades('#f3eee0'),
-      hall: shades(c === 'wa' || c === 'eastern' ? '#c8452d' : '#f3eee0'),
+      hall: shades('#f3eee0'),
       shed: shades('#a8a398'),
       pagoda: shades('#c8452d'),
       magic: shades('#3f8a80'),
@@ -379,7 +346,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f1ece0',
     yard: 'url(#poche)',
     plaza: '#f1ece0',
-    buildings: () => ({
+    buildings: palette('nolli', {
       // 私宅并进街区的涂实里，只剩一圈轮廓；寺院、官署、城堡这些公共空间留白
       house: shades('url(#poche)'),
       large: shades('url(#poche)'),
@@ -434,7 +401,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#f3ead4',
     yard: '#e2d4b3',
     plaza: '#f3ead4',
-    buildings: () => ({
+    buildings: palette('fangzhi', {
       house: shades('#efe5cc'),
       large: shades('#efe5cc'),
       temple: shades('#dcc39c'),
@@ -487,7 +454,7 @@ export const SETTLE_THEMES: SettleTheme[] = [
     street: '#ffffff',
     yard: '#efe9e1',
     plaza: '#ffffff',
-    buildings: () => ({
+    buildings: palette('survey', {
       house: shades('#d9b8a4', '#d4b19c', '#ddbfac'),
       large: shades('#cba590'),
       temple: shades('#8f7064'),
@@ -607,24 +574,6 @@ export function dioramaGround(culture: Culture): DioramaGround {
     moatBank: '#7d7458',
     paved: true,
   }
-  if (culture === 'eastern') return { ...base, street: '#a39e94', gutter: '#847f76', plaza: '#a9a59c', yard: '#a89f7c', lane: '#b3a283' }
-  if (culture === 'wa') return { ...base, street: '#b3a487', gutter: '#96886c', plaza: '#bdb096', yard: '#a8a07a', gravel: '#d6d1c2', paved: false }
-  if (culture === 'islamic')
-    return {
-      ...base,
-      wild: '#a39b62',
-      balk: '#8f8a54',
-      street: '#c2ae8a',
-      gutter: '#a5916f',
-      plaza: '#c9b896',
-      yard: '#b8a67c',
-      road: '#c4b08a',
-      rut: '#af9a74',
-      crown: '#bdab82',
-      lane: '#bfaa84',
-      path: '#b9a47e',
-      verge: '#a09660',
-      paved: false,
-    }
-  return base
+  // 文明改其中几项（街道的铺装、夯土的颜色、干旱地带的草色……）
+  return { ...base, ...cultureOf(culture).ground }
 }

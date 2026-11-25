@@ -1,8 +1,8 @@
 import { blur, clamp } from '../gen/util'
 import * as dmath from '../gen/dmath'
+import { cultureOf } from './culture'
 import { hashAt, type Core, type Ctx } from './ctx'
 import { dist, polylineLength, resample, segDist, type P } from './geom'
-import type { Culture } from './types'
 
 /**
  * 街坊走向的张量场与它的流线（Chen 等 2008 的程序化街道建模）。
@@ -79,21 +79,10 @@ export interface FieldTraits {
   blind: number
 }
 
-/**
- * 各文明偏好的母题（权重）：西式老城多绕教堂、市场成环；东方与和风多沿一条大街、街道铺开（宿场町、街市）；
- * 伊斯兰老城是走向各异的巷子
- */
-const MOTIF_BIAS: Record<Culture, Record<Motif, number>> = {
-  western: { concentric: 1.3, spine: 1, drift: 0.9, river: 1, terrace: 1 },
-  eastern: { concentric: 0.15, spine: 1.4, drift: 0.6, river: 1, terrace: 0.8 },
-  wa: { concentric: 0.2, spine: 1.5, drift: 0.5, river: 1, terrace: 1.2 },
-  islamic: { concentric: 0.4, spine: 0.4, drift: 2.2, river: 0.7, terrace: 0.8 },
-}
-
 /** 按种子、文明与地形抽母题：没有河、海就不抽顺河，平地不抽梯台 */
 function pickMotif(ctx: Ctx): Motif {
   const { T, p } = ctx
-  const b = MOTIF_BIAS[p.culture]
+  const b = cultureOf(p.culture).motifBias
   const w: [Motif, number][] = [
     ['concentric', b.concentric],
     ['spine', b.spine],

@@ -1,5 +1,6 @@
 import { Noise } from './noise'
 import { RNG } from './rng'
+import { townCulture } from '../packs/world'
 import { Biome, isSettlement, type Label, type NamingStyle, type Realm, type TownCulture } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
 import * as dmath from './dmath'
@@ -483,7 +484,7 @@ export function politicalMap(
     const j = Math.floor(rng.next() * (k + 1))
     ;[others[k], others[j]] = [others[j], others[k]]
   }
-  // 炎热干旱的文化建伊斯兰式的城（只换形制，名字仍按自己的世界观）
+  // 各文化里炎热干旱的格数：城镇形制的规则要看（内置的规则让炎热干旱的文化建伊斯兰式的城，名字仍按自己的世界观）
   const arid = new Float64Array(nK)
   for (let i = 0; i < N; i++) {
     const k = cultRaster[i]
@@ -493,7 +494,7 @@ export function politicalMap(
   }
   const cultures: CultureBase[] = cultSeeds.map((_, k) => {
     const naming: Style = k === 0 ? worldStyle : (others[k - 1] ?? 'fantasy')
-    const town: TownCulture = naming === 'eastern' || naming === 'wa' ? naming : arid[k] > cPole.area[k] * 0.45 ? 'islamic' : 'western'
+    const town: TownCulture = townCulture({ naming, aridCells: arid[k], cells: cPole.area[k] })
     const p = cPole.pole[k]
     return { naming, polity: POLITY_OF[naming], town, color: cColor[k], x: p >= 0 ? p % W : 0, y: p >= 0 ? Math.floor(p / W) : 0, area: cPole.area[k], room: cPole.room[k] }
   })

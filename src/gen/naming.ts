@@ -118,6 +118,10 @@ const REALM_WA: Tpl[] = [
   ['# Empire', '#帝国', '#帝国'],
 ]
 
+/** 各命名世界观的通名模板：地物按种类，国名另有一套 */
+const KIND_TPL: Record<Exclude<NamingStyle, 'auto'>, Kinds> = { fantasy: WESTERN, epic: EPIC, eastern: EASTERN, wa: WA }
+const REALM_TPL: Record<Exclude<NamingStyle, 'auto'>, Tpl[]> = { fantasy: REALM_WESTERN, epic: REALM_WESTERN, eastern: REALM_EASTERN, wa: REALM_WA }
+
 // —— 西幻：拉丁拼写 → 中文音译 ——
 // 每行依次是 a e i o u 与 an en in on un
 const ZH_SYL: Record<string, string> = {
@@ -309,9 +313,7 @@ export class Namer {
   }
 
   private templates(kind: NameKind | 'saltLake'): Tpl[] {
-    if (kind === 'realm') return this.style === 'eastern' ? REALM_EASTERN : this.style === 'wa' ? REALM_WA : REALM_WESTERN
-    const table = this.style === 'eastern' ? EASTERN : this.style === 'wa' ? WA : this.style === 'epic' ? EPIC : WESTERN
-    return table[kind]
+    return kind === 'realm' ? REALM_TPL[this.style] : KIND_TPL[this.style][kind]
   }
 
   /**

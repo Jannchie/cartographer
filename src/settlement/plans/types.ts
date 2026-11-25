@@ -11,9 +11,10 @@ import type { Tri, Ward, WardType } from '../types'
  * - 规划强度（0 ~ 1）决定规划区住得下多少人：0 是纯有机，1 是整座城都按规划铺开（规划的扩张），
  *   中间是"规划的老城 + 有机的外城"。规划区的站点按世界坐标定，人口变化时已有的街坊不动。
  *
- * 新增一种形制：在 plans/ 下写一个 CityPlan，登记到 plans/index.ts。
+ * 新增一种形制：写一个 CityPlan，列进所属文明的 CultureDef.plans（见 culture.ts）。
+ * 形制的 id 是字符串：'organic'（有机生长，不是规划）之外，由各文明的 plans 提供。
  */
-export type PlanId = 'organic' | 'lifang' | 'castrum' | 'bastide' | 'medina' | 'jokamachi'
+export type PlanId = string
 
 /** 规划区：中心就是主城心（第 0 个片区的站点），u / v 是规划方格的两条轴 */
 export interface PlanZone {
@@ -60,7 +61,10 @@ export interface PlanLot {
 }
 
 export interface CityPlan {
-  id: Exclude<PlanId, 'organic'>
+  id: PlanId
+  /** 界面用的名称与说明（中文键，界面按语言翻译） */
+  name: string
+  desc: string
   /**
    * 规划区的朝向（弧度，u 轴方向）。默认沿主城心的方格朝向；坐北朝南的形制（里坊、城下町）返回 0。
    */
@@ -73,6 +77,8 @@ export interface CityPlan {
   mainWidth?: number
   /** 主街种行道树；默认种 */
   avenueTrees?: boolean
+  /** 上层（职业大类里的 elite）占城市人口的比例：城下町约一半是武士；不填按文明的职业构成 */
+  eliteShare?: number
   /** 这种形制里没有的通用要素（数量一律为 0），如麦地那没有角斗场、露天剧场 */
   exclude?: FeatureId[]
   /** 规划区轮廓（局部坐标由 z 给出；poly / contains 由框架按轮廓生成） */

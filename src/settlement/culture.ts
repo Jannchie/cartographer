@@ -1,26 +1,46 @@
 import type { Ctx } from './ctx'
+import type { CultureLexicon } from './describe'
 import type { FeatureId } from './features'
+import type { GardenTradition } from './garden/kit'
 import type { P, Poly } from './geom'
-import type { PlanId } from './plans/types'
-import type { FieldTraits } from './tensor'
+import type { CultureNaming } from './names'
+import type { CulturePeople } from './people'
+import type { CityPlan, PlanId } from './plans/types'
+import type { SacredTry } from './sacred'
+import type { CultureHousing } from './scale'
+import type { FieldTraits, Motif } from './tensor'
+import type { BuildingPalette, DioramaGround, SettleStyleId } from './themes'
+import type { CultureTiers } from './tiers'
 import type { Culture, Ward, WardType } from './types'
 
 /**
- * 文明：决定一座城用什么形制、盖什么样的房子、起什么样的名字。
- * - 西方：中世纪欧洲，城堡、教堂、广场与市民住宅
- * - 东方：中国，四合院、中轴对称的宫城与寺观、里坊
- * - 和风：日本，町家、武家屋敷、寺社与天守
- * - 伊斯兰：中东与北非，内院住宅、清真寺、集市与浴场
+ * 文明的注册表。文明（Culture）决定一座城用什么形制、盖什么样的房子、起什么样的名字；
+ * 它是一个字符串 id，对应一份 CultureDef。聚落生成的各个环节不按 id 分支，而是读这份定义里的
+ * 能力标记、数据表，或调用它的钩子——新增一种文明只需要写一份 CultureDef 并注册，不需要改生成器。
+ *
+ * 文明按"文化包"（CulturePack）成组注册：一个文化包是一组相互配套的文明（内置的 classic 包含
+ * 西式、东方、和风、伊斯兰）。文化包与世界层的"命名世界观"（gen/naming.ts 的 NamingStyle）是两回事：
+ * 命名世界观决定世界地图上的地名怎么起，文化包提供聚落的建法；两者由文化包的一条规则对应起来
+ *（见 packs/world.ts）。
+ *
+ * 本模块只有类型导入，不依赖任何具体的文明。注册在模块加载时静态完成：聚落生成的入口
+ *（generate.ts）导入 packs/ 的入口模块，主线程与 Worker 都由此完成注册，不依赖运行时状态。
+ * 沙盘（render/town3d）的建筑套件另有自己的注册表（render/town3d/kits.ts），按同一个文明 id 对应。
  */
-export interface CultureInfo {
-  id: Culture
-  /** 中文名、英文名、日文名 */
-  name: [zh: string, en: string, ja: string]
-  desc: string
-  /** 可选的规划形制（有机生长总是可选） */
-  plans: Exclude<PlanId, 'organic'>[]
-  /** 东亚的木构体系：水田、默认挖护城河、汉字书法字体这些东方与和风共有的 */
+
+/** 能力标记与基本参数：生成器里按文明分支的地方读这里 */
+export interface CultureTraits {
+  /**
+   * 东亚的木构院落体系。通用填法（wards.ts、civic.ts、features.ts）内置院落式与西式两套衙署、寺观、市集的盖法，
+   * 按这一项选用；两套都不合适的文明由 CultureStyle 的钩子整体接管
+   */
   eastAsian: boolean
+  /** 气候合适时种水田 */
+  paddy: boolean
+  /** 图名用书法字体（汉字文化圈） */
+  brushTitle: boolean
+  /** 奇幻城依山时，山上立一座宗门，石阶从城门上山 */
+  hillSect: boolean
   /** 每户人数 */
   perHousehold: number
   /** 城墙选"自动"时修不修（和风的城下町不筑外郭，靠城堡与寺町防守；要塞城照修） */
@@ -29,80 +49,19 @@ export interface CultureInfo {
   moat: boolean
   /** 城扩出去以后，上一道石墙留作内城（子城 / 内城外郭）；否则拆了筑环城大道，留几段残墙 */
   innerWall: boolean
-  /** 宫城坐北朝南（否则顺着地块的长轴） */
-  palaceSouth: boolean
+  /** 都城宫城的朝向：south 坐北朝南；center 正面朝城心（进深沿着离开城心的方向） */
+  palaceFacing: 'south' | 'center'
+  /** 合成的大地标（宫城、大寺社）的轴线：grid 按方格朝向摆（宫城正南北）；lot 顺着合成地块的长轴 */
+  compoundAxis: 'grid' | 'lot'
   /** 各家的祖坟散在城外的坡地上（城里不设公共墓园，见 rural.ts 的 hillTombs） */
   tombs?: boolean
   /** 这个文明没有的要素（自动数量为 0，手动仍可加） */
   exclude?: FeatureId[]
+  /** 合成的大寺社四周林木的密度（株 / 平方米）：镇守之森密，寺林、教堂草地疏 */
+  templeGrove: number
+  /** 城外大路边的祠、十字架每隔多少米一处 */
+  waysideGap: number
 }
-
-export const CULTURE_INFO: Record<Culture, CultureInfo> = {
-  western: {
-    id: 'western',
-    name: ['西式', 'Western', '西洋'],
-    desc: '中世纪欧洲式：城堡、教堂、广场与市民住宅',
-    plans: ['castrum', 'bastide'],
-    eastAsian: false,
-    perHousehold: 5.5,
-    autoWalls: true,
-    moat: false,
-    innerWall: false,
-    palaceSouth: false,
-  },
-  eastern: {
-    id: 'eastern',
-    name: ['东方', 'Chinese', '中華'],
-    desc: '里坊民居、中轴对称的宫城与寺观、四合院',
-    plans: ['lifang'],
-    eastAsian: true,
-    perHousehold: 4.2,
-    autoWalls: true,
-    moat: true,
-    innerWall: true,
-    palaceSouth: true,
-    tombs: true,
-    // 唐律"京城内不得葬"：城里没有墓园，坟地在城外（见 tombs）
-    exclude: ['windmill', 'cemetery'],
-  },
-  wa: {
-    id: 'wa',
-    name: ['和风', 'Japanese', '和風'],
-    desc: '町家与武家屋敷、寺社、天守与城下町',
-    // 平安京、平城京的条坊制照搬唐长安
-    plans: ['jokamachi', 'lifang'],
-    eastAsian: true,
-    perHousehold: 4.5,
-    autoWalls: false,
-    moat: true,
-    innerWall: false,
-    palaceSouth: true,
-    // 墓地附在寺院里（寺町），不单独成片
-    exclude: ['amphitheater', 'pulpit', 'winery', 'windmill', 'cemetery'],
-  },
-  islamic: {
-    id: 'islamic',
-    name: ['伊斯兰', 'Islamic', 'イスラーム'],
-    desc: '内院住宅与尽端巷、清真寺、集市与浴场',
-    plans: ['medina'],
-    eastAsian: false,
-    perHousehold: 6,
-    autoWalls: true,
-    moat: false,
-    innerWall: false,
-    palaceSouth: false,
-    // 没有剧场、竞技场、比武场与酒庄
-    exclude: ['stage', 'pulpit', 'amphitheater', 'arena', 'winery', 'windmill'],
-  },
-}
-
-export const CULTURES = Object.keys(CULTURE_INFO) as Culture[]
-
-/** 东亚（东方、和风）共有的做法 */
-export const eastAsian = (c: Culture) => CULTURE_INFO[c].eastAsian
-
-/** 形制与文明是否相配 */
-export const planFits = (c: Culture, plan: PlanId | undefined) => !plan || plan === 'organic' || CULTURE_INFO[c].plans.includes(plan)
 
 /**
  * 文明自己的盖法：规划区外的有机片区也按本文明的样式盖（和风的町家、伊斯兰的内院住宅……）。
@@ -117,3 +76,99 @@ export interface CultureStyle {
   /** 城里街网的参数：在母题定好的值上改（见 tensor.ts 的 fieldTraits） */
   streets?(t: FieldTraits): void
 }
+
+/** 一种文明的全部定义 */
+export interface CultureDef {
+  id: Culture
+  /** 名称与说明（中文键，界面按语言翻译） */
+  name: string
+  desc: string
+  traits: CultureTraits
+  /** 可选的规划形制（有机生长总是可选）。同一种形制在不同文明里可以有自己的变体与叫法（和风的条坊制是里坊的变体） */
+  plans: CityPlan[]
+  /** 片区、农舍、街网的盖法；空对象表示全用通用填法 */
+  style: CultureStyle
+  /** 聚落、片区、街巷、城门、地标的起名规则（names.ts） */
+  naming: CultureNaming
+  /** 悬停说明里按文明的叫法与作物（describe.ts） */
+  lexicon: CultureLexicon
+  /** 职业分法、专门片区的人口密度（people.ts） */
+  people: CulturePeople
+  /** 民居密度的实测值（scale.ts） */
+  housing: CultureHousing
+  /** 偏好的街网母题（权重，tensor.ts） */
+  motifBias: Record<Motif, number>
+  /** small / micro 规模档的地标：堂区教堂、村社、祠堂、路边的祠……（tiers.ts） */
+  tiers: CultureTiers
+  /** 名所：按地形才有的招牌布置，k 是随规模、功效的倍率（sacred.ts）；不填没有 */
+  sacred?(ctx: Ctx, k: number): SacredTry[]
+  /** 造园传统：园林的预设与元素池按它挑（garden/） */
+  garden: GardenTradition
+  /** 要素在这个文明里的叫法（缺省用要素自己的名字，features.ts 的 featureName） */
+  featureNames?: Partial<Record<FeatureId, string>>
+  /** 各绘图风格里建筑配色的改动：盖在该风格的默认配色之上（themes.ts） */
+  palettes?: Partial<Record<SettleStyleId, Partial<BuildingPalette>>>
+  /** 沙盘地面配色的改动：盖在默认配色之上（themes.ts 的 dioramaGround） */
+  ground?: Partial<DioramaGround>
+}
+
+/** 文化包：一组配套的文明，注册的单位 */
+export interface CulturePack {
+  id: string
+  cultures: CultureDef[]
+  /** 包自己的界面词条（中、英、日）：在各文明的职业名之前登记，同一个中文键先登记的为准 */
+  strings?: [zh: string, en: string, ja: string][]
+}
+
+const defs = new Map<Culture, CultureDef>()
+const packIds = new Set<string>()
+
+/** 注册一个文化包：包里的文明按顺序登记（界面上的选项也按这个顺序）。重复的 id 视为错误 */
+export function registerPack(pack: CulturePack) {
+  if (packIds.has(pack.id)) throw new Error(`文化包 ${pack.id} 重复注册`)
+  packIds.add(pack.id)
+  for (const c of pack.cultures) {
+    if (defs.has(c.id)) throw new Error(`文明 ${c.id} 重复注册（文化包 ${pack.id}）`)
+    defs.set(c.id, c)
+  }
+}
+
+/** 已注册的文明 id（按注册顺序） */
+export const cultureIds = (): Culture[] => [...defs.keys()]
+
+/** 文明的定义；没有注册的 id 视为错误（入口模块没有导入 packs/，或存档里的文明来自没有加载的文化包） */
+export function cultureOf(c: Culture): CultureDef {
+  const d = defs.get(c)
+  if (!d) throw new Error(`文明 ${c} 没有注册`)
+  return d
+}
+
+/** 文明的能力标记与基本参数 */
+export const traitsOf = (c: Culture): CultureTraits => cultureOf(c).traits
+
+// —————————————————————— 城市形制 ——————————————————————
+
+/** 界面用：有机生长的名称与说明（它不是规划，不在各文明的 plans 里） */
+const ORGANIC_PLAN = { id: 'organic' as PlanId, name: '有机生长', desc: '沿干道、河流自然长成的街巷' }
+
+/** 这个文明里的某种形制（含它在这个文明里的变体）；有机生长、别的文明的形制返回 undefined */
+export const planOf = (c: Culture, id: PlanId | undefined): CityPlan | undefined => (id && id !== 'organic' ? cultureOf(c).plans.find((p) => p.id === id) : undefined)
+
+/** 形制与文明是否相配 */
+export const planFits = (c: Culture, plan: PlanId | undefined) => !plan || plan === 'organic' || !!planOf(c, plan)
+
+/** 界面用：这个文明可选的形制（名称与说明按它在这个文明里的叫法） */
+export const planChoices = (c: Culture): { id: PlanId; name: string; desc: string }[] => [ORGANIC_PLAN, ...cultureOf(c).plans.map((p) => ({ id: p.id, name: p.name, desc: p.desc }))]
+
+/** 按 id 找形制，不看文明：参数里写着某种形制时，它自带的属性（如 eliteShare）照它的算 */
+export function planById(id: PlanId | undefined): CityPlan | undefined {
+  if (!id || id === 'organic') return undefined
+  for (const d of defs.values()) {
+    const p = d.plans.find((p) => p.id === id)
+    if (p) return p
+  }
+  return undefined
+}
+
+/** 全部形制的 id（含有机生长） */
+export const planIds = (): PlanId[] => [...new Set<PlanId>(['organic', ...[...defs.values()].flatMap((d) => d.plans.map((p) => p.id))])]

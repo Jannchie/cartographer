@@ -103,12 +103,7 @@ class Grid<T> {
 }
 
 /** 点到凸多边形的距离（内部为 0） */
-function polyDist(p: P, poly: Poly) {
-  if (pointInPoly(p, poly)) return 0
-  let d = Infinity
-  for (let i = 0; i < poly.length; i++) d = Math.min(d, segDist(p, poly[i], poly[(i + 1) % poly.length]).d)
-  return d
-}
+const polyDist = (p: P, poly: Poly) => (pointInPoly(p, poly) ? 0 : edgeDist(p, poly))
 
 function audit(name: string, input: Partial<SettlementParams>): Report {
   const params = { ...DEFAULT_SETTLEMENT, ...input } as SettlementParams

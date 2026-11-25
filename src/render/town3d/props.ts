@@ -1,20 +1,19 @@
 /**
  * 小品：生成器给了点位或宅地、二维地图上画成符号的东西，在沙盘上立起来。
- * - 地标点：井、喷泉、雕像（和式为石灯笼、东方为石碑）、水车；
+ * - 地标点：井、喷泉、雕像（有的文明立石灯笼、石碑）、水车；
  * - 交给这里盖的"建筑"：墓地里的墓（各文明的墓碑、坟丘、墓石）、广场上的市集摊棚、风车、灯塔、砖瓦窑、绞刑台、传送门；
  * - 园林的置石与假山；奇观（法阵、灵泉、浮空岛、灵脉的晶簇）；田里的草垛。
+ * 各文明不同的做法（墓、摊棚的棚顶、井栏、喷泉、雕像位上立什么……）读文明的沙盘套件（kits.ts 的 GraveKit、PropsKit）。
  * 都并进体块的网格、带各自的生卒。数量可能上千（墓、摊棚），每件只用几十个三角形。纯函数，在 Worker 中运行。
  */
 import { area, bboxOf, centroid, obb, pointInPoly, type P } from '../../settlement/geom'
 import type { Building, Field, Landmark, ParkPart, Settlement } from '../../settlement/types'
 import { MAT, mixRGB, shade, type RGB, type V3 } from './mesh'
-import { COPPER, STONE, STONE_EAST, TIMBER, TIMBER_DARK, hex } from './shared'
+import { COPPER, STONE, TIMBER, TIMBER_DARK, hex } from './shared'
 import { archFace, archOutline, axOf, axUV, ball, beam, box, cbox, hash, l3, loft, lp, placeArch, ringUnder, tube, vault, type Ax } from './worksMesh'
 import type { WCtx } from './works'
 
-const GRANITE = hex('#9c9a95')
 const MARBLE = hex('#d8d4c8')
-const EARTH = hex('#8a7a5c')
 const STRAW = hex('#c2a55e')
 const IRON = hex('#33312f')
 
@@ -74,7 +73,7 @@ export function propBuilding(c: WCtx, b: Building, kind: PropKind) {
   w.face = MAT.plain
   switch (kind) {
     case 'grave':
-      return grave(c, f, g, o.len, o.wid)
+      return c.kit.grave.plot(c, f, g, o.len, o.wid)
     case 'stall':
       return stall(c, f, g, o.len / 2, o.wid / 2, b.tone)
     case 'windmill':
@@ -90,74 +89,19 @@ export function propBuilding(c: WCtx, b: Building, kind: PropKind) {
   }
 }
 
-/** 墓：西式立碑或石十字，东方坟丘前立碑，和式墓石，伊斯兰卧碑两头立石 */
-function grave(c: WCtx, f: Ax, g: number, len: number, wid: number) {
-  const { w, culture } = c
-  const [x, z] = f.o
-  const h1 = hash(x, z, 1)
-  const h2 = hash(x, z, 2)
-  const lo = g - 0.4
-  if (culture === 'eastern') {
-    // 坟丘：覆草的土丘，丘前一方石碑
-    w.c = mixRGB(hex('#77824f'), EARTH, h1 * 0.6)
-    w.face = MAT.straw
-    ball(w, [x, g - 0.05, z], Math.min(wid, len) * 0.52, 6, 2, 0, Math.PI / 2, 0.75)
-    w.c = shade(GRANITE, 0.9 + h2 * 0.2)
-    w.face = MAT.plain
-    box(w, f, len * 0.36, len * 0.36 + 0.14, -0.22, 0.22, lo, g + 0.62 + h1 * 0.2)
-    return
-  }
-  if (culture === 'wa') {
-    // 墓石：台石上立一根方柱
-    w.c = shade(GRANITE, 0.82 + h2 * 0.22)
-    cbox(w, f, 0.34, 0.34, lo, g + 0.2)
-    cbox(w, f, 0.24, 0.24, g + 0.2, g + 0.36)
-    cbox(w, f, 0.14, 0.14, g + 0.36, g + 1.05 + h1 * 0.25, { inset: 0.012 })
-    return
-  }
-  if (culture === 'islamic') {
-    // 卧碑：一方低矮的白石棺台，头脚各立一块碑石
-    w.c = shade(hex('#dcd6c6'), 0.9 + h2 * 0.14)
-    box(w, f, -len * 0.42, len * 0.42, -wid * 0.3, wid * 0.3, lo, g + 0.26, { inset: 0.04 })
-    for (const s of [-1, 1]) box(w, f, s * len * 0.4 - 0.05, s * len * 0.4 + 0.05, -0.13, 0.13, g + 0.2, g + (s > 0 ? 0.82 : 0.55) + h1 * 0.15, { inset: 0.02 })
-    return
-  }
-  // 西式：立碑（多数）或石十字，碑前一方略高的墓床
-  w.c = mixRGB(hex('#6f7a4c'), EARTH, 0.35)
-  w.face = MAT.straw
-  box(w, f, -len * 0.3, len * 0.42, -wid * 0.36, wid * 0.36, lo, g + 0.1, { inset: 0.08 })
-  w.c = shade(mixRGB(GRANITE, hex('#b9b5a6'), h2), 0.85 + h1 * 0.2)
-  w.face = MAT.plain
-  const s = -len * 0.4
-  // 歪一点：年久的碑并不都直
-  const lean = (h1 - 0.5) * 0.08
-  if (h2 < 0.24) {
-    beam(w, l3(f, s, 0, lo), l3(f, s + lean, 0, g + 1.15), 0.07, 0.07)
-    beam(w, l3(f, s + lean * 0.7, -0.26, g + 0.82), l3(f, s + lean * 0.7, 0.26, g + 0.82), 0.07, 0.07)
-  } else {
-    const hh = 0.62 + h1 * 0.4
-    box(w, f, s - 0.06, s + 0.06, -0.26, 0.26, lo, g + hh, { top: h2 >= 0.7 })
-    // 碑头：尖的或平的
-    if (h2 < 0.7) {
-      w.triOut(l3(f, s - 0.06, -0.26, g + hh), l3(f, s - 0.06, 0.26, g + hh), l3(f, s - 0.06, 0, g + hh + 0.2), [-f.u[0], 0, -f.u[1]])
-      w.triOut(l3(f, s + 0.06, -0.26, g + hh), l3(f, s + 0.06, 0.26, g + hh), l3(f, s + 0.06, 0, g + hh + 0.2), [f.u[0], 0, f.u[1]])
-      for (const t of [-1, 1]) w.quadOut(l3(f, s - 0.06, t * 0.26, g + hh), l3(f, s + 0.06, t * 0.26, g + hh), l3(f, s + 0.06, 0, g + hh + 0.2), l3(f, s - 0.06, 0, g + hh + 0.2), [f.v[0] * t, 1, f.v[1] * t])
-    }
-  }
-}
-
 /** 摊棚的篷布颜色（低饱和的红、蓝、绿、赭、本白） */
 const AWNING: RGB[] = ['#a8483a', '#4a6a8a', '#5f7d52', '#b08a3e', '#c9c0a8', '#8a4a5a'].map(hex)
 
-/** 市集摊棚：四柱、篷顶（西式与伊斯兰为条纹篷布，东亚为木板 / 草顶的小棚）、柜台与货 */
+/** 市集摊棚：四柱、篷顶（条纹篷布，或木板 / 草顶的小棚）、柜台与货 */
 function stall(c: WCtx, f: Ax, g: number, hs: number, ht: number, tone: number) {
-  const { w, culture } = c
+  const { w } = c
   const [x, z] = f.o
   const h1 = hash(x, z, 1)
   const lo = g - 0.4
-  const east = culture === 'eastern' || culture === 'wa'
+  // 木板、草顶的小棚（否则是条纹篷布）
+  const solid = c.kit.props.stallRoof
   const yb = g + 1.95
-  const yf = g + (east ? 2.25 : 2.55)
+  const yf = g + (solid ? 2.25 : 2.55)
   // 柱
   w.c = TIMBER_DARK
   for (const [s, t, top] of [[-1, -1, yb], [1, -1, yb], [1, 1, yf], [-1, 1, yf]] as [number, number, number][]) {
@@ -165,20 +109,20 @@ function stall(c: WCtx, f: Ax, g: number, hs: number, ht: number, tone: number) 
     beam(w, [q[0], lo, q[1]], [q[0], top, q[1]], 0.055, 0.055, false)
   }
   // 篷顶：单坡，前高后低，四周略挑出
-  const col = east ? (culture === 'wa' ? hex('#7b6a55') : STRAW) : AWNING[Math.floor(tone * 977 + h1 * 6) % AWNING.length]
+  const col = solid ? solid.col : AWNING[Math.floor(tone * 977 + h1 * 6) % AWNING.length]
   w.c = col
-  w.face = east ? (culture === 'wa' ? MAT.plank : MAT.straw) : MAT.cloth
+  w.face = solid ? solid.face : MAT.cloth
   const ov = 0.3
   const a = l3(f, -hs - ov, -ht - ov, yb - 0.1)
   const b = l3(f, hs + ov, -ht - ov, yb - 0.1)
   const d = l3(f, -hs - ov, ht + ov, yf + 0.1)
   const e = l3(f, hs + ov, ht + ov, yf + 0.1)
-  const stripe = east ? 0 : h1 < 0.75 ? 0.34 : 0
+  const stripe = solid ? 0 : h1 < 0.75 ? 0.34 : 0
   w.uvOf = (p) => [(p[0] - f.o[0]) * f.u[0] + (p[2] - f.o[1]) * f.u[1] + hs + ov, stripe, 0]
   w.slabQuad(a, b, e, d, 0.05, shade(col, 0.6))
   w.uvOf = null
   // 前檐垂下的一道布边
-  if (!east) {
+  if (!solid) {
     w.uvOf = (p) => [(p[0] - f.o[0]) * f.u[0] + (p[2] - f.o[1]) * f.u[1] + hs + ov, stripe, 0]
     const dn = (p: V3): V3 => [p[0], p[1] - 0.28, p[2]]
     w.quadOut(d, e, dn(e), dn(d), [f.v[0], 0, f.v[1]])
@@ -254,11 +198,12 @@ function windmill(c: WCtx, p: P, g: number, r: number) {
 
 /** 灯塔：收分的白塔、挑出的回廊、灯室（夜里发光）与小圆顶 */
 function lighthouse(c: WCtx, p: P, g: number, r: number) {
-  const { w, culture } = c
+  const { w } = c
+  const look = c.kit.props.lighthouse
   const R = Math.max(3, r)
   const top = g + 21
-  w.c = culture === 'islamic' ? hex('#dccdaa') : culture === 'eastern' ? hex('#b9b5ab') : hex('#e2ddd0')
-  w.face = culture === 'western' ? MAT.plaster : MAT.stone
+  w.c = look.col
+  w.face = look.face
   tube(w, p, R * 1.05, R * 0.95, g - 1.5, g + 3, 16)
   tube(w, p, R * 0.95, R * 0.62, g + 3, top, 16)
   // 回廊：挑出的平台与栏杆
@@ -284,7 +229,7 @@ function lighthouse(c: WCtx, p: P, g: number, r: number) {
     const q: P = [p[0] + Math.cos(a) * R * 0.45, p[1] + Math.sin(a) * R * 0.45]
     beam(w, [q[0], top + 0.25, q[1]], [q[0], top + 2.5, q[1]], 0.05, 0.05, false)
   }
-  w.c = culture === 'western' ? hex('#7a3a2c') : COPPER
+  w.c = look.cap
   ringUnder(w, p, R * 0.3, R * 0.56, top + 2.5, 10)
   ball(w, [p[0], top + 2.5, p[1]], R * 0.56, 10, 3, 0, Math.PI / 2, 0.8)
   w.c = IRON
@@ -380,7 +325,8 @@ function portal(c: WCtx, f: Ax, g: number, hs: number) {
 
 /** 井、喷泉、雕像（石灯笼、石碑）、水车 */
 export function landmarkProp(c: WCtx, l: Landmark) {
-  const { w, H, culture } = c
+  const { w, H } = c
+  const kit = c.kit.props
   const [x, z] = l.p
   if (l.kind !== 'well' && l.kind !== 'fountain' && l.kind !== 'statue' && l.kind !== 'mill') return
   w.at(x, z)
@@ -388,25 +334,24 @@ export function landmarkProp(c: WCtx, l: Landmark) {
   w.base = g - 0.6
   w.face = MAT.plain
   const h1 = hash(x, z, 1)
-  const f = axOf(l.p, Math.floor(h1 * 4) * (Math.PI / 2) + (culture === 'western' ? h1 : 0))
+  const f = axOf(l.p, Math.floor(h1 * 4) * (Math.PI / 2) + (kit.skew ? h1 : 0))
   if (l.kind === 'well') return well(c, f, g)
   if (l.kind === 'fountain') return fountain(c, l.p, g)
   if (l.kind === 'mill') return waterwheel(c, l.p)
-  // 雕像：和式是石灯笼，东方是石碑，其余是台座上的铜像
-  if (culture === 'wa') return lantern(c, f, g)
-  if (culture === 'eastern') return stele(c, f, g)
+  // 雕像：文明自己的做法（石灯笼、石碑），否则是台座上的铜像
+  if (kit.statue) return kit.statue(c, f, g)
   statue(c, f, g)
 }
 
-/** 井：石井栏（东亚为方井栏）、水面，井架与小顶 */
+/** 井：井栏（圆的石井栏，或四块板围成的方井栏）、水面，井架与小顶 */
 function well(c: WCtx, f: Ax, g: number) {
-  const { w, culture } = c
+  const { w } = c
+  const look = c.kit.props.well
   const p = f.o
-  const east = culture === 'eastern' || culture === 'wa'
-  if (east) {
-    // 方井栏：四块石板（和式为木井桁）
-    w.c = culture === 'wa' ? TIMBER : STONE_EAST
-    w.face = culture === 'wa' ? MAT.board : MAT.stone
+  if (look.square) {
+    // 方井栏：四块石板或木井桁
+    w.c = look.col
+    w.face = look.face
     for (const q of [0, 1, 2, 3]) {
       const ff = q % 2 ? { o: p, u: f.v, v: f.u } : f
       const sg = q < 2 ? 1 : -1
@@ -416,8 +361,8 @@ function well(c: WCtx, f: Ax, g: number) {
     w.face = MAT.pool
     w.quadOut(l3(f, -0.55, -0.55, g + 0.25), l3(f, 0.55, -0.55, g + 0.25), l3(f, 0.55, 0.55, g + 0.25), l3(f, -0.55, 0.55, g + 0.25), [0, 1, 0])
   } else {
-    w.c = culture === 'islamic' ? hex('#cfc3a6') : STONE
-    w.face = MAT.stone
+    w.c = look.col
+    w.face = look.face
     tube(w, p, 0.95, 0.9, g - 0.4, g + 0.8, 10)
     // 井栏顶与内壁
     w.face = MAT.plain
@@ -441,9 +386,9 @@ function well(c: WCtx, f: Ax, g: number) {
   }
   beam(w, l3(f, 0, -1.05, g + 1.75), l3(f, 0, 1.05, g + 1.75), 0.07, 0.07, false)
   beam(w, l3(f, 0, 0, g + 1.7), l3(f, 0, 0, g + 0.9), 0.015, 0.015, false)
-  const col = east ? hex('#565a60') : culture === 'islamic' ? hex('#b9a888') : hex('#7a4a38')
+  const col = look.roof
   w.c = col
-  w.face = east ? MAT.tileEast : MAT.tile
+  w.face = look.roofFace
   const A = 1.35
   const B = 0.8
   const yr = g + 2.75
@@ -452,13 +397,17 @@ function well(c: WCtx, f: Ax, g: number) {
   for (const sg of [-1, 1]) w.slabQuad(P3(sg * B, -A, ye), P3(sg * B, A, ye), P3(0, A, yr), P3(0, -A, yr), 0.06, shade(col, 0.55))
 }
 
-/** 喷泉：水池（池沿、水面）、中柱与上层的水盘；伊斯兰为贴地的八角浅池 */
+/** 喷泉的水池：不给套件时的做法（大理石的圆池，中柱顶上带喷口） */
+const FOUNTAIN = { sides: 16, kerb: 0.62, stone: MARBLE, rim: MARBLE, jet: true }
+
+/** 喷泉：水池（池沿、水面）、中柱与上层的水盘；水池的形制按文明的沙盘套件（如贴地的八角浅池） */
 function fountain(c: WCtx, p: P, g: number) {
-  const { w, culture } = c
+  const { w } = c
+  const look = c.kit.props.fountain ?? FOUNTAIN
   const R = 3.1
-  const n = culture === 'islamic' ? 8 : 16
-  const kerb = culture === 'islamic' ? 0.32 : 0.62
-  const stone = culture === 'islamic' ? hex('#d9d2c0') : MARBLE
+  const n = look.sides
+  const kerb = look.kerb
+  const stone = look.stone
   w.c = stone
   w.face = MAT.plain
   tube(w, p, R, R, g - 0.4, g + kerb, n)
@@ -466,7 +415,7 @@ function fountain(c: WCtx, p: P, g: number) {
   for (let k = 0; k < n; k++) {
     const a0 = (k / n) * Math.PI * 2
     const a1 = ((k + 1) / n) * Math.PI * 2
-    w.c = culture === 'islamic' ? hex('#3d7f86') : stone
+    w.c = look.rim
     w.face = MAT.plain
     w.quadOut(P3(a0, R, g + kerb), P3(a1, R, g + kerb), P3(a1, R - 0.38, g + kerb), P3(a0, R - 0.38, g + kerb), [0, 1, 0])
     w.c = stone
@@ -487,7 +436,7 @@ function fountain(c: WCtx, p: P, g: number) {
   w.c = stone
   w.face = MAT.plain
   for (let k = 0; k < 10; k++) w.quadOut(P3((k / 10) * 6.2832, 1.05, g + 1.9), P3(((k + 1) / 10) * 6.2832, 1.05, g + 1.9), P3(((k + 1) / 10) * 6.2832, 1.15, g + 1.9), P3((k / 10) * 6.2832, 1.15, g + 1.9), [0, 1, 0])
-  if (culture === 'islamic') return
+  if (!look.jet) return
   tube(w, p, 0.16, 0.12, g + 1.8, g + 2.6, 6)
   ball(w, [p[0], g + 2.7, p[1]], 0.2, 6, 3, -Math.PI / 2, Math.PI / 2)
 }
@@ -511,41 +460,6 @@ function statue(c: WCtx, f: Ax, g: number) {
   ball(w, [p[0], y + 1.92, p[1]], 0.17, 7, 4, -Math.PI / 2, Math.PI / 2)
   beam(w, l3(f, 0, 0.26, y + 1.55), l3(f, 0.5, 0.36, y + 1.75), 0.055, 0.055)
   beam(w, l3(f, 0, -0.26, y + 1.55), l3(f, 0.08, -0.3, y + 0.95), 0.055, 0.055)
-}
-
-/** 石灯笼：基座、竿、中台、火袋（夜里亮）、笠与宝珠 */
-function lantern(c: WCtx, f: Ax, g: number) {
-  const { w } = c
-  const p = f.o
-  w.c = shade(GRANITE, 0.9)
-  tube(w, p, 0.42, 0.34, g - 0.3, g + 0.22, 6)
-  tube(w, p, 0.15, 0.13, g + 0.22, g + 1.15, 6)
-  tube(w, p, 0.14, 0.36, g + 1.15, g + 1.3, 6, { cap: true })
-  w.c = hex('#e8d9a0')
-  w.face = MAT.lamp
-  cbox(w, f, 0.2, 0.2, g + 1.3, g + 1.68, { top: false })
-  w.c = shade(GRANITE, 0.9)
-  w.face = MAT.plain
-  for (const [s, t] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-    const q = lp(f, s * 0.2, t * 0.2)
-    beam(w, [q[0], g + 1.3, q[1]], [q[0], g + 1.68, q[1]], 0.035, 0.035, false)
-  }
-  ringUnder(w, p, 0.1, 0.5, g + 1.68, 6)
-  tube(w, p, 0.5, 0.1, g + 1.68, g + 1.95, 6)
-  ball(w, [p[0], g + 2.02, p[1]], 0.09, 6, 2, -Math.PI / 2, Math.PI / 2)
-}
-
-/** 石碑：龟趺座、碑身与碑首 */
-function stele(c: WCtx, f: Ax, g: number) {
-  const { w } = c
-  w.c = shade(STONE_EAST, 1.05)
-  w.face = MAT.stone
-  cbox(w, f, 0.6, 0.95, g - 0.4, g + 0.5, { inset: 0.1 })
-  w.c = hex('#55585a')
-  w.face = MAT.plain
-  cbox(w, f, 0.13, 0.52, g + 0.5, g + 2.5)
-  w.c = shade(STONE_EAST, 1.1)
-  cbox(w, f, 0.17, 0.6, g + 2.5, g + 3.0, { inset: 0.06 })
 }
 
 /** 水车：立在岸边、半浸水里的轮（轮辋、辐条、叶板），轴伸向岸上的磨坊 */
@@ -621,9 +535,14 @@ function waterwheel(c: WCtx, p: P) {
 
 // —————————————————————— 园林、奇观、田野 ——————————————————————
 
+/** 置石、草垛：不给套件时的做法 */
+const ROCK = { base: 0.6, vary: 0.6, col: hex('#8f8c84') }
+const HAYSTACK = { foot: 0.85, body: 1.1, top: 2.1 }
+
 /** 置石、假山石：由平面轮廓拉起的不规则石块（顶面内收、高低不一），岩石材质 */
 export function rock(c: WCtx, q: ParkPart) {
-  const { w, H, culture } = c
+  const { w, H } = c
+  const look = c.kit.props.rock ?? ROCK
   const ct = centroid(q.poly)
   const n = q.poly.length
   if (n < 3) return
@@ -633,9 +552,9 @@ export function rock(c: WCtx, q: ParkPart) {
   const g = H(ct[0], ct[1])
   w.base = g - 0.6
   const h1 = hash(ct[0], ct[1], 1)
-  // 太湖石偏高瘦，和式的石矮而稳
-  const hgt = r * (culture === 'eastern' ? 1.0 + h1 * 1.1 : culture === 'wa' ? 0.55 + h1 * 0.5 : 0.6 + h1 * 0.6)
-  w.c = shade(culture === 'eastern' ? hex('#a9a69e') : hex('#8f8c84'), 0.85 + hash(ct[0], ct[1], 2) * 0.3)
+  // 高矮与石色随文明（太湖石偏高瘦，和式的石矮而稳）
+  const hgt = r * (look.base + h1 * look.vary)
+  w.c = shade(look.col, 0.85 + hash(ct[0], ct[1], 2) * 0.3)
   w.face = MAT.rock
   // 四层：底、腰（略外鼓）、肩（内收、偏心）、顶；各顶点再各自进出一些，面不平滑（石头的棱面）
   const off: P = [(hash(ct[0], ct[1], 3) - 0.5) * r * 0.6, (hash(ct[0], ct[1], 4) - 0.5) * r * 0.6]
@@ -826,7 +745,8 @@ export function wonder(c: WCtx, x: Settlement['wonders'][number], magic: RGB) {
 
 /** 田里的草垛：收过的大田与草甸上零星的几个（圆垛，草顶收尖） */
 export function fieldProps(c: WCtx, fd: Field) {
-  const { w, H, culture, st } = c
+  const { w, H, st } = c
+  const stack = c.kit.props.haystack ?? HAYSTACK
   if (fd.kind !== 'crop' && fd.kind !== 'meadow') return
   const ct = centroid(fd.poly)
   if (hash(ct[0], ct[1], 1) > (fd.kind === 'meadow' ? 0.5 : 0.22)) return
@@ -843,13 +763,8 @@ export function fieldProps(c: WCtx, fd: Field) {
     w.base = g - 0.6
     w.c = shade(STRAW, 0.85 + hash(q[0], q[1], 2) * 0.25)
     w.face = MAT.straw
-    if (culture === 'wa' || culture === 'eastern') {
-      // 稻架 / 草堆：矮而圆
-      tube(w, q, r * 0.9, r, g - 0.3, g + r * 0.7, 8)
-      tube(w, q, r, 0, g + r * 0.7, g + r * 1.6, 8)
-    } else {
-      tube(w, q, r * 0.85, r, g - 0.3, g + r * 1.1, 8)
-      tube(w, q, r, 0, g + r * 1.1, g + r * 2.1, 8)
-    }
+    // 垛身与收尖的垛顶：高矮随文明（稻架、草堆矮而圆）
+    tube(w, q, r * stack.foot, r, g - 0.3, g + r * stack.body, 8)
+    tube(w, q, r, 0, g + r * stack.body, g + r * stack.top, 8)
   }
 }

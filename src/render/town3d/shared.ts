@@ -3,9 +3,11 @@
  * 纯函数，不依赖 three.js 与 DOM，可在 Worker 中运行。
  */
 import { sampleField } from '../../gen/util'
+import { hex } from '../palette'
 import { settleTheme } from '../../settlement/themes'
-import type { Culture, Settlement } from '../../settlement/types'
-import type { RGB, Writer } from './mesh'
+import type { Settlement } from '../../settlement/types'
+import type { Writer } from './mesh'
+import type { TownKit } from './kits'
 
 export type Height = (x: number, z: number) => number
 
@@ -19,21 +21,11 @@ export const heightSampler = (t: Settlement['terrain']) => gridSampler(t, t.heig
 /** 到水的有向距离（米，水中为负） */
 export const waterSampler = (t: Settlement['terrain']) => gridSampler(t, t.water)
 
-export const hex = (s: string): RGB => {
-  const n = parseInt(s.slice(1, 7), 16)
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
-}
+export { hex }
 export const pick = <T>(arr: readonly T[], t: number) => arr[Math.min(arr.length - 1, Math.floor(t * arr.length))]
 /** 由色调派生的第二个随机数 */
 export const frac = (x: number) => x - Math.floor(x)
 
-/** 各文明的墙色（抹灰、石、土坯、白壁） */
-export const WALL: Record<Culture, RGB[]> = {
-  western: ['#e9dfc8', '#ddd0b4', '#cdbf9f', '#efe6d2', '#d9c7a8'].map(hex),
-  eastern: ['#b9b2a6', '#c6bfb2', '#a9a196', '#cfc6b6'].map(hex),
-  wa: ['#ece6d8', '#e4dccb', '#8d6f52', '#7a5f45'].map(hex),
-  islamic: ['#e3d3b1', '#dccaa4', '#e8dbbd', '#d6c39b'].map(hex),
-}
 export const STONE = hex('#a69f94')
 export const STONE_DARK = hex('#7f786f')
 export const STONE_EAST = hex('#8e8d88')
@@ -93,15 +85,17 @@ export const LIME = hex('#e6e0d0')
 export const PALACE_RED = hex('#8e2f24')
 /** 鎏金 */
 export const GILT = hex('#c8a040')
+/** 墓石、石灯笼的花岗石，坟冢与墓床的土 */
+export const GRANITE = hex('#9c9a95')
+export const GRAVE_EARTH = hex('#8a7a5c')
 
 export type Palette = ReturnType<ReturnType<typeof settleTheme>['buildings']>
 
 export interface Ctx {
   w: Writer
-  culture: Culture
-  east: boolean
+  /** 这种文明的沙盘套件（见 kits.ts）：层高等随文明的量从这里读 */
+  kit: TownKit
   pal: Palette
   H: Height
-  storey: number
   capital: boolean
 }

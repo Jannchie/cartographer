@@ -1,4 +1,4 @@
-import { eastAsian } from './culture'
+import { traitsOf } from './culture'
 import { imperialPalace, royalPalace } from './palaces'
 import { eastCompound } from './compose/chinese'
 import { westChurch } from './compose/church'
@@ -420,7 +420,7 @@ function occupied(ctx: Ctx, poly: Poly) {
 function storeys(ctx: Ctx, poly: Poly, cap = Infinity): { floors: number; units: number } {
   const h = hashAt(ctx, centroid(poly), 'ward.storeys')
   const d = ctx.wardDensity
-  if (eastAsian(ctx.p.culture)) {
+  if (traitsOf(ctx.p.culture).eastAsian) {
     // 院里每座屋子一般住一户；疏档的大宅是一家人住好几座（只有约四成算一户），密档的两层铺面楼住两户
     if (ctx.estate) return { floors: 1, units: h < 0.4 ? 1 : 0 }
     const floors = Math.min(cap, d === 'high' && h < 0.45 ? 2 : 1)
@@ -876,7 +876,7 @@ export function plaza(ctx: Ctx, _ward: Ward, block: Poly, stallFactor = 1) {
   if (size === 'town' || size === 'city') {
     const b = obb(pave)
     const L = Math.min(b.len * 0.42, size === 'city' ? 34 : 24)
-    const east = eastAsian(ctx.p.culture)
+    const east = traitsOf(ctx.p.culture).eastAsian
     const hall = fit(
       pave,
       (q, s) => (east ? rect(q, [1, 0], 14 * s, 14 * s) : rect(q, b.axis, L * s, L * 0.5 * s)),
@@ -921,7 +921,7 @@ export function temple(ctx: Ctx, _ward: Ward, block: Poly) {
   const inner = insetConvex(block, 10)
   if (inner.length < 3) return urban(ctx, block, 'common')
   // 西式：教堂按平面语法拼（compose/church.ts）
-  if (!eastAsian(ctx.p.culture)) {
+  if (!traitsOf(ctx.p.culture).eastAsian) {
     westChurch(ctx, block, inner)
     return
   }
@@ -972,7 +972,7 @@ export function cemetery(ctx: Ctx, ward: Ward, block: Poly) {
   if (!zone || zone.length < 3 || area(zone) < 300) return
   const b = obb(zone)
   const chapel = fit(zone, (q, s) => rect(q, b.axis, 12 * s, 7 * s), (h) => inside(h, zone) && isFree(ctx, h, { pad: 1 }), [1, 0.8])
-  if (chapel) addBuilding(ctx, chapel, eastAsian(ctx.p.culture) ? 'hall' : 'temple', 1)
+  if (chapel) addBuilding(ctx, chapel, traitsOf(ctx.p.culture).eastAsian ? 'hall' : 'temple', 1)
   graves(ctx, zone, b.axis)
   emitArea(ctx, 'enclosures', zone)
   scatterTrees(ctx, zone, 0.002, 3, 5)
@@ -996,7 +996,7 @@ export function castle(ctx: Ctx, ward: Ward, block: Poly) {
   // 都城：城堡的位置是皇宫、王宫
   const royal = !!ctx.p.capital
   ctx.out.landmarks.push({ p: c, name: royal ? ctx.namer.palace() : ctx.namer.landmark('castle', ctx.p.magic), kind: 'castle' })
-  if (eastAsian(ctx.p.culture)) {
+  if (traitsOf(ctx.p.culture).eastAsian) {
     if (royal && imperialPalace(ctx, curtain)) return
     if (!eastCompound(ctx, curtain, 'palace')) eastWard(ctx, block, true)
     return
@@ -1014,7 +1014,7 @@ export function noble(ctx: Ctx, ward: Ward, block: Poly) {
   for (const lot of lots) {
     const encl = placeable(ctx, insetConvex(lot.poly, 0.8), 3)
     if (!encl || encl.length < 3) continue
-    if (eastAsian(ctx.p.culture)) {
+    if (traitsOf(ctx.p.culture).eastAsian) {
       siheyuan(ctx, encl)
       continue
     }
@@ -1089,7 +1089,7 @@ export function magicWard(ctx: Ctx, _ward: Ward, block: Poly) {
   if (!g || g.length < 3) return
   const c = centroid(g)
   mark(ctx, c, 'magic')
-  if (eastAsian(ctx.p.culture)) {
+  if (traitsOf(ctx.p.culture).eastAsian) {
     if (eastCompound(ctx, g, 'sect')) ctx.out.wonders.push({ p: [c[0], c[1]], r: 10, kind: 'spring' })
     else eastWard(ctx, block, false)
     return

@@ -1,5 +1,6 @@
 import { Biome, type Label, type World } from '../gen/types'
 import { resolveNaming } from '../gen/naming'
+import { townCulture } from '../packs/world'
 import type { SettlementParams } from './types'
 import * as dmath from '../gen/dmath'
 
@@ -24,14 +25,11 @@ export function fromWorld(w: World, l: Label): Partial<SettlementParams> {
     climate: { temp: w.temperature[i], rain: w.precipitation[i], biome: w.biome[i] },
     capital: l.kind === 'capital',
   }
-  // 文明：有政区层时跟着城所在伯爵领的文化；否则跟着世界的命名世界观（汉字地名的世界是东方，日本地名的是和风，其余是西方）
+  // 文明：有政区层时跟着城所在伯爵领的文化；否则按世界的命名世界观，由文化包的规则定（见 packs/world.ts）
   const pl = w.political
   const county = pl ? pl.county[i] : -1
   if (pl && county >= 0) out.culture = pl.cultures[pl.counties[county].culture].town
-  else {
-    const naming = resolveNaming(w.params)
-    out.culture = naming === 'eastern' || naming === 'wa' ? naming : 'western'
-  }
+  else out.culture = townCulture({ naming: resolveNaming(w.params), aridCells: 0, cells: 0 })
   // 海：到海岸距离小；海在距离下降的方向
   const cd = w.coastDist
   out.coast = cd[i] < 3

@@ -22,7 +22,7 @@ import { isTypingTarget } from '../keys'
 import { decodeSettlement, encodeSettlement, roundParams } from './route'
 import { describeAt } from '../../settlement/describe'
 import { terrainKey } from '../../settlement/terrain'
-import { planFits } from '../../settlement/culture'
+import { cultureIds, planFits } from '../../settlement/culture'
 import { LAND_USES, landUseOf, landUseStats, type LandUse, type LandUseStat } from '../../settlement/landuse'
 import { peopleStats, type PeopleStat } from '../../settlement/people'
 import { defaultRegions, type SettleRegion } from '../../settlement/regions'
@@ -258,12 +258,7 @@ export function randomSeed() {
   if (ss.random.mode === 'keep') return run()
   // 人口按对数均匀，小村到大都会都有机会
   p.population = Math.round(Math.exp(Math.log(60) + Math.random() * (Math.log(40000) - Math.log(60))))
-  p.culture = pick<Culture>([
-    ['western', 1],
-    ['eastern', 1],
-    ['wa', 1],
-    ['islamic', 1],
-  ])
+  p.culture = pick<Culture>(cultureIds().map((c) => [c, 1]))
   if (!planFits(p.culture, p.plan)) p.plan = 'organic'
   p.magic = pick<SettlementParams['magic']>([
     [0, 5],

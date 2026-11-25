@@ -1,7 +1,7 @@
 /**
  * 沙盘的植被：实例数据。纯函数，可在 Worker 中运行。
  *
- * 生成器只给出树的位置与冠径；树种由所处的环境推定——文明、气候、所在的田块（果园）、绿地（园林、墓地）、
+ * 生成器只给出树的位置与冠径；树种由所处的环境推定——文明（各文明的树种表见沙盘套件，kits.ts 的 FloraKit）、气候、所在的田块（果园）、绿地（园林、墓地）、
  * 片区（寺社、宫城、城里的院子、野地）、离水与离路的距离（河边的柳、行道树）、海拔与坡度（山上的针叶林），
  * 野地里再按低频噪声成片（同一片林子以一两个树种为主）。个体的大小、高矮、叶色随位置哈希与所在林分变化：
  * 密林里的树高而挤，林缘与孤树矮而开张。
@@ -12,9 +12,11 @@
  */
 import { hash3 } from '../../gen/rng'
 import { smoothstep } from '../../gen/util'
+import { hex } from '../palette'
 import type { Life } from '../../settlement/history'
-import type { Culture, Settlement } from '../../settlement/types'
+import type { Settlement } from '../../settlement/types'
 import { NEVER } from './mesh'
+import { townKit } from './kits'
 import { waterSampler } from './shared'
 import { ACCENT, SP, SPECIES, SPECIES_NAMES } from './treeSpecies'
 
@@ -113,69 +115,10 @@ type VK = keyof typeof V
 type Ctx = 'wild' | 'upland' | 'field' | 'water' | 'cemetery' | 'park' | 'yard' | 'sacred' | 'court'
 type Mix = [VK, number][]
 
-/** 各文明、各环境里的树种与权重（野地的权重再乘上各树种的成片噪声） */
-const MIX: Record<Culture, Record<Ctx, Mix>> = {
-  western: {
-    wild: [['oak', 5], ['linden', 2], ['elm', 3], ['birch', 1.2], ['spruce', 0.8], ['pine', 0.6], ['hawthorn', 0.5]],
-    upland: [['spruce', 5], ['fir', 2.5], ['pine', 2], ['birch', 1.5], ['oak', 1]],
-    field: [['oak', 6], ['elm', 2], ['linden', 1.5], ['hawthorn', 0.8]],
-    water: [['willow', 4], ['elm', 3], ['oak', 1], ['birch', 1]],
-    cemetery: [['yew', 4], ['cypress', 3], ['oak', 1]],
-    park: [['oak', 2], ['linden', 2.5], ['plane', 1.5], ['hawthorn', 1.2], ['cypress', 0.8], ['elm', 1], ['yew', 0.6]],
-    yard: [['apple', 3], ['pear', 1.5], ['hawthorn', 1.2], ['linden', 1.5], ['elm', 1]],
-    sacred: [['yew', 2], ['linden', 3], ['oak', 2], ['cypress', 1]],
-    court: [['oak', 2], ['linden', 2.5], ['cypress', 1.5], ['plane', 1.5], ['yew', 0.8]],
-  },
-  eastern: {
-    wild: [['sophora', 3], ['camphor', 2.5], ['elm', 3], ['pine', 2.2], ['bamboo', 1.6], ['sugi', 0.8], ['maple', 0.5]],
-    upland: [['pine', 5], ['sugi', 3], ['camphor', 1.5], ['bamboo', 1.2], ['maple', 0.8], ['cypress', 1]],
-    field: [['elm', 3], ['sophora', 3], ['willow', 1], ['camphor', 1]],
-    water: [['willow', 7], ['elm', 1], ['bamboo', 1], ['peach', 0.8]],
-    cemetery: [['cypress', 5], ['pine', 3]],
-    park: [['pine', 3], ['willow', 1.5], ['ume', 1.5], ['maple', 1.2], ['bamboo', 2], ['ginkgo', 1.5], ['sophora', 2], ['cypress', 1]],
-    yard: [['sophora', 3], ['pomegranate', 1.5], ['persimmon', 1.5], ['bamboo', 1], ['ume', 1], ['elm', 1]],
-    sacred: [['pine', 3], ['cypress', 3], ['ginkgo', 3], ['sophora', 1]],
-    court: [['pine', 3], ['cypress', 3], ['sophora', 2], ['ume', 1], ['ginkgo', 1]],
-  },
-  wa: {
-    wild: [['camphor', 3], ['sugi', 3], ['pine', 2], ['sakura', 0.8], ['maple', 0.9], ['bamboo', 1.5], ['elm', 1.5]],
-    upland: [['sugi', 6], ['fir', 1.5], ['pine', 2], ['camphor', 1], ['maple', 1.2]],
-    field: [['camphor', 2], ['pine', 2], ['persimmon', 1.5], ['elm', 1.5]],
-    water: [['willow', 4], ['sakura', 3], ['pine', 1], ['maple', 0.8]],
-    cemetery: [['sugi', 3], ['pine', 2], ['sakura', 1], ['camphor', 1]],
-    park: [['blackpine', 4], ['maple', 2.5], ['redmaple', 0.7], ['sakura', 3], ['bamboo', 1.2], ['sugi', 1], ['ume', 1]],
-    yard: [['blackpine', 2], ['persimmon', 2], ['maple', 1.5], ['sakura', 1], ['bamboo', 1], ['ume', 1]],
-    sacred: [['sugi', 5], ['camphor', 1.5], ['blackpine', 2], ['sakura', 2], ['maple', 2], ['ginkgo', 1]],
-    court: [['blackpine', 5], ['sakura', 3], ['maple', 1.5], ['camphor', 1]],
-  },
-  islamic: {
-    wild: [['olive', 2], ['pine', 2], ['cypress', 1.5], ['holm', 2.5], ['palm', 1.2], ['fig', 0.6]],
-    upland: [['pine', 3], ['cypress', 2], ['holm', 2.5], ['yew', 1]],
-    field: [['olive', 3], ['palm', 2], ['fig', 1.5], ['holm', 1]],
-    water: [['palm', 5], ['willow', 1], ['elm', 2], ['fig', 1]],
-    cemetery: [['cypress', 6], ['olive', 1]],
-    park: [['cypress', 3], ['citrus', 3], ['palm', 2], ['pomegranate', 1], ['plane', 1.5], ['elm', 1]],
-    yard: [['citrus', 2], ['fig', 2], ['palm', 1.5], ['pomegranate', 1], ['olive', 1]],
-    sacred: [['cypress', 3], ['plane', 2], ['palm', 2], ['citrus', 1]],
-    court: [['cypress', 3], ['palm', 2.5], ['citrus', 2], ['plane', 1.5]],
-  },
-}
-/** 行道树（整条路一个树种）、果园（整块田一个树种）、窄处（贴着房子、树冠放不开）的树种 */
-const AVENUE: Record<Culture, VK[]> = {
-  western: ['linden', 'lombardy', 'plane', 'linden'],
-  eastern: ['sophora', 'willow', 'elm', 'sophora'],
-  wa: ['blackpine', 'sakura', 'sugi', 'sakura'],
-  islamic: ['palm', 'cypress', 'plane', 'palm'],
-}
-const ORCHARD: Record<Culture, VK[]> = {
-  western: ['apple', 'apple', 'pear', 'olive'],
-  eastern: ['peach', 'pear', 'persimmon', 'citrus'],
-  wa: ['ume', 'persimmon', 'peach', 'citrus'],
-  islamic: ['citrus', 'olive', 'pomegranate', 'palm', 'fig'],
-}
-const NARROW: Record<Culture, VK> = { western: 'lombardy', eastern: 'cypress', wa: 'sugi', islamic: 'cypress' }
-/** 没有世界气候时各文明的年均温 */
-const TEMP: Record<Culture, number> = { western: 10, eastern: 14, wa: 14, islamic: 20 }
+/** 套件里用到的类型（见 kits.ts 的 FloraKit）：树种、所处的环境、树种与权重的表 */
+export type TreeKind = VK
+export type TreeHabitat = Ctx
+export type TreeMix = Mix
 
 /** 气候对树种的取舍：椰枣与柑橘怕冷，云杉、冷杉喜冷 */
 function climate(k: VK, temp: number): number {
@@ -209,10 +152,7 @@ const strHash = (s: string) => {
 const HEX = new Map<string, [number, number, number]>()
 const hexRGB = (s: string): [number, number, number] => {
   let c = HEX.get(s)
-  if (!c) {
-    const n = parseInt(s.slice(1, 7), 16)
-    HEX.set(s, (c = [(n >> 16) & 255, (n >> 8) & 255, n & 255]))
-  }
+  if (!c) HEX.set(s, (c = hex(s)))
   return c
 }
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
@@ -378,15 +318,17 @@ class Bag {
 const CROWN = SPECIES.map((s) => Math.max(...s.profile.map((p) => p[0])))
 
 export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: number, z: number) => number): TreeBuild {
-  const culture = st.params.culture
+  const flora = townKit(st.params.culture).flora
   const W = st.width
   const D = st.height
   const T = st.terrain
-  const temp = st.params.climate?.temp ?? TEMP[culture]
+  const temp = st.params.climate?.temp ?? flora.temp
+  const orchardKinds = flora.orchard.filter((k) => climate(k, temp) >= 1)
+  const avenueKinds = flora.avenue.filter((k) => climate(k, temp) >= 1)
   const seed = strHash(st.params.seed) & 0xffff
-  // 季相：东方与和式的城按种子定春、夏、秋（花色与秋色只是点缀：樱、梅、枫、银杏、柿），其余常夏
+  // 季相：有季相的文明按种子定春、夏、秋（花色与秋色只是点缀：樱、梅、枫、银杏、柿），其余常夏
   const sr = hash3(seed, 7, 3)
-  const season: Season = culture === 'wa' || culture === 'eastern' ? (sr < 0.36 ? 'spring' : sr < 0.66 ? 'summer' : 'autumn') : 'summer'
+  const season: Season = flora.seasons ? (sr < 0.36 ? 'spring' : sr < 0.66 ? 'summer' : 'autumn') : 'summer'
   const span = (o: object): Span => life.get(o) ?? ALWAYS
   const water = waterSampler(T)
 
@@ -555,17 +497,15 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
     let row = false
     if (field?.kind === 'orchard') {
       // 果园：整块田一个树种，大小一律
-      const list = ORCHARD[culture].filter((k) => climate(k, temp) >= 1)
-      vk = list.length ? list[Math.floor(hash3(field.id, seed, 5) * list.length)] : 'apple'
+      vk = orchardKinds.length ? orchardKinds[Math.floor(hash3(field.id, seed, 5) * orchardKinds.length)] : 'apple'
       ctx = 'field'
       row = true
     } else if (green === 'cemetery' || ward === 'cemetery') {
       ctx = 'cemetery'
-      vk = pickMix(MIX[culture].cemetery, x, z, h1, false)
+      vk = pickMix(flora.mix.cemetery, x, z, h1, false)
     } else if (avenue >= 0 && t.r < 3.2 && !green) {
       // 行道树：整条路一个树种
-      const list = AVENUE[culture].filter((k) => climate(k, temp) >= 1)
-      vk = list.length ? list[Math.floor(hash3(avenue, seed, 6) * list.length)] : 'linden'
+      vk = avenueKinds.length ? avenueKinds[Math.floor(hash3(avenue, seed, 6) * avenueKinds.length)] : 'linden'
       ctx = 'yard'
       row = true
     } else {
@@ -577,9 +517,9 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
       else if (green === 'courtyard' || urban || paved) ctx = 'yard'
       else if (field || ward === 'farm') ctx = 'field'
       else ctx = smoothstep(30, 90, y) + slope * 1.6 + (vnoise(x / 90, z / 90, seed + 91) - 0.5) * 0.5 > 0.55 ? 'upland' : 'wild'
-      // 园林里靠水的多栽柳（东方）、樱（和式）
-      if ((ctx === 'park' || ctx === 'court' || ctx === 'sacred') && wd < 9 && h4 < 0.6 && culture !== 'islamic') vk = culture === 'wa' ? (h1 < 0.5 ? 'sakura' : 'willow') : 'willow'
-      else vk = pickMix(MIX[culture][ctx], x, z, h1, ctx === 'wild' || ctx === 'upland')
+      // 园林里靠水的多栽柳、樱（按文明）
+      if ((ctx === 'park' || ctx === 'court' || ctx === 'sacred') && wd < 9 && h4 < 0.6 && flora.pondside) vk = flora.pondside(h1)
+      else vk = pickMix(flora.mix[ctx], x, z, h1, ctx === 'wild' || ctx === 'upland')
     }
     let v: Variety = V[vk]
 
@@ -604,7 +544,7 @@ export function treeInstances(st: Settlement, life: Map<object, Life>, H: (x: nu
     if (v.sp !== SP.palm && r * CROWN[v.sp] > room) {
       let k = room / (r * CROWN[v.sp])
       if (k < 0.62) {
-        v = V[NARROW[culture]]
+        v = V[flora.narrow]
         r = t.r * v.size
         hs = v.h[0] + (v.h[1] - v.h[0]) * h2
         k = Math.min(1, room / (r * CROWN[v.sp]))
@@ -694,7 +634,7 @@ function scan(poly: Pt[], ux: number, uz: number, t: number): [number, number][]
  */
 function lowPlants(st: Settlement, low: Bag, env: LowEnv) {
   const { H, water, span, season, seed, temp, bGrid, rGrid, wGrid } = env
-  const culture = st.params.culture
+  const flora = townKit(st.params.culture).flora
   const W = st.width
   const D = st.height
   const colour = (v: Variety, x: number, z: number) => {
@@ -733,11 +673,7 @@ function lowPlants(st: Settlement, low: Bag, env: LowEnv) {
   }
 
   // —— 灌木：林缘与疏林里、园林与院子的树旁 ——
-  const shrubOf = (ctx: Ctx, h: number): VK => {
-    if (culture === 'islamic') return ctx === 'wild' || ctx === 'upland' || ctx === 'field' ? 'maquis' : h < 0.5 ? 'maquis' : 'shrub'
-    if ((culture === 'wa' || culture === 'eastern') && (ctx === 'park' || ctx === 'sacred' || ctx === 'court')) return h < 0.6 ? 'azalea' : 'shrub'
-    return 'shrub'
-  }
+  const shrubOf = (ctx: Ctx, h: number): VK => flora.shrub?.(ctx, h) ?? 'shrub'
   for (const t of env.kept) {
     const forest = t.ctx === 'wild' || t.ctx === 'upland'
     // 郁闭的林子里林下照不到光，灌木长在林缘与疏林；园林、院子里零星几丛
@@ -804,9 +740,9 @@ function lowPlants(st: Settlement, low: Bag, env: LowEnv) {
     return p < q ? p + '|' + q : q + '|' + p
   }
   st.fields.forEach((f, id) => {
-    const bocage = culture === 'western' && f.kind === 'pasture' && hash3(id, seed, 41) < 0.7
-    // 菜园的矮篱只有西式与和式的城边有（东方、伊斯兰的菜园是土埂与土墙）
-    const kitchen = f.kind === 'garden' && (culture === 'western' || culture === 'wa') && hash3(id, seed, 42) < 0.2
+    const bocage = flora.bocage && f.kind === 'pasture' && hash3(id, seed, 41) < 0.7
+    // 菜园的矮篱只有部分文明的城边有（别处的菜园是土埂与土墙）
+    const kitchen = f.kind === 'garden' && flora.kitchenHedge && hash3(id, seed, 42) < 0.2
     if (!bocage && !kitchen) return
     const v: Variety = bocage ? V.hedgerow : V.hedge
     const r = bocage ? 1.15 : 0.6

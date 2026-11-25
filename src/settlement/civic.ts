@@ -1,4 +1,4 @@
-import { eastAsian } from './culture'
+import { traitsOf } from './culture'
 import { emitArea, isFree, mark, type Ctx } from './ctx'
 import { bboxOf, centroid, circlePoly, convexOverlap, dist, obb, pointInPoly, rect, type BBox, type P, type Poly } from './geom'
 import { vegetation } from './outer'
@@ -56,8 +56,6 @@ function trees(ctx: Ctx, pts: P[], r: number) {
   for (const p of pts) if (!ctx.occ.hitsPoint(p, 1)) ctx.out.trees.push({ p, r: r * (0.8 + ctx.rng.next() * 0.4) })
 }
 
-const east = (ctx: Ctx) => eastAsian(ctx.p.culture)
-
 /**
  * 酒馆 / 客栈：驿站式的车马大院（约 34 × 30 米），比一般民居大得多。
  * 西式：临街两层的大堂（楼上客房）、一侧是穿过门洞进去的长排马厩、后排仓房与车棚，中间铺装的车马院；
@@ -66,7 +64,7 @@ const east = (ctx: Ctx) => eastAsian(ctx.p.culture)
 export function tavernAt(ctx: Ctx, at: P, axis: P): boolean {
   const L = lot(ctx, at, axis, 34, 30)
   const { w, d, box } = L
-  if (east(ctx)) {
+  if (traitsOf(ctx.p.culture).eastAsian) {
     const parts: [Poly, BuildingKind][] = [
       [box(-w / 2 + 0.5, w / 2 - 0.5, -d / 2 + 0.5, -d / 2 + 9), 'civic'],
       [box(-w / 2 + 0.5, -w / 2 + 7, -d / 2 + 10, d / 2 - 7.5), 'large'],
@@ -100,7 +98,7 @@ export function tavernAt(ctx: Ctx, at: P, axis: P): boolean {
 export function hospitalAt(ctx: Ctx, at: P, axis: P): boolean {
   const L = lot(ctx, at, axis, 34, 26)
   const { w, d, box } = L
-  if (east(ctx)) {
+  if (traitsOf(ctx.p.culture).eastAsian) {
     const parts: [Poly, BuildingKind][] = [
       [box(-w / 2 + 0.5, w / 2 - 0.5, -d / 2 + 0.5, -d / 2 + 7.5), 'civic'],
       [box(-w / 2 + 0.5, -w / 2 + 6.5, -d / 2 + 8.5, d / 2 - 7), 'large'],
@@ -135,7 +133,7 @@ export function hospitalAt(ctx: Ctx, at: P, axis: P): boolean {
 export function schoolAt(ctx: Ctx, at: P, axis: P): boolean {
   const L = lot(ctx, at, axis, 40, 34)
   const { w, d, box } = L
-  if (east(ctx)) {
+  if (traitsOf(ctx.p.culture).eastAsian) {
     const parts: [Poly, BuildingKind][] = [
       [box(-7, 7, -d / 2 + 0.5, -d / 2 + 6), 'hall'],
       [box(-11, 11, -3.5, 5), 'civic'],
@@ -182,7 +180,7 @@ export function stageAt(ctx: Ctx, at: P, axis: P): boolean {
   fan.push(L.pt(R, d / 2 - 8))
   emitArea(ctx, 'plazas', fan)
   // 几排弧形的长凳（西式）/ 看台两侧的厢楼（东式）
-  if (east(ctx)) addGroup(ctx, [[box(-w / 2 + 0.5, -w / 2 + 4.5, -d / 2 + 4, d / 2 - 1), 'large'], [box(w / 2 - 4.5, w / 2 - 0.5, -d / 2 + 4, d / 2 - 1), 'large']], 0.2)
+  if (traitsOf(ctx.p.culture).eastAsian) addGroup(ctx, [[box(-w / 2 + 0.5, -w / 2 + 4.5, -d / 2 + 4, d / 2 - 1), 'large'], [box(w / 2 - 4.5, w / 2 - 0.5, -d / 2 + 4, d / 2 - 1), 'large']], 0.2)
   else
     for (const rr of [R * 0.45, R * 0.65, R * 0.85])
       for (let k = 1; k < 6; k++) {
@@ -213,7 +211,7 @@ export function arenaAt(ctx: Ctx, at: P, axis: P): boolean {
     [box(-w / 2 + 5, w / 2 - 5, -d / 2 + 0.5, -d / 2 + 4.5), 'civic'],
     [box(-w / 2 + 5, w / 2 - 5, d / 2 - 4.5, d / 2 - 0.5), 'civic'],
   ]
-  parts.push(east(ctx) ? [box(-4.5, 4.5, -4.5, 4.5), 'civic'] : [box(-w * 0.3, w * 0.3, -0.35, 0.35), 'shed'])
+  parts.push(traitsOf(ctx.p.culture).eastAsian ? [box(-4.5, 4.5, -4.5, 4.5), 'civic'] : [box(-w * 0.3, w * 0.3, -0.35, 0.35), 'shed'])
   if (!addGroup(ctx, parts, 0.3)) return false
   clear(ctx, L.foot)
   emitArea(ctx, 'plazas', box(-w / 2 + 1, w / 2 - 1, -d / 2 + 5, d / 2 - 5))

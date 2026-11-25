@@ -23,6 +23,9 @@ import { HeightField } from './heightField'
 import { SunShadows } from './sunShadows'
 import { TownLabels } from './labels'
 import { createTownLights } from './townLights'
+import { townKit } from './kits'
+// 内置文化包的沙盘套件：模块导入时静态注册
+import '../../packs/town3d'
 
 /**
  * 聚落沙盘：成长史中出现过的全部体块与树一次建好（见 massing.ts，在 Worker 里构建），
@@ -339,10 +342,10 @@ export class TownScene {
       if (h[i] > hi) hi = h[i]
     }
     this.hRange = [lo, hi]
-    const culture = hist.st.params.culture
-    this.u.uStorey.value = culture === 'western' || culture === 'islamic' ? 3.1 : 3.4
-    const cult = ['western', 'eastern', 'wa', 'islamic'].indexOf(culture)
-    // 建筑着色器按文明编译（见 buildingShader.ts）：换了文明要重新编译
+    const kit = townKit(hist.st.params.culture)
+    this.u.uStorey.value = kit.storey
+    const cult = kit.facade
+    // 建筑着色器按立面细部的着色器族编译（见 buildingShader.ts）：换了要重新编译
     if (cult !== this.u.uCulture.value) {
       this.bldMat.needsUpdate = true
       this.bldFor = -1

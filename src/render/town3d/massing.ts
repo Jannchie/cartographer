@@ -5,7 +5,6 @@
  */
 import { centroid, clipConvex, type P } from '../../settlement/geom'
 import type { Life } from '../../settlement/history'
-import { eastAsian } from '../../settlement/culture'
 import { settleTheme } from '../../settlement/themes'
 import type { Settlement, Wall } from '../../settlement/types'
 import { NEVER, Writer, type TownChunk } from './mesh'
@@ -18,6 +17,9 @@ import { fieldProps, landmarkProp, propBuilding, propIndex, rock, wonder } from 
 import { heightSampler, hex, waterSampler } from './shared'
 import { treeInstances, type TreeBuild } from './vegetation'
 import { terrainMesh, type TerrainMesh } from './relief'
+import { townKit } from './kits'
+// 内置文化包的沙盘套件：模块导入时静态注册（主线程与 Worker 各自生效）
+import '../../packs/town3d'
 
 /** Worker 回传的沙盘数据（数组均可转移） */
 export interface TownBuild {
@@ -42,13 +44,12 @@ export function buildTown(st: Settlement, life: Map<object, Life>): TownBuild {
   const nx = Math.max(1, Math.min(10, Math.round(st.width / 400)))
   const nz = Math.max(1, Math.min(10, Math.round(st.height / 400)))
   const w = new Writer(st.width, st.height, nx, nz)
+  const kit = townKit(culture)
   const c: WCtx = {
     w,
-    culture,
-    east: eastAsian(culture),
+    kit,
     pal: settleTheme('color').buildings(culture),
     H: heightSampler(st.terrain),
-    storey: eastAsian(culture) ? 3.4 : 3.1,
     capital: !!st.params.capital,
     st,
     water: waterSampler(st.terrain),

@@ -1,7 +1,8 @@
 import { RNG } from '../../gen/rng'
 import type { Ctx } from '../ctx'
 import { add, area, cbox, centroid, chaikin, circlePoly, dist, frameAt, inscribedRect, insetConvex, lerpP, neg, obb, perp, edgeDist, pointInPoly, resample, segDist, sub, unit, at, type P, type Poly, type RectFrame } from '../geom'
-import type { BuildingKind, Building, Culture, ParkPart } from '../types'
+import type { BuildingKind, Building, ParkPart } from '../types'
+import { cultureOf } from '../culture'
 import { inside, place, plantTree } from '../wards'
 import type { Composer, Preset } from '../compose/core'
 import { emitArea } from '../ctx'
@@ -25,11 +26,18 @@ export function northward(F: RectFrame): P {
 export type Skel = 'axial' | 'natural' | 'procession' | 'field'
 
 /**
- * 园林的预设（历史上有的样式，或各文明的自由组合）：就是组合式地标的预设（compose/core.ts 的 Preset：
- * bias.槽位.元素 = 倍数），另带园子自己的几项——骨架、地面、适用的文明与园地面积、有园墙的概率
+ * 造园传统：园林的预设与元素池按传统标注——西式（规则式与风景式）、东方（山水园）、和风（池泉与枯山水）、
+ * 伊斯兰（四分园）。文明在自己的定义里选用一种传统（CultureDef.garden）；传统是造园模块自己的词汇，
+ * 模块里按传统分支的地方（池的位置、亭的样式……）与文明的 id 无关。
+ */
+export type GardenTradition = 'western' | 'eastern' | 'wa' | 'islamic'
+
+/**
+ * 园林的预设（历史上有的样式，或各传统的自由组合）：就是组合式地标的预设（compose/core.ts 的 Preset：
+ * bias.槽位.元素 = 倍数），另带园子自己的几项——骨架、地面、所属的造园传统与园地面积、有园墙的概率
  */
 export interface GardenPreset extends Preset {
-  cult: Culture
+  trad: GardenTradition
   skel: Skel
   /** 园地面积范围（m²） */
   min: number
@@ -45,7 +53,7 @@ export interface GardenPreset extends Preset {
 /** 一座园子在盖的时候的状态 */
 export interface Garden extends RectFrame {
   ctx: Ctx
-  cult: Culture
+  trad: GardenTradition
   /** 抽中的预设（骨架、地面） */
   P: GardenPreset
   /**
@@ -81,7 +89,7 @@ export function garden(ctx: Ctx, g: Poly, C: Composer, P: GardenPreset, wall: bo
   const b = obb(g)
   return {
     ctx,
-    cult: ctx.p.culture,
+    trad: cultureOf(ctx.p.culture).garden,
     P,
     C,
     wall,

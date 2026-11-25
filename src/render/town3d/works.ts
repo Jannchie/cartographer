@@ -5,12 +5,13 @@
  * 城墙沿墙圈的实心段连成一段段"墙段"（城门处、临水处断开），每段按几米一站放样截面：
  * 转角斜接，墙顶随地形起伏，墙脚埋入地下，不留缝。墙圈统一成"左手法线朝外"的走向，截面的正偏移就是城外一侧。
  */
-import { pointInPoly, type P } from '../../settlement/geom'
-import type { Culture, Settlement, Wall } from '../../settlement/types'
-import { MAT, hip, irimoya, mixRGB, shade, type Frame, type RGB } from './mesh'
-import { ADOBE, LACQUER, PLASTER, STONE, STONE_EAST, TILE_DARK, TIMBER, TIMBER_DARK, hex, type Ctx, type Height } from './shared'
+import { pointInPoly, signedArea, type P } from '../../settlement/geom'
+import type { Settlement, Wall } from '../../settlement/types'
+import { MAT, hip, mixRGB, shade, type Frame, type RGB } from './mesh'
+import { STONE, TILE_DARK, TIMBER, TIMBER_DARK, hex, type Ctx, type Height } from './shared'
 import { LO, archFace, archOutline, axUV, beam, box, cbox, crenels, hash, l3, lp, placeArch, pyramid, ringUnder, stationsOf, sweep, tube, vault, type Ax, type Station } from './worksMesh'
-import { gate, gateHalf } from './gates'
+import { gate } from './gates'
+import type { TownKit } from './kits'
 
 /** 构筑物的上下文：在建筑的上下文之外，另带聚落本身、到水距离与路网查询 */
 export interface WCtx extends Ctx {
@@ -65,9 +66,8 @@ export function roadIndex(st: Settlement): WCtx['road'] {
   }
 }
 
-/** 一道墙的形制：按文明与墙厚定 */
+/** 一道墙的形制：石墙按文明的沙盘套件（WallKit.stone）与墙厚定，木栅各文明相同 */
 export interface WallLook {
-  culture: Culture
   stone: boolean
   /** 墙厚的一半、墙顶步道的高度（相对地面） */
   half: number
@@ -88,23 +88,29 @@ export interface WallLook {
   pave: RGB
   /** 按墙厚定的尺度系数（城门、塔楼跟着缩放） */
   s: number
+  /** 城门沿墙的半宽：墙段在离门心这么远处收住（略伸进门楼里） */
+  gateHalf: number
+  /** 水门的拱形 */
+  arch: 'round' | 'pointed'
+  /** 墙顶代替女墙与雉堞的做法（石垣上的土塀）：有它时墙顶不设女墙 */
+  crown?(c: WCtx, look: WallLook, sts: Station[], caps: boolean): void
+  /** 女墙之外的添饰（墙顶外沿挑出的砖檐） */
+  trim?(c: WCtx, look: WallLook, sts: Station[]): void
 }
 
-const WA_STONE = hex('#8d8980')
-const SLATE = hex('#5f6370')
-const BRICK_GREY = hex('#8f8f8a')
+/** 石墙形制里由文明给出的部分（女墙厚与垛形不给时用通用值） */
+export type StoneWall = Omit<WallLook, 'stone' | 'half' | 's' | 'pT' | 'mCap'> & Partial<Pick<WallLook, 'pT' | 'mCap'>>
 
-export function wallLook(culture: Culture, wall: Wall): WallLook {
+const SLATE = hex('#5f6370')
+
+export function wallLook(kit: TownKit, wall: Wall): WallLook {
   const stone = wall.kind === 'stone'
   const th = wall.thickness
   const s = Math.max(0.7, Math.min(1.1, th / 4.5))
   const k = Math.max(0.72, Math.min(1.05, 0.55 + th * 0.1))
-  const base = { culture, stone, half: th / 2, s, pT: 0.5, mCap: 'flat' as const }
-  if (!stone) return { ...base, hgt: 4.2, col: TIMBER, face: MAT.board, batter: 0, parapet: 0, merlon: 0, mLen: 0, mGap: 0, inner: 0, pave: TIMBER }
-  if (culture === 'eastern') return { ...base, hgt: 11 * k, col: BRICK_GREY, face: MAT.brick, batter: 1.0 * k, parapet: 0.9, merlon: 0.8, mLen: 1.5, mGap: 0.55, inner: 1.0, pave: shade(STONE_EAST, 0.95) }
-  if (culture === 'wa') return { ...base, hgt: 4.6 * k, col: WA_STONE, face: MAT.stone, batter: 1.3 * k, parapet: 0, merlon: 0, mLen: 0, mGap: 0, inner: 0, pave: hex('#9a927c') }
-  if (culture === 'islamic') return { ...base, hgt: 9.5 * k, col: ADOBE, face: MAT.plaster, batter: 0.5, parapet: 0.8, merlon: 0.85, mLen: 0.95, mGap: 0.7, mCap: 'point', inner: 0.75, pave: shade(ADOBE, 0.88) }
-  return { ...base, hgt: 9 * k, col: STONE, face: MAT.stone, batter: 0.35, parapet: 1.0, merlon: 0.9, mLen: 1.35, mGap: 0.9, inner: 0.9, pave: shade(STONE, 0.9) }
+  const base = { stone, half: th / 2, s, pT: 0.5, mCap: 'flat' as const }
+  if (!stone) return { ...base, hgt: 4.2, col: TIMBER, face: MAT.board, batter: 0, parapet: 0, merlon: 0, mLen: 0, mGap: 0, inner: 0, pave: TIMBER, gateHalf: 2.7, arch: 'round' }
+  return { ...base, ...kit.wall.stone(k, s) }
 }
 
 /** 一段连续的墙（开口的折线，或整圈闭合）；g0 / g1：起点、终点是城门 */
@@ -134,25 +140,20 @@ function trim(pts: P[], d: number, fromStart: boolean): P[] {
 /** 墙圈统一成左手法线朝外的走向（面积为负的绕向），solid 随之重排 */
 function outwardLoop(wall: Wall): { loop: P[]; solid: boolean[] } {
   const n = wall.loop.length
-  let a2 = 0
-  for (let i = 0; i < n; i++) {
-    const q = wall.loop[(i + 1) % n]
-    a2 += wall.loop[i][0] * q[1] - q[0] * wall.loop[i][1]
-  }
-  if (a2 <= 0) return { loop: wall.loop, solid: wall.solid }
+  if (signedArea(wall.loop) <= 0) return { loop: wall.loop, solid: wall.solid }
   return { loop: [...wall.loop].reverse(), solid: wall.loop.map((_, j) => wall.solid[(2 * n - 2 - j) % n]) }
 }
 
 /** 城墙：墙段、塔楼、水门与城门 */
 export function cityWall(c: WCtx, wall: Wall) {
-  const { w, culture } = c
+  const { w, kit } = c
   const n = wall.loop.length
   if (n < 2) return
-  const look = wallLook(culture, wall)
+  const look = wallLook(kit, wall)
   const { loop, solid } = outwardLoop(wall)
   const isGate = (p: P) => wall.gates.some((g) => Math.hypot(g.p[0] - p[0], g.p[1] - p[1]) < 0.5)
-  w.roofFace = culture === 'western' ? MAT.slate : MAT.tileEast
-  w.gableFace = culture === 'wa' ? MAT.plaster : look.face
+  w.roofFace = kit.wall.roofFace
+  w.gableFace = kit.wall.gableFace ?? look.face
 
   // —— 墙段 ——
   const runs: Run[] = []
@@ -187,7 +188,7 @@ export function cityWall(c: WCtx, wall: Wall) {
     }
     flush(false)
   }
-  const cut = gateHalf(look) - (look.stone ? 0.7 : 0.1)
+  const cut = look.gateHalf - (look.stone ? 0.7 : 0.1)
   // 木栅很长时原木放粗放疏（三角形预算）
   let palLen = 0
   if (!look.stone) for (const r of runs) for (let i = 0; i + 1 < r.pts.length; i++) palLen += Math.hypot(r.pts[i + 1][0] - r.pts[i][0], r.pts[i + 1][1] - r.pts[i][1])
@@ -292,7 +293,7 @@ export function cityWall(c: WCtx, wall: Wall) {
   }
 }
 
-/** 石墙的一段：墙身（带收分）、步道、外侧女墙与雉堞、内侧女墙；和式为石垣上的白壁土塀 */
+/** 石墙的一段：墙身（带收分）、步道、外侧女墙与雉堞、内侧女墙；形制带 crown 时墙顶改用它的做法 */
 function stoneRun(c: WCtx, look: WallLook, pts: P[], closed: boolean) {
   const { w, H } = c
   const { half, hgt, batter } = look
@@ -304,16 +305,8 @@ function stoneRun(c: WCtx, look: WallLook, pts: P[], closed: boolean) {
   const caps = !closed
   // 墙身：外面、步道、内面
   sweep(w, sts, [[half + batter, LO], [half, hgt], [-half, hgt], [-half - batter * 0.5, LO]], { cols: [look.col, look.pave, look.col], faces: [look.face, MAT.paving, look.face], caps })
-  if (look.culture === 'wa') {
-    // 土塀：白壁、瓦顶（两坡的墙帽）
-    const o = half - 0.25
-    const top = hgt + 1.9
-    sweep(w, sts, [[o, hgt], [o, top], [o - 0.45, top], [o - 0.45, hgt]], { cols: [PLASTER, PLASTER, PLASTER], faces: [MAT.plaster, MAT.plain, MAT.plaster], caps })
-    w.c = TILE_DARK
-    sweep(w, sts, [[o + 0.4, top - 0.08], [o - 0.225, top + 0.36], [o - 0.85, top - 0.08]], { loop: true, cols: [TILE_DARK, TILE_DARK, shade(TILE_DARK, 0.55)], faces: [MAT.tileEast, MAT.tileEast, MAT.plain], caps })
-    // 腰板：白壁下段一道深色木板
-    w.c = TIMBER_DARK
-    sweep(w, sts, [[o + 0.03, hgt], [o + 0.03, hgt + 0.7], [o, hgt + 0.7]], { faces: [MAT.board, MAT.plain], caps: false })
+  if (look.crown) {
+    look.crown(c, look, sts, caps)
     return
   }
   // 外侧女墙与雉堞
@@ -322,12 +315,7 @@ function stoneRun(c: WCtx, look: WallLook, pts: P[], closed: boolean) {
   crenels(w, sts, half, hgt + look.parapet, look.mLen, look.mGap, look.merlon, pT, look.mCap)
   // 内侧女墙（宇墙）
   if (look.inner > 0) sweep(w, sts, [[-half + 0.32, hgt], [-half + 0.32, hgt + look.inner], [-half, hgt + look.inner], [-half, hgt]], { caps })
-  // 东方城墙：墙顶外沿一道挑出的砖檐
-  if (look.culture === 'eastern') {
-    w.c = shade(look.col, 0.86)
-    sweep(w, sts, [[half + 0.12, hgt - 0.28], [half + 0.12, hgt], [half, hgt]], { faces: [MAT.brick, MAT.plain], caps: false })
-    sweep(w, sts, [[half, hgt - 0.28], [half + 0.12, hgt - 0.28]], { faces: [MAT.plain], caps: false })
-  }
+  look.trim?.(c, look, sts)
   w.c = look.col
 }
 
@@ -383,7 +371,7 @@ function waterGate(c: WCtx, look: WallLook, a: P, b: P) {
   const span = (L - pier * (nA - 1) - 1.6) / nA
   const hw = span / 2
   const spring = Math.min(2.2, Math.max(0.6, hgt - hw - 2.5))
-  const holes = Array.from({ length: nA }, (_, i) => placeArch(archOutline(look.culture === 'islamic' ? 'pointed' : 'round', hw, spring - yb, 10), 0.8 + hw + i * (span + pier), yb))
+  const holes = Array.from({ length: nA }, (_, i) => placeArch(archOutline(look.arch, hw, spring - yb, 10), 0.8 + hw + i * (span + pier), yb))
   w.c = look.col
   w.face = look.face
   for (const sg of [1, -1]) {
@@ -401,7 +389,7 @@ function waterGate(c: WCtx, look: WallLook, a: P, b: P) {
     for (let k = 1; k < bars; k++) {
       const x = cx - hw + (span * k) / bars
       const dx = x - cx
-      const yt = spring + (look.culture === 'islamic' ? Math.max(0, hw - Math.abs(dx)) * 1.2 : Math.sqrt(Math.max(0, hw * hw - dx * dx))) + 0.1
+      const yt = spring + (look.arch === 'pointed' ? Math.max(0, hw - Math.abs(dx)) * 1.2 : Math.sqrt(Math.max(0, hw * hw - dx * dx))) + 0.1
       const p: P = [a[0] + e[0] * x + out[0] * half * 0.5, a[1] + e[1] * x + out[1] * half * 0.5]
       beam(w, [p[0], -1.2, p[1]], [p[0], yt, p[1]], 0.05, 0.05, false)
     }
@@ -416,7 +404,7 @@ function waterGate(c: WCtx, look: WallLook, a: P, b: P) {
   sweep(w, sts, [[half, hgt], [-half, hgt]], { caps: false })
   w.c = look.col
   w.face = look.face
-  if (look.culture === 'wa') return
+  if (look.crown) return
   sweep(w, sts, [[half, hgt], [half, hgt + look.parapet], [half - look.pT, hgt + look.parapet], [half - look.pT, hgt]], { caps: false })
   crenels(w, sts, half, hgt + look.parapet, look.mLen, look.mGap, look.merlon, look.pT, look.mCap)
   if (look.inner > 0) sweep(w, sts, [[-half + 0.32, hgt], [-half + 0.32, hgt + look.inner], [-half, hgt + look.inner], [-half, hgt]], { caps: false })
@@ -459,7 +447,7 @@ export function roundCrown(c: Ctx, ctr: P, R: number, y: number, look: WallLook,
   }
 }
 
-/** 西式圆塔：收分的塔脚、塔身、挑出的塔顶；roofed 时加圆锥顶，否则是露天的垛台 */
+/** 圆塔：收分的塔脚、塔身、挑出的塔顶；roofed 时加圆锥顶，否则是露天的垛台 */
 export function drum(c: Ctx, ctr: P, R: number, lo: number, g: number, top: number, roofed: boolean, look: WallLook, roofCol: RGB = SLATE) {
   const { w } = c
   const n = R > 4.5 ? 20 : 16
@@ -536,16 +524,26 @@ export function bastion(c: Ctx, f: Ax, hs: number, ht: number, lo: number, top: 
 /** 框 → 屋顶的框（屋脊沿 f.v，即沿墙） */
 export const roofFrame = (f: Ax, s: number, t: number, a: number, b: number): Frame => ({ c: lp(f, s, t), u: f.v, v: f.u, a, b })
 
-/** 塔楼：按文明与墙的种类。f 的 u 朝城外、v 沿墙，原点在墙中线上 */
+/**
+ * 向城外凸出的方台（马面、方塔）：hs 为凸出方向的半长、ht 为沿墙的半长，top 为台面高度，batter 为台脚的收分。
+ * f 的 u 朝城外、v 沿墙，原点在墙中线上；返回方台的框
+ */
+export function salient(c: WCtx, look: WallLook, f: Ax, hs: number, ht: number, lo: number, top: number, batter: number): Ax {
+  const off = look.half + hs * 0.55
+  const ff = { o: lp(f, off - hs, 0), u: f.u, v: f.v }
+  bastion(c, ff, hs, ht, lo, top, look, batter)
+  return ff
+}
+
+/** 塔楼：木栅是望楼，石墙按文明的沙盘套件（WallKit.tower）。f 的 u 朝城外、v 沿墙，原点在墙中线上 */
 function tower(c: WCtx, look: WallLook, f: Ax, R: number, roofed: boolean) {
-  const { w, H, culture } = c
+  const { w, H } = c
   const t = f.o
   const g = H(t[0], t[1])
   let lo = g
   for (const [s, v] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) lo = Math.min(lo, H(t[0] + f.u[0] * s * R + f.v[0] * v * R, t[1] + f.u[1] * s * R + f.v[1] * v * R))
   lo -= 1.5
   w.base = g - 0.6
-  const { hgt, s } = look
   if (!look.stone) {
     // 木栅的望楼：四根立柱、木板台、矮栏与草顶
     const hs = Math.max(1.5, R * 0.75)
@@ -579,67 +577,21 @@ function tower(c: WCtx, look: WallLook, f: Ax, R: number, roofed: boolean) {
     w.roofFace = MAT.tile
     return
   }
-  if (culture === 'western') {
-    drum(c, t, R, lo, g, g + hgt + 3.4 * s, roofed, look)
-    return
-  }
-  if (culture === 'wa') {
-    // 橹：石垣上两层的白壁角橹，入母屋顶
-    const hs = R * 0.95
-    const ys = g + hgt + 0.3
-    bastion(c, f, hs, hs, lo, ys, { ...look, parapet: 0 }, look.batter)
-    w.roofFace = MAT.tileEast
-    w.gableFace = MAT.plaster
-    w.roofTh = 0.3
-    const f1 = roofFrame(f, 0, 0, hs - 0.2, hs - 0.2)
-    w.c = PLASTER
-    w.face = MAT.plaster
-    box(w, f, -hs + 0.2, hs - 0.2, -hs + 0.2, hs - 0.2, ys, ys + 3, { top: false })
-    w.c = TIMBER_DARK
-    w.face = MAT.board
-    box(w, f, -hs + 0.16, hs - 0.16, -hs + 0.16, hs - 0.16, ys, ys + 0.9, { top: false })
-    hip(w, { ...f1, a: f1.a + 0.2, b: f1.b + 0.2 }, ys + 3, 0.42, 0.75, TILE_DARK, 'curved')
-    const h2 = hs * 0.62
-    w.c = PLASTER
-    w.face = MAT.plaster
-    box(w, f, -h2, h2, -h2, h2, ys + 3.3, ys + 5.7, { top: false })
-    irimoya(w, roofFrame(f, 0, 0, h2 + 0.01, h2), ys + 5.7, 0.6, 0.85, TILE_DARK, PLASTER, 'curved')
-    return
-  }
-  // 东方的马面、伊斯兰的方塔：向城外凸出的方台
-  const islamic = culture === 'islamic'
-  const hs = islamic ? R * 0.85 : R * 0.95
-  const ht = islamic ? R * 0.85 : R * 1.1
-  const off = look.half + hs * 0.55
-  const top = g + hgt + (islamic ? 2.6 * s : 0.02)
-  const ff = { o: lp(f, off - hs, 0), u: f.u, v: f.v }
-  bastion(c, ff, hs, ht, lo, top, look, islamic ? 0.45 : look.batter)
-  if (islamic) return
-  // 敌楼：部分马面上有一座单层的小楼（硬山 / 歇山顶）
-  if (hash(t[0], t[1], 5) < 0.5) {
-    const a = ht * 0.62
-    const b = hs * 0.55
-    w.c = mixRGB(look.col, hex('#6f6a64'), 0.3)
-    w.face = MAT.brick
-    box(w, ff, -b, b, -a, a, top, top + 3.2, { top: false })
-    w.roofFace = MAT.tileEast
-    w.gableFace = MAT.brick
-    w.roofTh = 0.28
-    irimoya(w, roofFrame(ff, 0, 0, a, b), top + 3.2, 0.62, 0.9, TILE_DARK, LACQUER, 'curved')
-  }
+  c.kit.wall.tower(c, look, f, R, roofed, g, lo)
 }
 
 // —————————————————————— 院墙 ——————————————————————
 
-/** 院墙的种类：按文明、所在片区与院子大小 */
+/** 院墙的种类：按文明的沙盘套件（FenceKit.kind）、所在片区与院子大小 */
 type FenceKind = 'kerb' | 'stone' | 'tiled' | 'plaster' | 'tall' | 'hedge' | 'rail'
 
 /**
- * 院墙：沿环放样（东亚加瓦顶的墙帽），对着最近的路的一边留门（门柱、门扇或小门楼）。
+ * 院墙：沿环放样（瓦顶墙加瓦顶的墙帽），对着最近的路的一边留门（门柱、门扇或小门楼）。
  * 很小的院子（水池、花坛的边）只做一道矮的石沿
  */
 export function enclosure(c: WCtx, ring: P[]) {
-  const { w, culture, H, st } = c
+  const { w, H, st } = c
+  const fence = c.kit.fence
   if (ring.length < 3) return
   let cx = 0
   let cz = 0
@@ -677,8 +629,7 @@ export function enclosure(c: WCtx, ring: P[]) {
   const wt = ward?.type
   let kind: FenceKind
   if (areaOf < 70 || wid < 4.5) kind = 'kerb'
-  else if (culture === 'eastern' || culture === 'wa') kind = 'tiled'
-  else if (culture === 'islamic') kind = 'tall'
+  else if (fence.kind) kind = fence.kind
   else if (wt === 'park') kind = 'rail'
   else if (wt === 'farm' || wt === 'wild' || wt === 'suburb') kind = hash(cx, cz, 7) < 0.5 ? 'hedge' : 'stone'
   else kind = 'stone'
@@ -687,7 +638,7 @@ export function enclosure(c: WCtx, ring: P[]) {
 
   if (kind === 'kerb') {
     const sts = stationsOf(loop, true, 30, H, 0.2, 0.4)
-    w.c = culture === 'islamic' ? hex('#d9cfb8') : STONE
+    w.c = fence.kerb
     w.face = MAT.stone
     sweep(w, sts, [[0.18, LO], [0.18, 0.32], [-0.18, 0.32], [-0.18, LO]], { faces: [MAT.stone, MAT.paving, MAT.stone] })
     return
@@ -716,7 +667,7 @@ export function enclosure(c: WCtx, ring: P[]) {
   // 门前不能压着房子：门心处两侧各 1.2 米内有建筑角点就不开门（那里本就由房子把口）
   const big = areaOf > 1500
   const gw = kind === 'hedge' ? 1.6 : big ? 1.9 : 1.4
-  const hgt = kind === 'tiled' ? (culture === 'eastern' ? (big ? 3.0 : 2.5) : 2.1) : kind === 'tall' ? (big ? 3.6 : 3.0) : kind === 'hedge' ? 1.3 : kind === 'rail' ? 1.2 : wt === 'noble' || wt === 'castle' || wt === 'temple' ? 2.4 : wt === 'cemetery' ? 1.5 : 1.7
+  const hgt = kind === 'tiled' ? (big ? fence.tiled!.hgt[0] : fence.tiled!.hgt[1]) : kind === 'tall' ? (big ? 3.6 : 3.0) : kind === 'hedge' ? 1.3 : kind === 'rail' ? 1.2 : wt === 'noble' || wt === 'castle' || wt === 'temple' ? 2.4 : wt === 'cemetery' ? 1.5 : 1.7
   const half = kind === 'hedge' ? 0.45 : kind === 'tall' ? 0.32 : kind === 'rail' ? 0.07 : kind === 'stone' ? 0.27 : 0.24
 
   // 环自门的一侧绕到另一侧（没有门时整圈闭合）
@@ -744,9 +695,9 @@ export function enclosure(c: WCtx, ring: P[]) {
   if (sts.length < 2) return
   const caps = !closed
   if (kind === 'tiled') {
-    const wa = culture === 'wa'
-    const body: RGB = wa ? PLASTER : hash(cx, cz, 9) < 0.45 ? hex('#d9d4c8') : hex('#b3aca0')
-    const bm = wa || body[0] > 200 ? MAT.plaster : MAT.brick
+    // 墙身：浅色的是抹灰，深色的是露砖
+    const body: RGB = fence.tiled!.body ?? (hash(cx, cz, 9) < 0.45 ? hex('#d9d4c8') : hex('#b3aca0'))
+    const bm = body[0] > 200 ? MAT.plaster : MAT.brick
     w.c = body
     // 墙身两面（墙顶压在墙帽下，不另做）；墙帽：两坡小瓦顶与檐下的底板
     sweep(w, sts, [[half, LO], [half, hgt]], { faces: [bm], caps: false })
@@ -806,9 +757,9 @@ export function enclosure(c: WCtx, ring: P[]) {
   if (gf) fenceGate(c, gf, gw, hgt, half, kind, big)
 }
 
-/** 院门：门柱与门扇；东亚是带瓦顶的小门楼，伊斯兰是墙上开的尖拱门洞，西式为石门柱与木门 / 铁门 */
+/** 院门：门柱与门扇；瓦顶墙是带瓦顶的小门楼，抹灰高墙是墙上开的尖拱门洞，石墙为石门柱与木门，栏杆为石柱 */
 function fenceGate(c: WCtx, f: Ax, gw: number, hgt: number, half: number, kind: FenceKind, big: boolean) {
-  const { w, H, culture } = c
+  const { w, H } = c
   const g = H(f.o[0], f.o[1])
   const lo = Math.min(H(f.o[0] + f.v[0] * gw, f.o[1] + f.v[1] * gw), H(f.o[0] - f.v[0] * gw, f.o[1] - f.v[1] * gw), g) - 0.5
   w.at(f.o[0], f.o[1])
@@ -821,15 +772,15 @@ function fenceGate(c: WCtx, f: Ax, gw: number, hgt: number, half: number, kind: 
     return
   }
   if (kind === 'tiled') {
-    const wa = culture === 'wa'
+    const tiled = c.kit.fence.tiled!
     // 小门楼：两根柱、门楣、两坡瓦顶（高出院墙），门扇半掩
     const top = hgt + (big ? 1.0 : 0.6)
-    w.c = wa ? TIMBER_DARK : LACQUER
+    w.c = tiled.post
     w.face = MAT.plain
     for (const sg of [-1, 1]) box(w, f, -0.16, 0.16, sg * gw - 0.16, sg * gw + 0.16, lo, g + top)
     box(w, f, -0.14, 0.14, -gw - 0.3, gw + 0.3, g + top - 0.5, g + top - 0.2, { bottom: true })
     // 门扇（大院子才做）：朝里开，各开一半
-    w.c = wa ? TIMBER : hex('#7a2a20')
+    w.c = tiled.leaf
     w.face = MAT.board
     for (const sg of big ? [-1, 1] : []) {
       const hinge = lp(f, -0.1, sg * (gw - 0.16))
@@ -841,7 +792,7 @@ function fenceGate(c: WCtx, f: Ax, gw: number, hgt: number, half: number, kind: 
     w.gableFace = MAT.plain
     w.roofTh = 0.16
     const rf: Frame = { c: f.o, u: f.v, v: f.u, a: gw + 0.45, b: 0.75 }
-    hipOrGable(c, rf, g + top, wa)
+    gateRoof(c, rf, g + top, tiled.pitch)
     return
   }
   if (kind === 'tall') {
@@ -894,14 +845,11 @@ function fenceGate(c: WCtx, f: Ax, gw: number, hgt: number, half: number, kind: 
   }
 }
 
-/** 小门楼的顶：和式切妻，东方硬山（都是曲面的小两坡） */
-function hipOrGable(c: Ctx, f: Frame, y: number, wa: boolean) {
-  // 只有一种做法，分开留作两种文明各自调整坡度
+/** 小门楼的顶：小两坡瓦顶，屋脊沿墙；k 为坡度 */
+function gateRoof(c: Ctx, f: Frame, y: number, k: number) {
   const { w } = c
   const col = TILE_DARK
   w.c = col
-  // 两坡：屋脊沿墙
-  const k = wa ? 0.5 : 0.62
   const A = f.a
   const B = f.b
   const P3 = (s: number, t: number, h: number): [number, number, number] => [f.c[0] + f.u[0] * s + f.v[0] * t, h, f.c[1] + f.u[1] * s + f.v[1] * t]

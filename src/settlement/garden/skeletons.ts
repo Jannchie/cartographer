@@ -13,7 +13,7 @@ import * as dmath from '../../gen/dmath'
  * 骨架：园子的构图法。每种骨架只管"哪里有什么槽位"（轴端、园心、池岸、园角、参道两旁……），
  * 槽位上放什么由元素池按园址抽签（elements.ts）。
  * - axial 规则对称：主轴（可加横轴、平行的副轴），轴端是对景，交点是园心，花坛格四块或多块镜像对称
- * - natural 自然山水：一方曲池（位置按文明的规矩），岛与渡，绕池的园路上步移景异，池北主厅，园角假山
+ * - natural 自然山水：一方曲池（位置按造园传统的规矩），岛与渡，绕池的园路上步移景异，池北主厅，园角假山
  * - procession 序列：园门 → 参道（门、两旁成对的小品）→ 前庭 → 尽头的殿
  * - field 成片：满园一种地被或林（梅、竹、松、果、白砂），当中几个节点与小路
  */
@@ -151,9 +151,9 @@ function natural(K: Garden): boolean {
   const n = northward(K)
   // 池的位置：东方偏南（北岸留给坐北朝南的主厅），和风大致居中，西式随园偏向一边
   const off =
-    K.cult === 'eastern'
+    K.trad === 'eastern'
       ? add(K.o, n, -m * V.num('natural.lakeSouth', 0.06, 0.16))
-      : K.cult === 'wa'
+      : K.trad === 'wa'
         ? at(K, V.num('natural.lakeX', -0.12, 0.12) * K.hx, V.num('natural.lakeY', -0.1, 0.1) * K.hy)
         : at(K, V.num('natural.lakeX', -0.22, 0.22) * K.hx, V.num('natural.lakeY', -0.18, 0.18) * K.hy)
   if (!fill(K, slot('water', off, K.f, m))) return false
@@ -165,7 +165,7 @@ function natural(K: Garden): boolean {
   const lr = lake ? Math.sqrt(area(lake) / Math.PI) : 0
   if (lake) {
     // 岛：大池一两座（和风的鹤岛、龟岛），小池没有
-    const nIs = lr > 16 && K.cult === 'wa' ? 2 : lr > 10 && (V.chance('natural.isle', K.cult === 'western' ? 0.6 : 0.8) || palace) ? 1 : 0
+    const nIs = lr > 16 && K.trad === 'wa' ? 2 : lr > 10 && (V.chance('natural.isle', K.trad === 'western' ? 0.6 : 0.8) || palace) ? 1 : 0
     const used: string[] = []
     for (let i = 0; i < nIs; i++) {
       const a = V.h('natural.isleA') * 6.28
@@ -185,9 +185,9 @@ function natural(K: Garden): boolean {
     fill(K, slot('crossing', lc, K.f, lr, { q: lake }))
   }
   // 绕池的园路与园门进来的支路
-  const w = K.cult === 'western' ? 2.2 : 1.5
-  const path = loop(K, Math.max(4, m * V.num('natural.loop', 0.1, 0.16)), K.cult === 'western' ? 5 : 3, w)
-  if (path) for (const gt of gates(K).slice(0, K.cult === 'western' ? 3 : 1)) spur(K, gt.p, path, w * 0.9)
+  const w = K.trad === 'western' ? 2.2 : 1.5
+  const path = loop(K, Math.max(4, m * V.num('natural.loop', 0.1, 0.16)), K.trad === 'western' ? 5 : 3, w)
+  if (path) for (const gt of gates(K).slice(0, K.trad === 'western' ? 3 : 1)) spur(K, gt.p, path, w * 0.9)
   // 景点：沿池一圈，池岸与园路相间（步移景异：相邻的两处不重样）
   const scenes = lake ? clamp(Math.round((lr * 6.28) / 26), 2, 7) : clamp(Math.round(Math.sqrt(K.A) / 25), 2, 5)
   const ph = V.h('natural.scenes') * 6.28
@@ -227,7 +227,7 @@ function procession(K: Garden): boolean {
   const F = frameAt(gt.p, gt.d)
   const pd = clamp(L * K.C.nth.num('procession.depth', 0.32, 0.42), 16, 36)
   const p0 = L - pd - 2
-  const hw = K.cult === 'western' ? 2 : 1.6
+  const hw = K.trad === 'western' ? 2 : 1.6
   // 前庭：宽度收到放得进园地为止
   let pw = clamp(Math.min(K.hx, K.hy) * 0.7, 12, 28)
   while (pw > 9 && !inside(box(F, p0, L - 2, -pw / 2, pw / 2), K.inner)) pw *= 0.85

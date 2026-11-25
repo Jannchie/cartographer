@@ -3,9 +3,8 @@ import { IconDices } from '@jannchie/icons'
 import { computed } from 'vue'
 import { SETTLE_THEMES } from '../../settlement/themes'
 import { FEATURES, FUNCTIONS, GROUPS, featureEnv, featureName as nameOf, resolveCounts, type FeatureDef } from '../../settlement/features'
-import { PLAN_INFO, planLabel } from '../../settlement/plans'
 import { MOTIF_INFO } from '../../settlement/tensor'
-import { CULTURE_INFO, CULTURES, planFits } from '../../settlement/culture'
+import { cultureIds, cultureOf, planChoices } from '../../settlement/culture'
 import { POP_MAX, POP_MIN, sizeLabel } from '../../settlement/scale'
 import { LAND_USES } from '../../settlement/landuse'
 import { DEFAULT_SETTLEMENT, type SettlementParams } from '../../settlement/types'
@@ -30,14 +29,9 @@ import { ss } from './settlement'
 const p = ss.params
 /** 当前这座城生成时的参数：生成参数的滑杆双击回到这里 */
 const gen = computed(() => ss.applied ?? DEFAULT_SETTLEMENT)
-const CULTURE_OPTS = CULTURES.map((c) => ({ value: c, label: CULTURE_INFO[c].name[0], title: CULTURE_INFO[c].desc }))
+const CULTURE_OPTS = cultureIds().map((c) => ({ value: c, label: cultureOf(c).name, title: cultureOf(c).desc }))
 // 形制跟着文明：只列本文明的
-const planOpts = computed(() =>
-  PLAN_INFO.filter((f) => planFits(p.culture, f.id)).map((f) => {
-    const l = planLabel(f, p.culture)
-    return { value: f.id, label: l.name, desc: l.desc }
-  }),
-)
+const planOpts = computed(() => planChoices(p.culture).map((f) => ({ value: f.id, label: f.name, desc: f.desc })))
 const MOTIF_OPTS = MOTIF_INFO.map((m) => ({ value: m.id, label: m.name, desc: m.desc }))
 const MAGIC: { value: SettlementParams['magic']; label: string; title?: string }[] = [
   { value: 0, label: '写实' },

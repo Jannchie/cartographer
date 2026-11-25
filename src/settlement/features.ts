@@ -1,4 +1,4 @@
-import { CULTURE_INFO, eastAsian } from './culture'
+import { cultureOf, traitsOf } from './culture'
 import { emitArea, clipWater, isFree, placeable, whereOf, mark, type Ctx } from './ctx'
 import { area, centroid, circlePoly, dist, insetConvex, obb, rect, type P, type Poly } from './geom'
 import { amphitheater, arenaAt, hospitalAt, pulpitAt, schoolAt, stageAt, tavernAt, wineryAt } from './civic'
@@ -150,8 +150,8 @@ export interface LandmarkSpec {
 export interface FeatureDef {
   id: FeatureId
   group: FeatureGroup
-  /** 各文明下的叫法：西方、东方，和风、伊斯兰缺省时分别沿用东方、西方的 */
-  name: [western: string, eastern: string, wa?: string, islamic?: string]
+  /** 名称（中文键）；文明有自己的叫法时写在它的定义里（CultureDef.featureNames） */
+  name: string
   desc: string
   /** 需要的奇幻程度 */
   magic?: number
@@ -185,7 +185,7 @@ export const FEATURES: FeatureDef[] = [
     id: 'common',
     named: true,
     group: 'dwelling',
-    name: ['民居', '里坊民居', '町家', '内院民居'],
+    name: '民居',
     desc: '普通住户的街坊，填满其余的片区',
     form: 'filler',
     order: 100,
@@ -200,7 +200,7 @@ export const FEATURES: FeatureDef[] = [
     id: 'merchant',
     named: true,
     group: 'dwelling',
-    name: ['商人区', '商坊', '商人町', '商人街区'],
+    name: '商人区',
     desc: '富商与店铺，靠近城心与干道',
     form: 'ward',
     order: 60,
@@ -213,7 +213,7 @@ export const FEATURES: FeatureDef[] = [
     id: 'craft',
     named: true,
     group: 'dwelling',
-    name: ['工匠区', '匠作坊', '职人町', '工匠街区'],
+    name: '工匠区',
     desc: '作坊与工匠住户，偏爱临水与城区外圈',
     form: 'ward',
     order: 62,
@@ -226,7 +226,7 @@ export const FEATURES: FeatureDef[] = [
     id: 'noble',
     named: true,
     group: 'dwelling',
-    name: ['贵族区', '官宦宅第', '武家屋敷', '贵族宅邸'],
+    name: '贵族区',
     desc: '带院墙与花园的大宅，偏爱高处、靠近城堡',
     form: 'ward',
     order: 30,
@@ -239,7 +239,7 @@ export const FEATURES: FeatureDef[] = [
     id: 'slum',
     named: true,
     group: 'dwelling',
-    name: ['贫民窟', '棚户', '长屋', '棚户'],
+    name: '贫民窟',
     desc: '城墙根下密集低矮的房屋',
     form: 'ward',
     order: 70,
@@ -252,7 +252,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'plaza',
     group: 'public',
-    name: ['广场', '广场'],
+    name: '广场',
     desc: '城心之外的街头广场（城心本身按功效决定）',
     form: 'ward',
     order: 40,
@@ -265,7 +265,7 @@ export const FEATURES: FeatureDef[] = [
     id: 'market',
     named: true,
     group: 'public',
-    name: ['市集', '市坊', '市场', '巴扎'],
+    name: '市集',
     desc: '市场与市集大厅 / 东西两市',
     form: 'ward',
     order: 20,
@@ -280,7 +280,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'park',
     group: 'public',
-    name: ['公园', '园林', '庭园', '花园'],
+    name: '公园',
     desc: '公园 / 园林',
     form: 'ward',
     order: 50,
@@ -292,7 +292,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'cemetery',
     group: 'public',
-    name: ['墓地', '义冢', '墓地', '墓园'],
+    name: '墓地',
     desc: '墓园，靠近城墙',
     form: 'ward',
     order: 52,
@@ -304,7 +304,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'tavern',
     group: 'public',
-    name: ['酒馆', '客栈', '旅笼', '商队客栈'],
+    name: '酒馆',
     desc: '沿主街与城门的酒馆、旅店',
     form: 'landmark',
     order: 0,
@@ -315,7 +315,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'subcenter',
     group: 'public',
-    name: ['副中心', '副都心'],
+    name: '副中心',
     desc: '城区另起的几个中心：各有广场或市集，城区围着它们一起生长、连成一片，彼此有干道相通',
     form: 'wonder',
     order: 0,
@@ -325,7 +325,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'stage',
     group: 'public',
-    name: ['露天剧场', '戏台', '芝居小屋', '说书场'],
+    name: '露天剧场',
     desc: '一座戏台，前面是扇形的观众场地',
     form: 'landmark',
     order: 0,
@@ -336,7 +336,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'pulpit',
     group: 'public',
-    name: ['宣讲台', '宣讲台'],
+    name: '宣讲台',
     desc: '广场上的讲台与围着它的空地：布道、宣读告示、说书',
     form: 'landmark',
     order: 0,
@@ -347,7 +347,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'amphitheater',
     group: 'public',
-    name: ['圆形竞技场', '百戏场', '相扑场', '竞技场'],
+    name: '圆形竞技场',
     desc: '椭圆看台环绕的角斗 / 百戏场地，大小随城市人口，大都会里接近罗马大斗兽场',
     form: 'ward',
     order: 13,
@@ -361,7 +361,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'arena',
     group: 'public',
-    name: ['比武场', '擂台', '马场', '马球场'],
+    name: '比武场',
     desc: '围起来的比武场地与两侧看台，多在城边',
     form: 'landmark',
     order: 0,
@@ -373,7 +373,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'temple',
     group: 'faith',
-    name: ['教堂', '寺观', '寺社', '清真寺'],
+    name: '教堂',
     desc: '主教堂 / 寺观；村里是礼拜堂 / 祠堂',
     form: 'ward',
     order: 12,
@@ -391,7 +391,7 @@ export const FEATURES: FeatureDef[] = [
           const cand = rect(q, b.axis, 16 * s, 8 * s)
           if (!ch && inside(cand, block) && isFree(ctx, cand, { pad: 1.5 })) ch = cand
         }
-      const east = eastAsian(ctx.p.culture)
+      const east = traitsOf(ctx.p.culture).eastAsian
       if (ch && addBuilding(ctx, ch, east ? 'hall' : 'temple', 1.5))
         mark(ctx, centroid(ch), 'temple', east ? 'shrine' : 'chapel')
       urban(ctx, block, 'village', ch ? [rect(centroid(ch), b.axis, 26, 16)] : [])
@@ -401,7 +401,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'castle',
     group: 'defense',
-    name: ['城堡', '宫城', '天守', '城堡'],
+    name: '城堡',
     desc: '城堡 / 宫城衙署；要塞城里是卫城',
     form: 'ward',
     order: 10,
@@ -419,7 +419,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'barracks',
     group: 'defense',
-    name: ['兵营', '校场', '番所', '兵营'],
+    name: '兵营',
     desc: '围墙里的营房与操练场，靠近城墙与城堡',
     form: 'ward',
     order: 14,
@@ -431,7 +431,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'barbican',
     group: 'defense',
-    name: ['城门外堡', '瓮城'],
+    name: '城门外堡',
     desc: '石砌城门外再围一圈小城，攻进外门还要再破内门',
     form: 'wonder',
     order: 0,
@@ -442,7 +442,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'hospital',
     group: 'public',
-    name: ['医院 / 济贫院', '养济院', '养生所', '医院'],
+    name: '医院 / 济贫院',
     desc: '收治病人与孤贫的院落：病房大厅、礼拜堂与药草园',
     form: 'landmark',
     order: 0,
@@ -453,7 +453,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'school',
     group: 'public',
-    name: ['大学 / 学校', '书院', '藩校', '经学院'],
+    name: '大学 / 学校',
     desc: '四合方院的大学、主教座堂学校 / 中轴对称的书院',
     form: 'landmark',
     order: 0,
@@ -464,7 +464,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'gallows',
     group: 'public',
-    name: ['绞刑架', '刑场', '刑场', '刑场'],
+    name: '绞刑架',
     desc: '城门外大路边的刑场',
     form: 'wonder',
     order: 0,
@@ -474,7 +474,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'lighthouse',
     group: 'public',
-    name: ['灯塔', '灯塔'],
+    name: '灯塔',
     desc: '离港口不远的岬角上的灯塔',
     form: 'wonder',
     order: 0,
@@ -485,7 +485,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'mill',
     group: 'industry',
-    name: ['水车磨坊', '水碾', '水车小屋', '水磨'],
+    name: '水车磨坊',
     desc: '城区上下游河岸上的水车磨坊',
     form: 'wonder',
     order: 0,
@@ -495,7 +495,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'windmill',
     group: 'industry',
-    name: ['风车', '风车'],
+    name: '风车',
     // 别的文明不出风车：见 CultureInfo.exclude
     desc: '城外开阔高处的磨坊风车（西式）',
     form: 'wonder',
@@ -506,7 +506,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'kiln',
     group: 'industry',
-    name: ['砖窑', '砖瓦窑'],
+    name: '砖窑',
     desc: '城外取土方便处的砖瓦窑与晾坯棚',
     form: 'wonder',
     order: 0,
@@ -516,7 +516,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'winery',
     group: 'industry',
-    name: ['葡萄酒庄', '葡萄酒坊'],
+    name: '葡萄酒庄',
     desc: '城外田间带院墙的酒庄，周围的田改种葡萄',
     form: 'landmark',
     order: 0,
@@ -527,7 +527,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'guild',
     group: 'industry',
-    name: ['行会大厅', '会馆', '株仲间会所', '商会'],
+    name: '行会大厅',
     desc: '工匠与商人的行会大厅',
     form: 'ward',
     order: 24,
@@ -539,7 +539,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'exchange',
     group: 'industry',
-    name: ['交易所', '钱庄', '两替商', '钱庄'],
+    name: '交易所',
     desc: '回廊环绕的交易大院，靠近城心',
     form: 'ward',
     order: 26,
@@ -551,7 +551,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'warehouse',
     group: 'industry',
-    name: ['货栈', '仓廒', '土藏', '货栈'],
+    name: '货栈',
     desc: '成排的大仓库，临水或靠近城门',
     form: 'ward',
     order: 64,
@@ -567,7 +567,7 @@ export const FEATURES: FeatureDef[] = [
     id: 'harbor',
     named: true,
     group: 'industry',
-    name: ['港区', '码头', '凑', '港口'],
+    name: '港区',
     desc: '临水的港口与码头',
     form: 'ward',
     order: 16,
@@ -580,7 +580,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'magic',
     group: 'magic',
-    name: ['法师塔', '宗门', '阴阳寮', '法师塔'],
+    name: '法师塔',
     desc: '奇观片区；东方依山时宗门建在山上',
     magic: 1,
     form: 'ward',
@@ -593,7 +593,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'observatory',
     group: 'magic',
-    name: ['观星台', '司天台', '天文台', '天文台'],
+    name: '观星台',
     desc: '高处的星象塔与圆台',
     magic: 1,
     form: 'ward',
@@ -606,7 +606,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'portal',
     group: 'magic',
-    name: ['传送门', '挪移阵'],
+    name: '传送门',
     desc: '广场或城门内的传送法阵',
     magic: 1,
     form: 'landmark',
@@ -618,7 +618,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'isle',
     group: 'magic',
-    name: ['浮空岛', '浮空岛'],
+    name: '浮空岛',
     desc: '悬在城外空中的小岛',
     magic: 2,
     form: 'wonder',
@@ -629,7 +629,7 @@ export const FEATURES: FeatureDef[] = [
   {
     id: 'leyline',
     group: 'magic',
-    name: ['灵脉', '灵脉'],
+    name: '灵脉',
     desc: '穿过奇观的发光地脉',
     magic: 1,
     form: 'wonder',
@@ -643,8 +643,7 @@ export const FEATURE: Record<FeatureId, FeatureDef> = Object.fromEntries(FEATURE
 
 /** 要素在某个文明下的叫法 */
 export function featureName(f: FeatureDef, c: Culture) {
-  const [west, east, wa, islamic] = f.name
-  return c === 'eastern' ? east : c === 'wa' ? (wa ?? east) : c === 'islamic' ? (islamic ?? west) : west
+  return cultureOf(c).featureNames?.[f.id] ?? f.name
 }
 
 export function featureEnv(p: SettlementParams, walled = p.walls !== 'none'): FeatureEnv {
@@ -677,7 +676,7 @@ export function resolveCounts(p: SettlementParams, e: FeatureEnv): Record<Featur
       continue
     }
     const manual = p.counts[f.id]
-    const foreign = CULTURE_INFO[e.culture].exclude?.includes(f.id)
+    const foreign = traitsOf(e.culture).exclude?.includes(f.id)
     out[f.id] = manual !== undefined && manual !== null ? Math.max(0, Math.min(f.max, manual)) : foreign ? 0 : f.auto(e)
   }
   return out

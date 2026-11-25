@@ -1,14 +1,15 @@
 /**
  * 桥、渡口与浅滩：
- * - 石拱桥（西式圆拱、东方高拱带望柱栏板、伊斯兰尖拱）：拱下透空，桥墩带分水尖，桥面起拱，两头顺着引道落到路面；
- * - 木桥（和式）与神桥（朱漆太鼓桥）：排架桩、桥板、带柱头的栏杆；
+ * - 石拱桥（圆拱或尖拱，护墙或望柱栏板）：拱下透空，桥墩带分水尖，桥面起拱，两头顺着引道落到路面；
+ * - 木桥与神桥（朱漆太鼓桥）：排架桩、桥板、带柱头的栏杆；
+ * 用哪一种、石色与拱形按文明的沙盘套件（kits.ts 的 BridgeKit）。
  * - 护城河上城门外的桥；渡口两岸的小栈桥与渡船；浅滩的踏石。
  * 纯函数，在 Worker 中运行。
  */
 import type { P } from '../../settlement/geom'
 import type { Settlement, Wall } from '../../settlement/types'
 import { MAT, shade, type RGB } from './mesh'
-import { ADOBE, STONE, STONE_EAST, TIMBER, TIMBER_DARK, VERMILION, hex } from './shared'
+import { TIMBER, TIMBER_DARK, VERMILION, hex } from './shared'
 import { archFace, archOutline, axUV, beam, box, lp, placeArch, pyramid, sweep, tube, vault, type ArchShape, type Opening, type Station } from './worksMesh'
 import { boat, jetty } from './harbor'
 import type { WCtx } from './works'
@@ -282,7 +283,8 @@ function timberBridge(c: WCtx, sp: Span, sacred: boolean) {
 
 /** 桥、渡口、浅滩 */
 export function crossing(c: WCtx, x: Settlement['crossings'][number]) {
-  const { w, culture, H } = c
+  const { w, H } = c
+  const kit = c.kit.bridge
   const L = Math.hypot(x.b[0] - x.a[0], x.b[1] - x.a[1])
   if (L < 1) return
   const mid: P = [(x.a[0] + x.b[0]) / 2, (x.a[1] + x.b[1]) / 2]
@@ -320,21 +322,19 @@ export function crossing(c: WCtx, x: Settlement['crossings'][number]) {
   w.base = Math.min(ya, yb) - 0.8
   const river = { bed: BED, spring: SPRING }
   if (x.sacred) return timberBridge(c, { a: x.a, b: x.b, half, ya, yb, rise: Math.max(1.2, Math.min(L * 0.17, 4.2)), ...river }, true)
-  if (culture === 'wa') return timberBridge(c, { a: x.a, b: x.b, half, ya, yb, rise: Math.max(0.5, Math.min(L * 0.055, 1.8)), ...river }, false)
+  if (kit.timber) return timberBridge(c, { a: x.a, b: x.b, half, ya, yb, rise: Math.max(0.5, Math.min(L * 0.055, 1.8)), ...river }, false)
   // 石拱桥：桥面抬到拱顶之上（至少高出水面约两米），矢高随跨度
   const lowest = Math.min(ya, yb)
-  const riseK = culture === 'eastern' ? 0.11 : 0.075
-  const rise = Math.max(Math.max(0.6, 2.3 - lowest), Math.min(L * riseK, culture === 'eastern' ? 4.2 : 3.2))
-  const col = culture === 'eastern' ? shade(STONE_EAST, 1.12) : culture === 'islamic' ? ADOBE : STONE
-  const face = culture === 'islamic' ? MAT.brick : MAT.stone
-  stoneBridge(c, { a: x.a, b: x.b, half, ya, yb, rise: Math.min(rise, L * 0.2), ...river }, col, face, culture === 'islamic' ? 'pointed' : 'round', culture === 'eastern' ? 'balustrade' : 'parapet')
+  const rise = Math.max(Math.max(0.6, 2.3 - lowest), Math.min(L * kit.riseK, kit.riseMax))
+  stoneBridge(c, { a: x.a, b: x.b, half, ya, yb, rise: Math.min(rise, L * 0.2), ...river }, kit.col, kit.face, kit.arch, kit.rail)
 }
 
 /**
  * 护城河上城门外的桥：桥面与两头的地面齐平、略起拱；河没有刻进地形时桥身埋在地里，只露出桥面与栏杆
  */
 export function moatBridge(c: WCtx, wall: Wall, b: { p: P; angle: number }) {
-  const { w, culture, H } = c
+  const { w, H } = c
+  const kit = c.kit.bridge
   const moat = wall.moat
   if (!moat) return
   const u: P = [Math.cos(b.angle), Math.sin(b.angle)]
@@ -347,7 +347,6 @@ export function moatBridge(c: WCtx, wall: Wall, b: { p: P; angle: number }) {
   w.base = Math.min(ya, yb) - 0.8
   const low = Math.min(ya, yb)
   const sp: Span = { a, b: e, half: 3.1, ya, yb, rise: 0.45, bed: low - 4.2, spring: low - 2.2 }
-  if (culture === 'wa') return timberBridge(c, sp, false)
-  const col = culture === 'eastern' ? shade(STONE_EAST, 1.12) : culture === 'islamic' ? ADOBE : STONE
-  stoneBridge(c, sp, col, culture === 'islamic' ? MAT.brick : MAT.stone, culture === 'islamic' ? 'pointed' : 'round', culture === 'eastern' ? 'balustrade' : 'parapet')
+  if (kit.timber) return timberBridge(c, sp, false)
+  stoneBridge(c, sp, kit.col, kit.face, kit.arch, kit.rail)
 }

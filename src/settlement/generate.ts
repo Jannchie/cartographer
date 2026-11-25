@@ -33,14 +33,14 @@ import {
 } from './geom'
 import { addWall, bastioned, cleanLoop, fromF32, gateStreets, insetLoop, simplifyLoop, smoothRoute, toF32, wallFromLoop } from './walls'
 import { fixWet, nearestRoad, roadCorridor, through, tidyRoads, trimDangling, wetRuns } from './roads'
-import { STYLES } from './styles'
-import { CULTURE_INFO, eastAsian, planFits } from './culture'
+import { cultureOf, planOf, traitsOf } from './culture'
+// 内置文化包在模块加载时注册：主线程与 Worker 都经由本模块进入聚落生成
+import '../packs'
 import { ruralExtras } from './rural'
 import { tierReserve, wardExtras } from './tiers'
 import { checkpoint, demolish, drop, rollback } from './undo'
 import { sacredSites } from './sacred'
 import { settleConflicts } from './settle'
-import { PLANS } from './plans'
 import type { PlanLot, PlanZone } from './plans/types'
 import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, sitePad, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
@@ -71,7 +71,7 @@ function scaled(input: SettlementParams) {
     spread: input.spread ?? DEFAULT_SETTLEMENT.spread,
     farmland: input.farmland ?? DEFAULT_SETTLEMENT.farmland,
     planStrength: Math.min(1, Math.max(0, input.planStrength ?? DEFAULT_SETTLEMENT.planStrength!)),
-    walls: input.walls === 'auto' && !CULTURE_INFO[input.culture].autoWalls && input.function !== 'fortress' ? 'none' : input.walls,
+    walls: input.walls === 'auto' && !traitsOf(input.culture).autoWalls && input.function !== 'fortress' ? 'none' : input.walls,
   }
   const cfg = { ...sc.cfg }
   // 干道、大路的路宽按规划的规模（成长动画里是最终的人口）：路一开始就按全城修好，
@@ -163,7 +163,7 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
     center: [MW / 2, MH / 2],
     Rin: 0,
     seedHash: hashString(`${p.seed}|${p.culture}`),
-    style: STYLES[p.culture],
+    style: cultureOf(p.culture).style,
     memo: new Map(),
     density: new Map(),
     uncounted: false,
@@ -1487,7 +1487,7 @@ function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStag
   // 形制不修城墙（返回空的轮廓，如城下町）
   if (planned && !planned.length) return
   // 最外一道石墙挖不挖护城河：形制说了算，否则看文明，要塞城都挖，别的城大多挖
-  const moatFor = (st: WallStage) => st.kind === 'stone' && (ctx.plan?.def.moat ?? (CULTURE_INFO[ctx.p.culture].moat || ctx.p.function === 'fortress' || hashAt(ctx, ctx.center, 'wall.moat') < 0.65))
+  const moatFor = (st: WallStage) => st.kind === 'stone' && (ctx.plan?.def.moat ?? (traitsOf(ctx.p.culture).moat || ctx.p.function === 'fortress' || hashAt(ctx, ctx.center, 'wall.moat') < 0.65))
   if (planned) {
     const st = stages[stages.length - 1]
     const m = outMark(ctx)
@@ -1505,7 +1505,7 @@ function buildWalls(ctx: Ctx, patches: Patch[], growth: Growth, stages: WallStag
     if (!drawn(k)) return
     const age = stages.length - 1 - k
     // 上一道留作内城，或拆了筑环城大道、留几段残墙（见 CultureInfo.innerWall）
-    const keep = last || (CULTURE_INFO[ctx.p.culture].innerWall && st.kind === 'stone' && age === 1)
+    const keep = last || (traitsOf(ctx.p.culture).innerWall && st.kind === 'stone' && age === 1)
     // 成长史：这道墙修起来的时刻（之前几道与它几乎重合、没单画的，就是它原地升级前的样子：从最早那道起就有），
     // 与被下一道取代（拆掉筑路、留残墙）的时刻
     let from = k
@@ -1600,8 +1600,8 @@ function wallInfill(ctx: Ctx, patches: Patch[], growth: Growth) {
 function setupPlan(ctx: Ctx): Ctx['plan'] {
   const id = ctx.p.plan ?? 'organic'
   // 形制跟着文明走：别的文明的形制（西方的城选了城下町）按有机生长
-  if (id === 'organic' || isVillage(ctx.p.size) || !planFits(ctx.p.culture, id)) return undefined
-  const def = PLANS[id]
+  if (id === 'organic' || isVillage(ctx.p.size)) return undefined
+  const def = planOf(ctx.p.culture, id)
   if (!def) return undefined
   const s = ctx.p.planStrength!
   const R = rinFor(ctx.p, Math.max(1500, planPopOf(ctx.p) * s)) * (def.scale ?? 1)
@@ -2625,7 +2625,7 @@ function historyWards(ctx: Ctx, S: WardStage, walk: number[], arterials: P[][]):
  */
 function palaceZone(ctx: Ctx, arterials: P[][]): { sites: P[]; keepOut: (q: P) => boolean } | null {
   const { T } = ctx
-  const south = CULTURE_INFO[ctx.p.culture].palaceSouth
+  const south = traitsOf(ctx.p.culture).palaceFacing === 'south'
   // 至少横两格、纵三格标准片区（约六块），大城随人口再大
   const side0 = Math.min(340, Math.max(ctx.cfg.patch * 2.1, Math.sqrt(planPopOf(ctx.p)) * 1.6))
   // 朝向：东方坐北朝南（横向是东西）；西式、别的正面朝城心（进深沿着离开城心的方向，楼后是纵深的园林）
@@ -2859,8 +2859,8 @@ function palaceSite(ctx: Ctx, patches: Patch[], seed: number, royal = true): Pol
   const nearBy = (q: P) => q[0] > x0 - 60 && q[0] < x1 + 60 && q[1] > y0 - 60 && q[1] < y1 + 60
   for (const r of ctx.out.roads) if (cut.includes(r) || r.line.some(nearBy)) roadCorridor(ctx, r)
   // 东方的大寺、大社按方格朝向摆（院落坐北朝南，见 eastCompound 的 northOf）；别的顺着合成片区的长轴
-  const east = CULTURE_INFO[ctx.p.culture].palaceSouth
-  const axis: P = royal && east ? [1, 0] : !royal && east ? [dmath.cos(ctx.gridAngle), dmath.sin(ctx.gridAngle)] : obb(U).axis
+  const grid = traitsOf(ctx.p.culture).compoundAxis === 'grid'
+  const axis: P = royal && grid ? [1, 0] : !royal && grid ? [dmath.cos(ctx.gridAngle), dmath.sin(ctx.gridAngle)] : obb(U).axis
   const n: P = [-axis[1], axis[0]]
   let [u0, u1, v0, v1] = [Infinity, -Infinity, Infinity, -Infinity]
   for (const q of U) {
@@ -2898,7 +2898,7 @@ function palaceSite(ctx: Ctx, patches: Patch[], seed: number, royal = true): Pol
     const t0 = ctx.out.trees.length
     // 合成的大社四周是镇守之森（密林），大寺、大教堂是寺林、草地上的树，都城的御苑疏朗
     const t = patches[seed].type
-    scatterTrees(ctx, g, royal ? 0.004 : t === 'temple' ? (ctx.p.culture === 'wa' ? 0.014 : 0.007) : t === 'castle' ? 0.002 : 0.005, 3, 5.5)
+    scatterTrees(ctx, g, royal ? 0.004 : t === 'temple' ? traitsOf(ctx.p.culture).templeGrove : t === 'castle' ? 0.002 : 0.005, 3, 5.5)
     const inR = growConvex(R, 6)
     drop(ctx, 'trees', (t) => pointInPoly(t.p, inR), t0)
   }
@@ -3300,7 +3300,7 @@ function magicExtras(ctx: Ctx) {
   // 每种奇观用自己的随机数流：改其中一项的数量，其余的位置不变
   let rng = new RNG(hashString(`${p.seed}|sect`))
   // 东方：山上的宗门，石阶从城门蜿蜒而上
-  if (counts.magic > 0 && eastAsian(p.culture) && p.hills && T.hillDir) {
+  if (counts.magic > 0 && traitsOf(p.culture).hillSect && p.hills && T.hillDir) {
     // 候选山头按"高、缓、离城不太远"排序，依次试到能落地为止（不压路、不压水）
     const cands: { q: P; h: number }[] = []
     for (let k = 0; k < 400; k++) {

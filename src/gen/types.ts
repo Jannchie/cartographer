@@ -214,8 +214,11 @@ export interface Realm {
   room: number
 }
 
-/** 城镇形制（与 settlement 的 Culture 相同）：文化决定它的城建成什么样 */
-export type TownCulture = 'western' | 'eastern' | 'wa' | 'islamic'
+/**
+ * 城镇形制：就是聚落层的文明 id（settlement/types.ts 的 Culture，同一个取值）。世界层不依赖聚落层的代码，所以在这里另写一份。
+ * 世界上的文化建哪种文明的城，由文化包的规则定（见 gen/townCulture.ts）
+ */
+export type TownCulture = string
 
 /** 伯爵领：政区的最小单位，国家由整块伯爵领拼成（按制度也叫县、郡） */
 export interface County {

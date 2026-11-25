@@ -1,7 +1,6 @@
 import { emitArea, clipWater, isFree, mark, placeable, siteDice, type Ctx } from '../ctx'
 import { area, at, box, centroid, circlePoly, insetConvex, obb, pointInPoly, rect, type Frame, type P, type Poly } from '../geom'
 import type { BuildingKind } from '../types'
-import type { SacredKind } from '../names'
 import { addGroup, fit, graves, inside, place, plantTree, scatterTrees, urban } from '../wards'
 import { composer, type Elem, type Preset } from './core'
 import * as dmath from '../../gen/dmath'
@@ -70,7 +69,7 @@ const PRESETS = (big: boolean): Preset[] => [
  * 规模档（ctx.tier）：small 是堂区教堂（短、单廊、没有回廊院）；grand 是朝圣大教堂，另有围起来的教士区（close）：
  * 围墙、主教宫、沿墙一圈教士的住宅、草地。
  */
-export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boolean; key?: string; label?: SacredKind } = {}): boolean {
+export function westChurch(ctx: Ctx, block: Poly, inner: Poly, o: { fill?: boolean; key?: string; label?: string } = {}): boolean {
   const b = obb(inner)
   const tier = ctx.tier
   const big = ctx.p.size === 'city' || tier === 'grand'
