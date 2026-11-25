@@ -20,9 +20,9 @@ import type { Culture, Ward, WardType } from './types'
  * 能力标记、数据表，或调用它的钩子——新增一种文明只需要写一份 CultureDef 并注册，不需要改生成器。
  *
  * 文明由插件登记（扩展点 Cultures）：一个插件带一组相互配套的文明（内置的 classic 包含西式、东方、和风、伊斯兰），
- * 在它的 settlement 层入口里用 register.ts 的 registerCultures 登记。文明与世界层的"命名世界观"
- *（gen/naming.ts 的 NamingStyle）是两回事：命名世界观决定世界地图上的地名怎么起，文明提供聚落的建法；
- * 两者由插件的一条规则对应起来（gen/townCulture.ts）。
+ * 在它的 settlement 层入口里用 register.ts 的 registerCultures 登记。文明与世界层的命名风格
+ *（gen/naming.ts）是两回事：命名风格决定世界地图上的地名怎么起，文明提供聚落的建法；
+ * 两者由世界观的城镇文明规则对应起来（gen/setting.ts）。
  *
  * 本模块除内核外只有类型导入，不依赖任何具体的文明，也不导入插件：各入口（main.ts、两个 Worker、离线脚本）
  * 先启动插件（packs/boot.ts）再调用生成器。文明的 id 写在聚落的种子里（generate.ts），登记后不能改名。

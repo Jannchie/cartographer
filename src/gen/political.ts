@@ -1,6 +1,7 @@
 import { Noise } from './noise'
 import { RNG } from './rng'
-import { townCulture } from './townCulture'
+import { polityDef, type Polity, type PolityRule } from './polity'
+import type { SettingDef } from './setting'
 import { Biome, isSettlement, type Label, type NamingStyle, type Realm, type TownCulture } from './types'
 import { MinHeap, edt, neighbors8 } from './util'
 import * as dmath from './dmath'
@@ -9,73 +10,6 @@ import * as dmath from './dmath'
 const COUNTY_KM2 = 3200
 /** 伯爵领数目上限（Int16 存放，留足余量） */
 const MAX_COUNTIES = 20000
-
-type Style = Exclude<NamingStyle, 'auto'>
-
-/**
- * 制度：一种文化怎样把土地组织成国家。决定国家的多少与大小、跨文化扩张的难易，以及中层政区怎样划分。
- * - feudal 分封：伯爵领 → 公爵领 → 王国。国家多而大小悬殊；公爵领围绕大城，大小随城市规模
- * - commandery 郡县：县 → 州 → 王朝。一个大一统王朝占据核心，周边少数小国；州均匀铺开、大小均衡，
- *   界线顺着山脊与大河（山川形便）
- * - ritsuryo 令制：郡 → 令制国 → 朝廷。国家少；令制国以山脊为界，大致一块盆地、一片平原一国
- */
-export type Polity = 'feudal' | 'commandery' | 'ritsuryo'
-/** 命名世界观对应的默认制度 */
-const POLITY_OF: Record<Style, Polity> = { fantasy: 'feudal', epic: 'feudal', eastern: 'commandery', wa: 'ritsuryo' }
-
-/** 制度的名字与基本单位、中层政区的称呼（中文原文，界面经 i18n 翻译）；国家的称呼在国名里（见 naming 的国名表） */
-export const POLITY_TERMS: Record<Polity, { name: string; county: string; province: string }> = {
-  feudal: { name: '分封', county: '伯爵领', province: '公爵领' },
-  commandery: { name: '郡县', county: '县', province: '州' },
-  ritsuryo: { name: '令制', county: '郡', province: '令制国' },
-}
-/** 文化的制度（旧存档没记，按命名世界观推出） */
-export const polityOf = (c: { naming: Style; polity?: Polity }): Polity => c.polity ?? POLITY_OF[c.naming]
-/** 国家的制度：按国家的主体文化（没有记录时取 fallback 文化，再没有就是分封） */
-export function realmPolity(cultures: readonly { naming: Style; polity?: Polity }[], realm: { culture?: number } | undefined, fallback?: number): Polity {
-  const c = cultures[realm?.culture ?? -1] ?? cultures[fallback ?? -1]
-  return c ? polityOf(c) : 'feudal'
-}
-
-/** 中层政区的名字：治所伯爵领的名字加上制度的称谓（名字已带这个字的不再重复） */
-export function provinceName(c: { name: string; zh: string; ja?: string }, polity: Polity) {
-  const ja = c.ja ?? c.zh
-  const suf = (s: string, t: string) => (s.endsWith(t) ? s : s + t)
-  switch (polity) {
-    case 'feudal':
-      return { name: `Duchy of ${c.name}`, zh: suf(c.zh, '公爵领'), ja: suf(ja, '公爵領') }
-    case 'commandery':
-      return { name: `${c.name} Prefecture`, zh: suf(c.zh, '州'), ja: suf(ja, '州') }
-    case 'ritsuryo':
-      return { name: `${c.name} Province`, zh: suf(c.zh, '国'), ja: suf(ja, '国') }
-  }
-}
-
-interface PolityRule {
-  /** 国家数目的倍率（按文化占地分配名额之后再乘） */
-  realms: number
-  /** 国家种子之间的最小间距倍率 */
-  sep: number
-  /** 国家扩张活力的范围；core：文化里第一个（最大城市的）国家额外的活力倍率 */
-  vigor: [number, number]
-  core: number
-  /** 跨文化扩张的代价倍率 */
-  cross: number
-  /** 一个中层政区平均含几个基本单位 */
-  group: number
-  /** 中层政区的中心：towns 先取大城（其余补齐），even 从都城起按最远点均匀铺开 */
-  seeding: 'towns' | 'even'
-  /** 中层界线翻越山脊（每公里高度）、沿大河的代价 */
-  ridge: number
-  river: number
-  /** 中层政区大小向平均靠拢的力度：0 不管，1 尽量均衡 */
-  balance: number
-}
-const RULES: Record<Polity, PolityRule> = {
-  feudal: { realms: 1.4, sep: 0.8, vigor: [0.6, 1.6], core: 1, cross: 3, group: 5, seeding: 'towns', ridge: 1, river: 0.5, balance: 0 },
-  commandery: { realms: 0.55, sep: 1.4, vigor: [0.85, 1.2], core: 1.7, cross: 1.6, group: 8, seeding: 'even', ridge: 3, river: 2, balance: 1 },
-  ritsuryo: { realms: 0.5, sep: 1.2, vigor: [0.9, 1.2], core: 1.3, cross: 3, group: 4, seeding: 'even', ridge: 6, river: 1, balance: 0.4 },
-}
 
 /** 伯爵领图的边：w 为路程，hi 为界上山脊高度，rv 为沿大河的比例 */
 type Edge = { to: number; w: number; hi: number; rv: number }
@@ -106,9 +40,9 @@ export interface ProvinceBase {
   area: number
 }
 
-/** 文化（不含名字）：naming 是起名的世界观，town 是城镇形制；color 为调色板序号；x/y 为标注点 */
+/** 文化（不含名字）：naming 是起名的命名风格，town 是城镇形制；color 为调色板序号；x/y 为标注点 */
 export interface CultureBase {
-  naming: Style
+  naming: NamingStyle
   polity: Polity
   town: TownCulture
   color: number
@@ -179,7 +113,9 @@ export function politicalMap(
   /** 面积换算用的真实每格公里数 */
   kmPerCell: number,
   riverThr: number,
-  worldStyle: Style,
+  /** 世界的命名风格（主体文化用它）与世界观（其余文化的命名风格、各文化的制度与城镇形制由它定） */
+  worldStyle: NamingStyle,
+  setting: SettingDef,
   rng: RNG,
 ): PoliticalMap {
   const N = W * H
@@ -473,18 +409,19 @@ export function politicalMap(
   const cult = flood(cultSeeds, (_a, _b, e, id) => e.w / cultVigor[id]).lab
   for (let k = 0; k < nC; k++) counties[k].culture = Math.max(0, cult[k])
 
-  // —— 文化的起名世界观、制度与城镇形制（国家怎样形成取决于制度，所以先定） ——
+  // —— 文化的命名风格、制度与城镇形制（国家怎样形成取决于制度，所以先定） ——
   const cultRaster = new Int16Array(N).fill(-1)
   for (let i = 0; i < N; i++) if (county[i] >= 0) cultRaster[i] = counties[county[i]].culture
   const nK = cultSeeds.length
   const cColor = colorRegions(cultRaster, nK, W, H, rng)
   const cPole = poles(cultRaster, nK, W, H)
-  const others = (['fantasy', 'epic', 'eastern', 'wa'] as const).filter((s) => s !== worldStyle)
+  // 其余文化的命名风格从世界观的池子里余下的抽（池子的顺序与洗牌的抽取次数都是生成结果的一部分）
+  const others = setting.naming.filter((s) => s !== worldStyle)
   for (let k = others.length - 1; k > 0; k--) {
     const j = Math.floor(rng.next() * (k + 1))
     ;[others[k], others[j]] = [others[j], others[k]]
   }
-  // 各文化里炎热干旱的格数：城镇形制的规则要看（内置的规则让炎热干旱的文化建伊斯兰式的城，名字仍按自己的世界观）
+  // 各文化里炎热干旱的格数：城镇形制的规则要看（内置的规则让炎热干旱的文化建伊斯兰式的城，名字仍按自己的命名风格）
   const arid = new Float64Array(nK)
   for (let i = 0; i < N; i++) {
     const k = cultRaster[i]
@@ -493,12 +430,14 @@ export function politicalMap(
     if (temperature[i] > 18 && (b === Biome.HotDesert || b === Biome.Shrubland || b === Biome.Savanna || b === Biome.SaltFlat)) arid[k]++
   }
   const cultures: CultureBase[] = cultSeeds.map((_, k) => {
-    const naming: Style = k === 0 ? worldStyle : (others[k - 1] ?? 'fantasy')
-    const town: TownCulture = townCulture({ naming, aridCells: arid[k], cells: cPole.area[k] })
+    // 文化比命名风格多时，多出来的用池子里的第一种
+    const naming: NamingStyle = k === 0 ? worldStyle : (others[k - 1] ?? setting.naming[0])
+    const town: TownCulture = setting.townCulture({ naming, aridCells: arid[k], cells: cPole.area[k] })
     const p = cPole.pole[k]
-    return { naming, polity: POLITY_OF[naming], town, color: cColor[k], x: p >= 0 ? p % W : 0, y: p >= 0 ? Math.floor(p / W) : 0, area: cPole.area[k], room: cPole.room[k] }
+    return { naming, polity: setting.polity[naming], town, color: cColor[k], x: p >= 0 ? p % W : 0, y: p >= 0 ? Math.floor(p / W) : 0, area: cPole.area[k], room: cPole.room[k] }
   })
-  const rule = (k: number) => RULES[cultures[k].polity]
+  const rules = cultures.map((c) => polityDef(c.polity).rule)
+  const rule = (k: number) => rules[k]
 
   // —— 国家：都城与大城市为种子，跨文化的扩张代价更高 ——
   let landCells = 0

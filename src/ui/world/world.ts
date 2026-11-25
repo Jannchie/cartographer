@@ -1,7 +1,7 @@
 import { markRaw, reactive, toRaw, watch } from 'vue'
 import { latitudeOf } from '../../gen/climate'
 import { regionProjection } from '../../gen/earth/region'
-import { hasEdits, parseProject, resampleEdits, serializeProject, snapshotEdits, worldRequires } from '../../app/project'
+import { hasEdits, parseProject, requiresOf, resampleEdits, serializeProject, snapshotEdits } from '../../app/project'
 import { deleteWorld, getMeta, getWorld as getEntry, listWorlds, newWorldId, putMeta, putWorld, renameWorld, type LibraryMeta } from '../../app/library'
 import { EditorView, isSketchTool, type EditTool, type EditView } from '../../editor/editor'
 import { bumpSketch, sketchFromWorld } from '../../gen/sketch'
@@ -10,7 +10,9 @@ import { BIOME_NAMES, DEFAULT_PARAMS as GEN_DEFAULTS, isSettlement, normalizePar
 import { inferAreas, isWaterArea, type Area, type AreaKind } from '../../gen/areas'
 import { earthAreas } from '../../gen/earth/realWorld'
 import { THEMES, ensureFonts, type StyleId } from '../../render/atlas'
-import { POLITY_TERMS, realmPolity, type Polity } from '../../gen/political'
+import { polityDef, polityIds, realmPolity, type Polity, type PolityDef } from '../../gen/polity'
+import { DEFAULT_SETTING, defaultPolity, settingIds, settingOf } from '../../gen/setting'
+import { namingChoices } from '../../gen/naming'
 import { FONT_PRESETS, setFontPreset, themeById } from '../../render/atlas/styles'
 import { atlasBackdrop, atlasFrameInset, buildAtlasChrome } from '../../render/atlas/svg/chrome'
 import type { PoliticalMode } from '../../render/atlas/political'
@@ -106,8 +108,11 @@ function loadHolo(): HoloOptions {
 }
 
 // —— 界面状态（响应式） ——
-/** 界面里的默认参数：人文层默认不生成，地理定下后再添加（生成器本身的默认见 DEFAULT_PARAMS，脚本与视频沿用） */
-export const UI_DEFAULTS: WorldParams = { ...GEN_DEFAULTS, settlements: false }
+/**
+ * 界面里的默认参数：人文层默认不生成，地理定下后再添加（生成器本身的默认见 DEFAULT_PARAMS，脚本与视频沿用）。
+ * setting 明确列出（不写即默认的世界观）：换参数、读地址时才会把上一个世界的世界观清掉
+ */
+export const UI_DEFAULTS: WorldParams = { ...GEN_DEFAULTS, settlements: false, setting: undefined }
 
 /** 侧栏分页：按生成阶段（地形 → 自然 → 人文），外观随舞台模式 */
 export type WorldTab = 'terrain' | 'nature' | 'human' | 'look' | 'stats'
@@ -117,8 +122,14 @@ function storedEnum<T extends string>(key: string, allowed: readonly string[], f
   const v = storeGet(key) ?? ''
   return renamed[v] ?? (allowed.includes(v) ? (v as T) : fallback)
 }
+// 地址里带了参数（刷新、分享链接）就以地址为准，否则沿用上次存下的参数。
+// 地址里的世界观没有登记（所属的插件没有启用）时给出提示；存下的参数是本机的工作状态，不必提示
+const urlQuery = initialQuery('world')
+const urlRejected: Rejected[] = []
 export const ws = reactive({
-  params: { ...UI_DEFAULTS, ...readQuery(initialQuery('world') ?? new URLSearchParams(storeGet('worldQuery') ?? '')) } as WorldParams,
+  params: { ...UI_DEFAULTS, ...readQuery(urlQuery ?? new URLSearchParams(storeGet('worldQuery') ?? ''), urlQuery ? urlRejected : undefined) } as WorldParams,
+  /** 舞台上的提示（地址里引用了没有启用的内容）：text 是词条的中文键，点一下收起 */
+  notice: rejectedNotice(urlRejected),
   view3d: {
     exaggeration: 28,
     labels: true,
@@ -148,10 +159,10 @@ export const ws = reactive({
     counties: number
     provinces: number
     cultures: number
-    realms: { i: number; name: string; zh: string; ja?: string; counties: number; provinces: number; terms: (typeof POLITY_TERMS)[Polity] }[]
+    realms: { i: number; name: string; zh: string; ja?: string; counties: number; provinces: number; terms: PolityDef['terms'] }[]
   } | null,
   /** 各级政区的称呼：按多数伯爵领所在国家的制度（分封：伯爵领、公爵领；郡县：县、州；令制：郡、令制国） */
-  terms: POLITY_TERMS.feudal,
+  terms: polityDef(defaultPolity(settingOf({}))).terms,
   /** 纸图注记的字体方案（见 FONT_PRESETS） */
   atlasFont: storedEnum<string>('atlasFont', FONT_PRESETS.map((f) => f.id), 'theme'),
   /** 纸图的图饰：标题框、指北针、图例（默认不画，只影响浏览器里的图廓层；导出总是画） */
@@ -377,6 +388,19 @@ export function markDirty() {
   ws.dirty = !!ws.applied && paramSig(ws.params) !== paramSig(ws.applied)
   ws.preset = -1
 }
+/** 界面用：可选的世界观（按登记顺序） */
+export const settingChoices = () => settingIds().map((id) => ({ id, name: settingOf({ setting: id }).name, desc: settingOf({ setting: id }).desc }))
+/** 界面用：当前世界观里可选的命名风格 */
+export const namingOptions = () => namingChoices(ws.params)
+/**
+ * 换世界观：默认的那个不写进参数（地址与缓存的键里都不出现）；
+ * 原来指定的命名风格不在新世界观的池子里时回到"随机"
+ */
+export function setSetting(id: string) {
+  ws.params.setting = id === DEFAULT_SETTING ? undefined : id
+  if (!namingChoices(ws.params).some((n) => n.id === ws.params.naming)) ws.params.naming = 'auto'
+  markDirty()
+}
 export function setParam<K extends keyof WorldParams>(k: K, v: WorldParams[K]) {
   ws.params[k] = v
   // 改地图类型（全球图、地球底图、真实地球）就不再是区域图
@@ -390,7 +414,8 @@ export function setParam<K extends keyof WorldParams>(k: K, v: WorldParams[K]) {
   markDirty()
 }
 export function resetParams() {
-  Object.assign(ws.params, { ...UI_DEFAULTS, seed: ws.params.seed })
+  // 世界观不算可调的参数：重置时留着
+  Object.assign(ws.params, { ...UI_DEFAULTS, seed: ws.params.seed, setting: ws.params.setting })
   normalizeParams(ws.params)
   markDirty()
 }
@@ -423,7 +448,7 @@ export async function createWorld(src: SourceId, style = 0) {
   const def = SOURCES.find((x) => x.id === src)!
   // 分辨率沿用当前的；区域图的宽度另成一套，进出区域图时换掉
   const width = def.p?.width ?? (ws.params.region ? UI_DEFAULTS.width : ws.params.width)
-  Object.assign(ws.params, { ...UI_DEFAULTS, width, ...(def.p ?? PRESETS[style].p), seed: syllableSeed(SYL), naming: ws.params.naming })
+  Object.assign(ws.params, { ...UI_DEFAULTS, width, ...(def.p ?? PRESETS[style].p), seed: syllableSeed(SYL), naming: ws.params.naming, setting: ws.params.setting })
   normalizeParams(ws.params)
   ws.preset = def.p ? -1 : style
   setTab('terrain')
@@ -729,12 +754,15 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
 }
 
 /** 伯爵领实行的制度：随所在国家（无主之地随自己的文化） */
-const polityAt = (w: World, pl: PoliticalLayer, c: County): Polity => realmPolity(pl.cultures, w.realms[c.realm], c.culture)
-/** 世界里多数伯爵领实行的制度：概览、图例的称呼按它 */
+const polityAt = (w: World, pl: PoliticalLayer, c: County): Polity => realmPolity(settingOf(w.params), pl.cultures, w.realms[c.realm], c.culture)
+/** 世界里多数伯爵领实行的制度：概览、图例的称呼按它（并列时取登记在前的） */
 function mainPolity(w: World, pl: PoliticalLayer): Polity {
-  const n: Record<Polity, number> = { feudal: 0, commandery: 0, ritsuryo: 0 }
-  for (const c of pl.counties) n[polityAt(w, pl, c)]++
-  return (Object.keys(n) as Polity[]).reduce((a, b) => (n[b] > n[a] ? b : a))
+  const n = new Map<Polity, number>(polityIds().map((id) => [id, 0]))
+  for (const c of pl.counties) {
+    const k = polityAt(w, pl, c)
+    n.set(k, (n.get(k) ?? 0) + 1)
+  }
+  return [...n.keys()].reduce((a, b) => (n.get(b)! > n.get(a)! ? b : a))
 }
 
 /** 人文页的概览：各项数目；国家按伯爵领数从大到小，称呼按各国自己的制度 */
@@ -744,7 +772,7 @@ function humanSummary(w: World, pl: PoliticalLayer) {
   for (const c of pl.counties) if (c.realm >= 0) counties[c.realm]++
   for (const pv of pl.provinces ?? []) if (pv.realm >= 0) provinces[pv.realm]++
   const realms = w.realms
-    .map((r, i) => ({ i, name: r.name, zh: r.zh, ja: r.ja, counties: counties[i], provinces: provinces[i], terms: POLITY_TERMS[realmPolity(pl.cultures, r)] }))
+    .map((r, i) => ({ i, name: r.name, zh: r.zh, ja: r.ja, counties: counties[i], provinces: provinces[i], terms: polityDef(realmPolity(settingOf(w.params), pl.cultures, r)).terms }))
     .sort((a, b) => b.counties - a.counties)
   return { towns: w.labels.filter(isSettlement).length, counties: pl.counties.length, provinces: pl.provinces?.length ?? 0, cultures: pl.cultures.length, realms }
 }
@@ -752,7 +780,7 @@ function humanSummary(w: World, pl: PoliticalLayer) {
 let statsCached = false
 function showStats(w: World, cached = statsCached) {
   statsCached = cached
-  ws.terms = POLITY_TERMS[w.political ? mainPolity(w, w.political) : 'feudal']
+  ws.terms = polityDef(w.political ? mainPolity(w, w.political) : defaultPolity(settingOf(w.params))).terms
   if (pendingHumanMap && w.political && ws.tab === 'human') queueMicrotask(showHumanMap)
   ws.human = w.political ? humanSummary(w, w.political) : null
   const s = w.stats
@@ -913,7 +941,7 @@ function probeAt(clientX: number, clientY: number) {
   const ci = pl ? pl.county[i] : -1
   if (pl && ci >= 0) {
     const c = pl.counties[ci]
-    const terms = POLITY_TERMS[polityAt(world, pl, c)]
+    const terms = polityDef(polityAt(world, pl, c)).terms
     rows.push([terms.county, placeName(c)])
     const pv = c.province !== undefined && c.province >= 0 ? pl.provinces?.[c.province] : undefined
     if (pv) rows.push([terms.province, placeName(pv)])
@@ -978,23 +1006,44 @@ function worldQuery() {
   for (const [k, v] of Object.entries(ws.params)) if (k === 'seed' || (UI_DEFAULTS as unknown as Record<string, unknown>)[k] !== v) q.set(k, String(v))
   return q
 }
-function readQuery(q: URLSearchParams): Partial<WorldParams> {
+/** 地址里因为取值没有登记而丢掉的参数（原样的键与值） */
+type Rejected = { key: string; value: string }
+/**
+ * 解析查询串。世界观没有登记（所属的插件没有启用）时丢掉、记进 rejected，由调用方提示，而不是不声不响地换成默认的；
+ * 默认的世界观不写进参数。命名风格不在世界观的池子里时回到"随机"（生成时本来也按随机取）
+ */
+function readQuery(q: URLSearchParams, rejected?: Rejected[]): Partial<WorldParams> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of q) {
     if (!(k in UI_DEFAULTS)) continue
+    if (k === 'setting') {
+      if (!v || v === DEFAULT_SETTING) continue
+      if (settingIds().includes(v)) out.setting = v
+      else rejected?.push({ key: k, value: v })
+      continue
+    }
     const d = (UI_DEFAULTS as unknown as Record<string, unknown>)[k]
     if (typeof d === 'number') {
       if (Number.isFinite(Number(v))) out[k] = Number(v)
     } else if (typeof d === 'boolean') out[k] = v === 'true' || v === '1'
     else out[k] = v
   }
-  return out as Partial<WorldParams>
+  const p = out as Partial<WorldParams>
+  if (p.naming !== undefined && !namingChoices(p).some((n) => n.id === p.naming)) p.naming = 'auto'
+  return p
+}
+/** 地址里的世界观没有登记：解析时已经丢掉、换成默认的，这里给出要显示的提示 */
+function rejectedNotice(rejected: Rejected[]): { text: string; id: string } | null {
+  const r = rejected.find((x) => x.key === 'setting')
+  return r ? { text: '链接里的世界观「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的世界观。', id: r.value } : null
 }
 // 地址被外部改动（前进后退、手改地址栏）：换成地址里的参数重新生成
 registerRoute('world', {
   query: worldQuery,
   apply(q) {
-    Object.assign(ws.params, { ...UI_DEFAULTS, ...readQuery(q) })
+    const rejected: Rejected[] = []
+    Object.assign(ws.params, { ...UI_DEFAULTS, ...readQuery(q, rejected) })
+    ws.notice = rejectedNotice(rejected)
     ws.preset = -1
     generate()
   },
@@ -1087,7 +1136,7 @@ function thumbnail(): string {
 
 /** 存进世界库的数据（IndexedDB 的 put 会结构化克隆，存不了响应式代理：参数取原对象） */
 function storable() {
-  return { params: { ...toRaw(ws.params) }, edits, world: world!, requires: worldRequires(world!) }
+  return { params: { ...toRaw(ws.params) }, edits, world: world!, requires: requiresOf(world!.params, world!) }
 }
 
 let flashTimer = 0
@@ -1127,6 +1176,11 @@ export async function openEntry(id: string) {
 }
 
 function loadWorldData(params: WorldParams, ed: WorldEdits, w?: World) {
+  // 存档里的世界观没有登记，而存档又没有记下依赖的插件（记了的在打开之前就已经问过，见 ensurePlugins）：不打开
+  if (params.setting && !settingIds().includes(params.setting)) {
+    window.alert(t('无法打开：这个世界的世界观「{id}」没有启用。', { id: params.setting }))
+    return
+  }
   Object.assign(ws.params, { ...UI_DEFAULTS, ...params })
   edits = ed
   if (edits.frozen) edits.frozenRev = Date.now()
@@ -1168,7 +1222,7 @@ const fileName = (name: string) => `${name.replace(/[\\/:*?"<>|\s]+/g, '-').toLo
 export async function exportEntry(id: string) {
   const [e, m] = await Promise.all([getEntry(id), getMeta(id)])
   if (!e || !m) return
-  const text = await serializeProject(e.params, e.edits, e.world, m.name, e.requires ?? worldRequires(e.world))
+  const text = await serializeProject(e.params, e.edits, e.world, m.name, e.requires ?? requiresOf(e.world.params, e.world))
   download(new Blob([text], { type: 'application/json' }), fileName(m.name))
 }
 
@@ -1176,7 +1230,7 @@ export async function exportEntry(id: string) {
 export async function exportWorldFile() {
   if (!world || ws.busy) return
   const name = ws.entry?.name ?? worldTitle(world)
-  const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world), name, worldRequires(toRaw(world)))
+  const text = await serializeProject(toRaw(ws.params), toRaw(edits), toRaw(world), name, requiresOf(toRaw(world).params, toRaw(world)))
   download(new Blob([text], { type: 'application/json' }), fileName(name))
 }
 
@@ -1200,6 +1254,8 @@ export async function openProject(f: File) {
       if (ws.library.open) await refreshLibrary()
       return
     }
+    // 只有种子与编辑的文件：按它的世界观重新演算，同样要先有那些插件
+    if (!ensurePlugins(doc.requires)) return
     loadWorldData(doc.params, doc.edits)
   } catch (err) {
     window.alert(t('无法打开：') + t(err instanceof Error ? err.message : String(err)))
@@ -1924,3 +1980,15 @@ onLang(async () => {
   relabelHolo()
   editor?.draw()
 })
+
+// 世界观（一整套人文设定，见 gen/setting.ts）的界面词条
+defineStrings([
+  ['世界观', 'Setting', '世界観'],
+  [
+    '一整套人文设定：可用的命名风格、各文化的制度与城镇的文明。只影响地名与人文层，不影响地形与气候',
+    'A whole set of cultural content: the naming styles available, the polity of each culture and the civilization of its towns. It only affects names and the human layer, not terrain or climate',
+    '人文設定のひとそろい：使える命名スタイル、各文化の制度、町の文明。地名と人文レイヤーだけに影響し、地形と気候は変わりません',
+  ],
+  ['链接里的世界观「{id}」没有启用（它所属的插件已停用，或不在这个版本里），已改用默认的世界观。', 'The setting "{id}" in this link is not enabled (its plugin is disabled or not part of this version); the default setting is used instead.', 'リンクにある世界観「{id}」は有効になっていません（プラグインが無効、またはこのバージョンに含まれていません）。既定の世界観を使います。'],
+  ['无法打开：这个世界的世界观「{id}」没有启用。', 'Cannot open: the setting "{id}" of this world is not enabled.', '開けません：この世界の世界観「{id}」は有効になっていません。'],
+])

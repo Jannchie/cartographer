@@ -2,10 +2,11 @@ import { boot } from '../kernel'
 import { PLUGINS } from './manifest'
 import { SETTLEMENT } from './settlement'
 import { TOWN3D } from './town3d'
+import { UI } from './ui'
 import { WORLD } from './world'
 
 /**
- * 启动插件的全部层：主线程与离线脚本用。各入口在调用生成器之前先等它完成：
+ * 启动插件：主线程（全部层）与离线脚本（界面以外的层）用。各入口在调用生成器之前先等它完成：
  * - 主线程（main.ts）：bootPlugins，启用的插件按本机的停用清单算出（ui/plugins.ts）；
  * - 离线脚本：导入 ./all（即 bootAll）。
  * 两个 Worker 不导入本模块：它们只导入自己用到的入口表，直接调用内核的 boot
@@ -14,8 +15,9 @@ import { WORLD } from './world'
  */
 const LAYERS = { world: WORLD, settlement: SETTLEMENT, town3d: TOWN3D }
 
+/** 主线程用：另外载入 ui 层（界面词条） */
 export function bootPlugins(enabled: readonly string[]) {
-  return boot({ manifests: PLUGINS, enabled, layers: LAYERS })
+  return boot({ manifests: PLUGINS, enabled, layers: { ...LAYERS, ui: UI } })
 }
 
 /** 离线脚本用：启用全部插件（不含只在开发构建里出现的） */

@@ -1,6 +1,9 @@
 import type { Area } from '../gen/areas'
 import { bumpSketch } from '../gen/sketch'
 import type { Label, Realm, River, Road, SketchRange, World, WorldEdits, WorldParams } from '../gen/types'
+import { NamingStyles } from '../gen/naming'
+import { Polities } from '../gen/polity'
+import { DEFAULT_SETTING, Settings } from '../gen/setting'
 import { registryOf } from '../kernel'
 import { Cultures } from '../settlement/culture'
 
@@ -14,7 +17,7 @@ export interface ProjectDoc {
   version: 1 | 2
   /** 世界库里的名字 */
   name?: string
-  /** 世界引用的内容来自哪些插件（见 worldRequires）：打开时核对是否都已启用。旧文件没有，按只用内置内容处理 */
+  /** 世界引用的内容来自哪些插件（见 requiresOf）：打开时核对是否都已启用。旧文件没有，按只用内置内容处理 */
   requires?: string[]
   world: {
     params: WorldParams
@@ -163,19 +166,33 @@ async function unpackWorld(p: PackedWorld, params: WorldParams): Promise<World> 
 
 /**
  * 一个世界引用的内容来自哪些插件：存档时记下，打开时核对（缺了就提示启用，而不是换成默认内容）。
- * 目前世界里对插件内容的引用只有各文化的城镇形制（聚落层的文明 id）；没有登记的 id 查不到所属，不计入
+ * 按参数里的世界观算：世界观本身、它池子里的命名风格、各命名风格对应的制度、城镇文明规则会用到的文明；
+ * 再加上世界里已经定下的各文化实际用的命名风格、制度与城镇形制。没有登记的 id 查不到所属，不计入
  */
-export function worldRequires(world: World): string[] {
-  const cultures = registryOf(Cultures)
+export function requiresOf(params: WorldParams, world?: World): string[] {
   const ids = new Set<string>()
-  for (const c of world.political?.cultures ?? []) {
-    const owner = cultures.owner(c.town)
-    if (owner) ids.add(owner)
+  const add = (owner: string | undefined) => owner && ids.add(owner)
+  const settings = registryOf(Settings)
+  const namings = registryOf(NamingStyles)
+  const polities = registryOf(Polities)
+  const cultures = registryOf(Cultures)
+  const id = params.setting || DEFAULT_SETTING
+  add(settings.owner(id))
+  const s = settings.find(id)
+  if (s) {
+    for (const n of s.naming) add(namings.owner(n))
+    for (const p of Object.values(s.polity)) add(polities.owner(p))
+    for (const c of s.cultures) add(cultures.owner(c))
+  }
+  for (const c of world?.political?.cultures ?? []) {
+    add(namings.owner(c.naming))
+    if (c.polity) add(polities.owner(c.polity))
+    add(cultures.owner(c.town))
   }
   return [...ids]
 }
 
-/** world 给了就连同整个世界的数据一起存（第 2 版）；requires 是它引用的插件（见 worldRequires） */
+/** world 给了就连同整个世界的数据一起存（第 2 版）；requires 是它引用的插件（见 requiresOf） */
 export async function serializeProject(params: WorldParams, edits: WorldEdits, world?: World, name?: string, requires?: string[]): Promise<string> {
   const doc: ProjectDoc = { app: 'cartographer', version: world || edits.frozen ? 2 : 1, world: { params: { ...params }, edits: {} } }
   if (name) doc.name = name

@@ -26,7 +26,7 @@ export interface LibraryEntry {
   params: WorldParams
   edits: WorldEdits
   world: World
-  /** 这个世界引用的内容来自哪些插件（见 project.ts 的 worldRequires）；旧条目没有，按只用内置内容处理 */
+  /** 这个世界引用的内容来自哪些插件（见 project.ts 的 requiresOf）；旧条目没有，按只用内置内容处理 */
   requires?: string[]
 }
 

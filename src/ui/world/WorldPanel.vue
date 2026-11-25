@@ -32,7 +32,7 @@ import type { EditTool, EditView } from '../../editor/editor'
 import type { Label, WorldParams } from '../../gen/types'
 import type { EarthRes } from '../../gen/earth/real'
 import { isGlobe, SHAPE_PARAMS } from '../../gen/types'
-import { NAMING_STYLES } from '../../gen/naming'
+import { DEFAULT_SETTING } from '../../gen/setting'
 import { THEMES } from '../../render/atlas'
 import { FONT_PRESETS, themeById } from '../../render/atlas/styles'
 import { LOOKS, QUALITIES, type Look } from '../../render/aerial/looks'
@@ -55,10 +55,13 @@ import * as W from './world'
 import { latFmt, pct, ws } from './world'
 
 const p = ws.params
+/** 可选的世界观（按登记顺序）；命名风格的选项跟着当前的世界观 */
+const SETTINGS = W.settingChoices()
+const namingOpts = computed(() => W.namingOptions())
 const x100 = (v: number) => v.toFixed(2)
 const signed = (d: number) => (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(d)}`
 
-type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming' | 'width' | 'height' | 'globe' | 'earth' | 'earthReal' | 'earthRes'>
+type NumKey = Exclude<keyof WorldParams, 'seed' | 'naming' | 'setting' | 'width' | 'height' | 'globe' | 'earth' | 'earthReal' | 'earthRes'>
 type ScaleDef = { key: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; inputScale?: number }
 const terrainScales: ScaleDef[] = [
   { key: 'landRatio', label: '陆地比例', min: 0.12, max: 0.65, step: 0.01, fmt: pct, inputScale: 100 },
@@ -225,8 +228,12 @@ const val = (e: Event) => (e.target as HTMLInputElement).value
         <span>{{ t('来源') }} · <b>{{ t(sourceName) }}</b></span>
         <button type="button" class="link" :title="t('换一种来源，或打开世界库里保存的世界')" @click="W.openLibrary()"><Icon :icon="IconPlus" :size="13" />{{ t('新建…') }}</button>
       </div>
-      <Field label="命名" title="地名的世界观：同一个地名在中英日三种语言里意思一致">
-        <Dropdown :options="NAMING_STYLES.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => W.setParam('naming', n)" />
+      <!-- 只有一个世界观时不显示这一项 -->
+      <Field v-if="SETTINGS.length > 1" label="世界观" title="一整套人文设定：可用的命名风格、各文化的制度与城镇的文明。只影响地名与人文层，不影响地形与气候">
+        <Dropdown :options="SETTINGS.map((s) => ({ value: s.id, label: s.name, desc: s.desc }))" :model-value="p.setting ?? DEFAULT_SETTING" @update:model-value="(s) => W.setSetting(s)" />
+      </Field>
+      <Field label="命名" title="地名的命名风格：同一个地名在中英日三种语言里意思一致">
+        <Dropdown :options="namingOpts.map((n) => ({ value: n.id, label: n.label, desc: n.tip }))" :model-value="p.naming ?? 'auto'" @update:model-value="(n) => W.setParam('naming', n)" />
       </Field>
     </div>
 

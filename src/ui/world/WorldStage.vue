@@ -87,6 +87,7 @@ const hint = computed(() =>
     </button>
     <!-- 纸图的悬停读数画在图廓里（见 world.ts 的 probeCard） -->
     <Probe :data="ws.mode === '2d' || ws.mode === 'areas' ? null : ws.probe" />
+    <button v-if="ws.notice" type="button" class="notice" :title="t('点击关闭')" @click="ws.notice = null">{{ t(ws.notice.text, { id: ws.notice.id }) }}</button>
     <div class="hint">{{ t(hint) }}</div>
     <Loading :show="ws.loading.show" title="正在塑造世界" :stage="ws.loading.stage" :frac="ws.loading.frac" />
   </main>

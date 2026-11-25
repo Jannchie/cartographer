@@ -1,5 +1,5 @@
 import type { Area } from './areas'
-import type { Polity } from './political'
+import type { Polity } from './polity'
 import type { EarthRes } from './earth/real'
 import { regionHeight, regionProjection, type RegionId } from './earth/region'
 export interface WorldParams {
@@ -36,8 +36,13 @@ export interface WorldParams {
   region?: RegionId
   /** 真实地球数据的精度：15m 为 0.25°，5m 为 5′ */
   earthRes?: EarthRes
-  /** 命名世界观（auto 按种子挑） */
+  /** 命名风格（auto 按种子在世界观的池子里挑一种） */
   naming: NamingStyle
+  /**
+   * 世界观：命名风格的池子、各文化的制度与城镇文明（见 gen/setting.ts）。不写即内置的 classic；
+   * 它是生成结果的一部分，与启用了哪些插件无关。只影响地名与人文层，不影响地面
+   */
+  setting?: string
   /**
    * 生成聚落与道路（城镇、国家、道路与航线）。关掉时只生成地形、气候、水系与自然地物名称——
    * 先定地形、再放聚落的两阶段流程；地面不受影响，开关之间不重算地形
@@ -91,7 +96,8 @@ export function normalizeParams(p: WorldParams) {
   p.height = globeHeight(p)
 }
 
-export type NamingStyle = 'auto' | 'fantasy' | 'epic' | 'eastern' | 'wa'
+/** 命名风格的 id（见 gen/naming.ts 的注册表）；auto 为按种子挑。内置的有 fantasy、epic、eastern、wa */
+export type NamingStyle = string
 
 export const DEFAULT_PARAMS: WorldParams = {
   seed: 'aurelia',
@@ -216,7 +222,7 @@ export interface Realm {
 
 /**
  * 城镇形制：就是聚落层的文明 id（settlement/types.ts 的 Culture，同一个取值）。世界层不依赖聚落层的代码，所以在这里另写一份。
- * 世界上的文化建哪种文明的城，由插件登记的规则定（见 gen/townCulture.ts）
+ * 世界上的文化建哪种文明的城，由世界观的规则定（见 gen/setting.ts、gen/townCulture.ts）
  */
 export type TownCulture = string
 
@@ -258,9 +264,9 @@ export interface WorldCulture {
   name: string
   zh: string
   ja?: string
-  /** 起名的世界观（城镇、伯爵领、国名都按它起） */
-  naming: Exclude<NamingStyle, 'auto'>
-  /** 制度（分封、郡县、令制）：国家与中层政区怎样划分；旧存档没有，按 naming 推出 */
+  /** 起名的命名风格（城镇、伯爵领、国名都按它起） */
+  naming: NamingStyle
+  /** 制度（分封、郡县、令制……）：国家与中层政区怎样划分；旧存档没有，按世界观里 naming 对应的制度推出 */
   polity?: Polity
   /** 城镇形制 */
   town: TownCulture

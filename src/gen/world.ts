@@ -1,7 +1,9 @@
 import { buildRoads } from './roads'
 import { JaNamer } from './names_ja'
 import { Namer, type Tri } from './naming'
-import { politicalMap, provinceName, type PoliticalMap } from './political'
+import { politicalMap, type PoliticalMap } from './political'
+import { polityDef } from './polity'
+import { settingOf } from './setting'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
 import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
@@ -113,15 +115,17 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   // 聚落阶段：关掉时去掉城镇；打开时若钉住的地点里没有城镇（在只有地形的阶段编辑过地点），补上生成的城镇
   if (!settle) labels = labels.filter((l) => !isSettlement(l))
   else if (edits.labels && !labels.some(isSettlement)) labels = [...labels, ...generated.filter(isSettlement)]
-  // 政区划分与道路只取决于地面和地点的位置、类型，与名字无关：只改命名时沿用
-  const pk = gk + '|' + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
+  // 政区划分与道路取决于地面、地点的位置与类型，以及世界观与世界的命名风格（各文化的命名风格、制度、城镇形制由它们定），
+  // 与具体的名字无关：这些都没变时沿用
+  const setting = settingOf(p)
+  const pk = `${gk}|${setting.id}|${namer.style}|` + labels.map((l) => `${l.kind}:${l.x},${l.y}`).join(';')
   let places = cache?.places?.key === pk ? cache.places : undefined
   if (!settle) places = { key: pk, map: null, roads: [] }
   else if (!places) {
     // 国界、道路的坡度代价按晕渲同样的夸张比例算：全球图每格几十公里，真实坡度太缓，道路会直接翻山
     const slopeKm = reliefKm({ W, kmPerCell })
     progress('划分政区', 0.96)
-    const map = politicalMap(elev, hydro.flow, biome, temperature, labels, W, H, slopeKm, kmPerCell, riverThreshold(W), namer.style, (rSettle ?? rPlace).fork())
+    const map = politicalMap(elev, hydro.flow, biome, temperature, labels, W, H, slopeKm, kmPerCell, riverThreshold(W), namer.style, setting, (rSettle ?? rPlace).fork())
     progress('道路与航线', 0.97)
     const roads = buildRoads(elev, water, biome, hydro.flow, labels, W, H, slopeKm, riverThreshold(W))
     places = { key: pk, map, roads }
@@ -130,7 +134,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   const map = places.map
   const realm = map ? map.realm.slice() : new Int16Array(N).fill(-1)
   // 各文化各用一个取名器：主体文化（0 号）沿用世界的取名器，其余文化另起一种语言
-  const namers = map ? map.cultures.map((c, k) => (k === 0 ? namer : new Namer({ seed: p.seed, naming: c.naming }, new RNG(hashString(`${p.seed}|culture${k}`)), `|culture${k}`))) : []
+  const namers = map ? map.cultures.map((c, k) => (k === 0 ? namer : new Namer({ seed: p.seed, naming: c.naming, setting: p.setting }, new RNG(hashString(`${p.seed}|culture${k}`)), `|culture${k}`))) : []
   const realms: Realm[] = map ? map.realms.map((r, i) => ({ ...r, ...tri(namers[r.culture].name('realm', map.hints[i])) })) : []
   const genName = namer.name('world')
   // 城镇按所在文化改名（地点编辑过就保留用户的名字）；主体文化的城镇名不变
@@ -156,7 +160,7 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
     // 伯爵领以治所城镇命名，没有城镇的另起一个城镇名
     const counties: County[] = map.counties.map((c) => ({ ...c, ...(c.seat >= 0 ? { name: labels[c.seat].name, zh: labels[c.seat].zh, ja: labels[c.seat].ja } : tri(namers[c.culture].name('city'))) }))
     // 中层政区以治所伯爵领命名，按国家主体文化的制度加上称谓：某某公爵领、某州、某国
-    const provinces: Province[] = map.provinces.map((pv) => ({ ...pv, ...provinceName(counties[pv.county], map.cultures[map.realms[pv.realm].culture].polity) }))
+    const provinces: Province[] = map.provinces.map((pv) => ({ ...pv, ...polityDef(map.cultures[map.realms[pv.realm].culture].polity).provinceName(counties[pv.county]) }))
     political = { county: map.county.slice(), counties, provinces, cultures }
   }
   const roads = places.roads
@@ -203,9 +207,9 @@ export function generateWorld(p: WorldParams, progress: Progress = () => {}, edi
   }
 }
 
-/** 影响地面（高度、气候、水文、群系）的全部输入：除命名以外的参数 + 地形与气候编辑 */
+/** 影响地面（高度、气候、水文、群系）的全部输入：除命名、世界观与聚落以外的参数 + 地形与气候编辑 */
 export function groundKey(p: WorldParams, edits: WorldEdits = {}) {
-  const { naming: _naming, settlements: _settlements, placeVariant: _placeVariant, ...rest } = p
+  const { naming: _naming, setting: _setting, settlements: _settlements, placeVariant: _placeVariant, ...rest } = p
   return JSON.stringify([terrainKey(p, edits), rest, arrayHash(edits.temp), arrayHash(edits.rain)])
 }
 

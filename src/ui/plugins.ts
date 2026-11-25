@@ -125,13 +125,21 @@ defineStrings([
   ['应用后页面会重新载入，没有保存到世界库的世界与编辑会丢失。继续吗？', 'The page will reload after applying; worlds and edits not saved to the library will be lost. Continue?', '適用するとページを再読み込みします。ライブラリに保存していない世界と編集は失われます。続けますか？'],
   ['无法打开：这个世界用到的插件「{names}」不在这个版本里。', 'Cannot open: this world uses the plugin "{names}", which is not part of this version.', '開けません：この世界が使うプラグイン「{names}」はこのバージョンに含まれていません。'],
   ['这个世界用到了没有启用的插件「{names}」。启用并重新载入页面吗？重新载入后再打开它。', 'This world uses the plugin "{names}", which is not enabled. Enable it and reload the page? Open the world again after the reload.', 'この世界は無効になっているプラグイン「{names}」を使います。有効にしてページを再読み込みしますか？再読み込みのあと、もう一度開いてください。'],
-  ['古典文明', 'Classical civilizations', '古典文明'],
-  ['前工业时代的四种城市文明：西式、东方、和风、伊斯兰，以及世界上的文化建哪种城的规则', 'Four pre-industrial urban civilizations (Western, Eastern, Japanese, Islamic) and the rule that decides which kind of town each culture of a world builds', '前近代の四つの都市文明（西洋・東方・和風・イスラム）と、世界の各文化がどの様式の町を建てるかの規則'],
+  ['古典', 'Classical', '古典'],
+  [
+    '内置的世界观「古典」：西幻、史诗、东方、和风四种命名风格，分封、郡县、令制三种制度，西式、东方、和风、伊斯兰四种城市文明',
+    'The built-in "Classical" setting: four naming styles (Fantasy, Epic, Eastern, Japanese), three polities (feudal, commandery, ritsuryō) and four urban civilizations (Western, Eastern, Japanese, Islamic)',
+    '組み込みの世界観「古典」：命名スタイル四種（ファンタジー・叙事詩・中華風・和風）、制度三種（封建・郡県・令制）、都市文明四種（西洋・東方・和風・イスラム）',
+  ],
 ])
 // 示例插件只在开发构建里出现，它的名称与说明也只在开发构建里登记
 if (import.meta.env?.DEV) {
   defineStrings([
     ['示例插件', 'Sample plugin', 'サンプルプラグイン'],
-    ['登记一种与西式相同的"示例文明"，用来验证插件的启停（只在开发构建里出现）', 'Registers a "Sample" culture identical to the Western one, for checking that plugins can be switched on and off (development builds only)', '西洋式と同じ「サンプル」文明を登録し、プラグインの有効・無効を確認するためのもの（開発ビルドのみ）'],
+    [
+      '一个示例世界观：一种命名风格和一种与西式相同的"示例文明"，用来验证插件的启停（只在开发构建里出现）',
+      'A sample setting: one naming style and a "Sample" culture identical to the Western one, for checking that plugins can be switched on and off (development builds only)',
+      'サンプルの世界観：命名スタイル一種と、西洋式と同じ「サンプル」文明。プラグインの有効・無効を確認するためのもの（開発ビルドのみ）',
+    ],
   ])
 }
