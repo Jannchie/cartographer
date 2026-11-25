@@ -65,7 +65,8 @@ export function physicalTexturePixels(world: World, scale = 2): TexturePixels {
   for (let i = 0; i < N; i++) isLand[i] = e[i] > 0 ? 1 : 0
   const radius = ecotoneRadius(W)
   const [lr, lg, lb] = maskedBlur([cr, cg, cb], isLand, W, H, radius)
-  const isSea = isLand.map((v) => 1 - v)
+  const isSea = new Float32Array(N)
+  for (let i = 0; i < N; i++) isSea[i] = 1 - isLand[i]
   const [sr, sg, sb] = maskedBlur([cr, cg, cb], isSea, W, H, radius)
 
   const TW = W * scale

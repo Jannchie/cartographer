@@ -99,9 +99,8 @@ export function edt(mask: Uint8Array, W: number, H: number): Float32Array {
 }
 
 /** 三次盒式模糊 ≈ 高斯模糊（原地） */
-export function blur(src: Float32Array, W: number, H: number, radius: number, passes = 3): Float32Array {
+export function blur(src: Float32Array, W: number, H: number, radius: number, passes = 3, tmp: Float32Array = new Float32Array(W * H)): Float32Array {
   const r = Math.max(1, Math.round(radius))
-  const tmp = new Float32Array(W * H)
   const a = src
   for (let p = 0; p < passes; p++) {
     // 横向
