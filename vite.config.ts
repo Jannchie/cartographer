@@ -45,6 +45,8 @@ export default defineConfig({
   plugins: [vue(), genHash()],
   worker: { format: 'es', plugins: () => [genHash()] },
   // Git Bash 崩溃时会在工作目录留下 bash.exe.stackdump，被监听时锁着会让开发服务器退出
-  server: { port: 5190, watch: { ignored: ['**/*.stackdump'] } },
+  server: { port: 5190, watch: { ignored: ['**/*.stackdump', '**/.claude/**'] } },
+  // 依赖预扫描默认爬根目录下所有 html；.claude/worktrees 里的工作树副本（含其 dist）不是入口
+  optimizeDeps: { entries: ['**/*.html', '!.claude/**', '!**/dist/**'] },
   build: { chunkSizeWarningLimit: 1100 },
 })
