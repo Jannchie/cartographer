@@ -431,6 +431,32 @@ export function snapshot(h: SettlementHistory, pop: number): Settlement {
   return out as Settlement
 }
 
+const DRAWN = ['roads', 'crossings', 'walls', 'wards', 'blocks', 'buildings', 'enclosures', 'plazas', 'greens', 'parkParts', 'fields', 'trees', 'piers', 'boats', 'wonders', 'landmarks'] as const
+/**
+ * 两张地图（同一座聚落相邻的两个时刻）之间变了的地方：出现、消失的东西各自的外接框（米，四周放出 pad 米：阴影、描边、树冠）。
+ * 只看物件是不是同一个（快照之间没变的东西是同一个对象），注记不算（另画在注记层上）。
+ * 地形、画幅不一样时返回 null：整张都变了
+ */
+export function changedBoxes(a: Settlement, b: Settlement, pad = 8): BBox[] | null {
+  if (a.terrain !== b.terrain || a.width !== b.width || a.height !== b.height) return null
+  const boxes: BBox[] = []
+  const add = (item: object) => {
+    const [x0, y0, x1, y1] = pieceBox(item).box
+    const w = ((item as { width?: number }).width ?? 0) / 2 + pad
+    boxes.push([x0 - w, y0 - w, x1 + w, y1 + w])
+  }
+  for (const k of DRAWN) {
+    const xs = a[k] as object[]
+    const ys = b[k] as object[]
+    if (xs === ys) continue
+    const was = new Set(xs)
+    const is = new Set(ys)
+    for (const y of ys) if (!was.has(y)) add(y)
+    for (const x of xs) if (!is.has(x)) add(x)
+  }
+  return boxes
+}
+
 /** 一张地图的统计：建筑（不算棚屋）、民居栋数、户数、人口（各户口数加总，取整到十）、城区面积（公顷） */
 export function statsOf(buildings: Settlement['buildings'], wards: Settlement['wards'], culture: Culture) {
   const dwellings = buildings.filter(dwelling)

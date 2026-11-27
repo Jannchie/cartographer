@@ -115,6 +115,16 @@ export class TileCache {
     return missing
   }
 
+  /** 换成只有 dirty（页面坐标的矩形）这几处不同的列表：压到它们的瓦片作废，其余的照旧用 */
+  swap(list: DisplayList, dirty: readonly (readonly [number, number, number, number])[]) {
+    this.list = list
+    for (const k of [...this.tiles.keys()]) {
+      const [z, i, j] = k.split(':').map(Number)
+      const P = T / this.scaleOf(z)
+      if (dirty.some((d) => d[0] < (i + 1) * P && d[2] > i * P && d[1] < (j + 1) * P && d[3] > j * P)) this.tiles.delete(k)
+    }
+  }
+
   /** 画级别 z 的一块瓦片并缓存 */
   render(z: number, i: number, j: number) {
     const c = document.createElement('canvas')

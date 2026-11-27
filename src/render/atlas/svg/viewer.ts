@@ -40,7 +40,20 @@ export type Chrome = (w: number, h: number, box: Box, k: number) => DisplayList
  *   缩小时最多跟着地图缩到 LABEL_SHRINK 倍，再缩小保持不变，放不下的按优先顺序暂时隐藏。与窗口大小、世界尺寸无关。
  */
 export class AtlasViewer {
-  private base = document.createElement('canvas')
+  /** 底图的容器（跟着拖动缩放做 CSS 变换）；里面是一张或几张画布（见 cells） */
+  private base = document.createElement('div')
+  /**
+   * 底图的画布：平常整张一块；给了 cell 就切成 cell 像素见方的格子（x、y 是它在底图像素里的左上角）。
+   * 画布改了一处，整块纹理都要重新上传给 GPU：逐步换列表、只改几处的场合（见 patchList）切成格子，只动压到的那几格
+   */
+  private cells: Cell[] = []
+  private baseW = 0
+  private baseH = 0
+  /** 等着重画的格子（见 patchList）与排好的那一帧 */
+  private stale = new Set<Cell>()
+  private cellRaf = 0
+  /** 排着队的是整张重画（每帧多画几格） */
+  private bulk = false
   private detail = document.createElement('canvas')
   private labels = document.createElement('canvas')
   private labelsRaf = 0
@@ -61,7 +74,11 @@ export class AtlasViewer {
   private settleAt = 0
   view = { x: 0, y: 0, k: 1 }
 
-  constructor(private host: HTMLElement) {
+  /** o.cell：底图切成多大的格子（底图像素）；不给就整张一块 */
+  constructor(
+    private host: HTMLElement,
+    private o: { cell?: number } = {},
+  ) {
     this.wrap.style.position = 'absolute'
     this.wrap.style.inset = '0'
     host.appendChild(this.wrap)
@@ -180,6 +197,33 @@ export class AtlasViewer {
   }
 
   /**
+   * 换成只有几处不同的列表（成长的一步：多了几栋房子、几块田）：dirty 是页面坐标里变了的矩形。
+   * 底图只重画压到它们的格子、细节层只作废压到它们的瓦片——整张重画一次要把成千上万条指令栅格化到几千像素见方的画布上（几百毫秒，
+   * 期间拖动、缩放都卡住），局部重画只和改动的面积成正比（底图要切成格子才有用，见构造时的 cell）。图廓不重画（要换图题另调 setChrome）。
+   * labels：地图注记有没有变（没变就不重画注记层）。
+   * 没有底图、尺寸不同时退回 setList
+   */
+  patchList(list: DisplayList, dirty: readonly (readonly [number, number, number, number])[], labels = true) {
+    const old = this.list
+    if (list === old) return
+    if (!old || !this.cells.length || old.width !== list.width || old.height !== list.height || old.M !== list.M) return this.setList(list)
+    this.list = list
+    // 压到改动处的格子整格重画（按格子重画不必裁剪，格子之间没有接缝）。不当场画：排进队里每帧画几格（见 flushCells），
+    // 一步改得再多也不会把一帧占满；排着队的格子画的时候用的是那时最新的列表
+    const s = this.baseScale
+    for (const cell of this.cells) {
+      const x1 = (cell.x + cell.c.width) / s
+      const y1 = (cell.y + cell.c.height) / s
+      if (dirty.some((d) => d[0] < x1 && d[2] > cell.x / s && d[1] < y1 && d[3] > cell.y / s)) this.stale.add(cell)
+    }
+    if (this.stale.size && !this.cellRaf) this.cellRaf = requestAnimationFrame(() => this.flushCells())
+    this.tiles?.swap(list, dirty)
+    this.scheduleDetail()
+    // 注记层是视口那么大的一张画布，每重画一次整个页面都要重新合成：注记没变就不动它
+    if (labels) this.drawLabels()
+  }
+
+  /**
    * 换成只有地图注记不同的列表（区域改动后重排注记）：底图与细节层都不画地图注记，不必重画，只重画注记层。
    * 尺寸不同时退回 setList
    */
@@ -196,18 +240,59 @@ export class AtlasViewer {
     const list = this.list
     if (!list) return
     this.baseScale = Math.min(3, 4096 / Math.max(list.width, list.height))
+    const s = this.baseScale
+    const bw = Math.round(list.width * s)
+    const bh = Math.round(list.height * s)
     // 重设宽高会重新分配整块画布（最大 4096 见方，几十兆）：成长动画逐帧换列表时尺寸不变，只清空重画
-    const bw = Math.round(list.width * this.baseScale)
-    const bh = Math.round(list.height * this.baseScale)
-    if (this.base.width !== bw || this.base.height !== bh) {
-      this.base.width = bw
-      this.base.height = bh
+    if (this.baseW !== bw || this.baseH !== bh) {
+      this.baseW = bw
+      this.baseH = bh
+      this.base.replaceChildren()
+      this.cells = []
+      const size = this.o.cell ?? Math.max(bw, bh)
+      for (let y = 0; y < bh; y += size)
+        for (let x = 0; x < bw; x += size) {
+          const c = document.createElement('canvas')
+          // 多画两个像素压到右边、下边的格子上：放大时画布的边缘会和外面的透明混在一起，只压一个像素两格之间还是露一条细缝
+          c.width = Math.min(size + 2, bw - x)
+          c.height = Math.min(size + 2, bh - y)
+          Object.assign(c.style, { position: 'absolute', left: `${x / s}px`, top: `${y / s}px`, width: `${c.width / s}px`, height: `${c.height / s}px` })
+          this.base.appendChild(c)
+          this.cells.push({ c, x, y })
+        }
+      this.base.style.width = list.width + 'px'
+      this.base.style.height = list.height + 'px'
     }
-    const ctx = cpuContext(this.base)
-    ctx.clearRect(0, 0, this.base.width, this.base.height)
-    list.render(ctx, this.baseScale, 0, 0, this.chrome ? 'map' : undefined, false)
-    this.base.style.width = list.width + 'px'
-    this.base.style.height = list.height + 'px'
+    // 整张一块时当场画完。切成格子时一口气画完所有格子比整张一块还慢（每格各挑一遍指令、各上传一次），会卡住大半秒：
+    // 全部排进队里，几帧之内铺满
+    this.stale.clear()
+    if (this.o.cell) {
+      for (const cell of this.cells) this.stale.add(cell)
+      this.bulk = true
+      if (!this.cellRaf) this.cellRaf = requestAnimationFrame(() => this.flushCells())
+    } else for (const cell of this.cells) this.paintCell(cell)
+  }
+
+  /** 每帧重画几格排着队的（一格的指令真正栅格化要几毫秒，发生在浏览器的绘制阶段），画不完的下一帧接着画 */
+  private flushCells() {
+    this.cellRaf = 0
+    // 整张重画时每帧多画几格，早点铺满
+    const max = this.bulk ? CELLS_PER_FRAME * 3 : CELLS_PER_FRAME
+    let n = 0
+    for (const cell of this.stale) {
+      this.stale.delete(cell)
+      this.paintCell(cell)
+      if (++n >= max) break
+    }
+    if (this.stale.size) this.cellRaf = requestAnimationFrame(() => this.flushCells())
+    else this.bulk = false
+  }
+
+  /** 画底图的一格（图框模式下只画地图层，图廓另画） */
+  private paintCell({ c, x, y }: Cell) {
+    const ctx = cpuContext(c)
+    ctx.clearRect(0, 0, c.width, c.height)
+    this.list!.render(ctx, this.baseScale, -x, -y, this.chrome ? 'map' : undefined, false)
   }
 
   /** 按导出分辨率整张栅格化（PNG 导出用） */
@@ -321,6 +406,15 @@ export class AtlasViewer {
     if (missing.length > 1) this.scheduleDetail()
   }
 }
+
+/** 底图的一格：画布与它在底图像素里的左上角 */
+interface Cell {
+  c: HTMLCanvasElement
+  x: number
+  y: number
+}
+/** 局部重画时一帧最多画几格 */
+const CELLS_PER_FRAME = 3
 
 /** 画布按 CSS 尺寸 × dpr 定像素尺寸。重设宽高会重新分配整块画布：只在尺寸变了时做 */
 function fitCanvas(c: HTMLCanvasElement, w: number, h: number, dpr: number) {
