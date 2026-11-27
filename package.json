@@ -4,6 +4,16 @@
   "version": "0.2.0",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./grow": {
+      "types": "./src/settlement/grow/api.d.ts",
+      "default": "./src/settlement/grow/index.ts"
+    },
+    "./grow/paint": {
+      "types": "./src/settlement/grow/paint-api.d.ts",
+      "default": "./src/settlement/grow/paint.ts"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
