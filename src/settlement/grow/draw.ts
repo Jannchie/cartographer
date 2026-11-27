@@ -64,7 +64,14 @@ function composed(state: GrowState, o: DrawOpts): Settlement {
     enclosures: [...clear(plan.enclosures, (q) => q), ...hand.enclosures],
     plazas: [...plan.plazas, ...hand.plazas],
     trees: [...plan.trees.filter((t) => !block.point(t.p as GrowP, t.r)), ...hand.trees],
-    roads: [...plan.roads, ...hand.roads],
+    // 规划的路里贴着手动的路走的那几段不画（和状态里的路同一条规矩，见 natural.ts 的 roadsAt）
+    roads: [
+      ...plan.roads.flatMap((r) => {
+        const parts = block.trim(r.line as GrowP[])
+        return parts ? parts.map((line) => ({ ...r, line })) : [r]
+      }),
+      ...hand.roads,
+    ],
     crossings: [...plan.crossings, ...hand.crossings],
     stats: {
       ...plan.stats,

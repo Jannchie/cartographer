@@ -1804,7 +1804,9 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   // 人口多了才开的干道不再改动片区剖分，直接穿过已有的街坊（像后来新修的路），老城的片区才不会整片重排
   // 规划区：形制给的固定站点切出方正的街坊，区里不再随机布点（落水的、与核心重合的站点丢掉）
   const planSites = plan ? plan.def.sites(ctx, plan.z).filter((q) => T.waterAt(q) > 3 && ctx.cores.every((c) => dist(c.c, q) > 1)) : []
-  const guides = [...arterials.slice(0, 2), ...streets]
+  // 已经手动铺好的路也是骨架：片区沿它们布点、街巷的走向顺着它们
+  const given = (p.guides ?? []).filter((g) => g.line.length > 1)
+  const guides = [...arterials.slice(0, 2), ...given.map((g) => g.line), ...streets]
   const traits = fieldTraits(ctx)
   const tensor: CityField = { field: buildField(ctx, guides, sitePad(ctx), traits), traits }
   const patches = buildPatches(ctx, guides, tensor, plan || pz ? reserved : undefined, [...planSites, ...(pz?.sites ?? [])])
@@ -1857,6 +1859,8 @@ function layoutOrganic(ctx: Ctx, arterials: P[][], stages: WallStage[]) {
   // 村落：片区之间的边就是巷道，但只修需要的：从干道出发往外长，每个片区接上一条，再补几条成环
   // 方格直街只保留城内（墙内）的段
   for (const st of streets) if (inside(st[0]) && inside(st[st.length - 1])) ctx.out.roads.push({ line: st, width: cfg.lane + 1, kind: 'street' })
+  // 手动铺好的路当作已有的街并进路网：整理路网时规划的路和它们重叠的段会去掉、断头接到它们上面
+  for (const g of given) ctx.out.roads.push({ line: g.line, width: g.width, kind: 'street', given: true })
   extraBridges(ctx, inside)
   // 栈桥与通往栈桥的小路要在盖房之前定下，房子才会让开
   if (p.coast && (isVillage(p.size))) jetties(ctx)

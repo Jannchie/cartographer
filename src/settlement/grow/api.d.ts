@@ -99,9 +99,15 @@ export interface GrowState {
   /**
    * 自然生长（见 natural-api.d.ts）：聚落沿着一次成形的生成器按 horizon 人规划好的成长史长，pop 是走到的时刻（按人口计）。
    * 有这一项时 place 摆的位置由规划定（地块带 ref，路的 id 在一百万以上）。手动铺的路、手动摆的地块照常和它混在同一份状态里，
-   * 手动的优先：规划里落在手动的东西上的房子、田让开；规划的路不能拆。手动改了地形，规划按改过的地形重算
+   * 手动的优先：规划里落在手动的东西上的房子、田让开，贴着手动的路并排走的规划的路不要；规划的路不能拆。
+   * 手动改了地形，规划按改过的地形重算；手动的路变了，下一次 place 摆新地块时规划把它们当骨架重算
    */
-  plan?: { horizon: number; pop: number }
+  plan?: {
+    horizon: number
+    pop: number
+    /** 规划认作骨架的手动的路（中线与路面宽）：摆新地块时换成那时的手动的路，规划跟着重算 */
+    guides?: { line: GrowP[]; width: number }[]
+  }
   nextId: number
   /** 已经走了几步（每次 place 加一） */
   step: number

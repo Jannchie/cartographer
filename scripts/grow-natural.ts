@@ -13,8 +13,10 @@ const { WAY_ID, manualBlocker, terrainOf } = await import('../src/settlement/gro
 const { seedNatural, settleNatural } = await import('../src/settlement/grow/natural')
 const { advance, newDriver } = await import('../src/settlement/grow/demands')
 const { toSettlement } = await import('../src/settlement/grow/draw')
+const { segDist } = await import('../src/settlement/geom')
 const { buildSettlementVector } = await import('../src/settlement/render')
 type GrowState = import('../src/settlement/grow').GrowState
+type GrowP = import('../src/settlement/grow').GrowP
 type GrowDriver = import('../src/settlement/grow/demands').GrowDriver
 
 const seed = process.argv[2] ?? 'aki'
@@ -107,6 +109,11 @@ ok(!('error' in through), `手动的路可以从规划的房子上穿过去${'er
 if (!('error' in through)) {
   const got = place(through.state, { use: 'home', area: 1, owner: 'newcomer' }, 0)!
   const after = got.state
+  // 摆新地块时规划把手动的路当骨架重算：记进 plan.guides，规划的地块照原来的先后重新落，画出来的路里没有规划自己的那一份
+  ok(after.plan!.guides?.length === 1 && through.state.plan!.guides === undefined, '摆新地块时规划认下了这条手动的路（铺路的当时不认）')
+  ok(after.lots.filter((l) => l.ref !== undefined).length === through.state.lots.filter((l) => l.ref !== undefined).length + 1, '规划重算后规划的地块一块不少（多了新来的一户）')
+  ok(toSettlement(after).roads.every((r) => !r.given) && after.roads.filter((r) => r.id < WAY_ID).length === 1, '认下的路不重复出现在规划的路里')
+  ok(JSON.stringify(place(JSON.parse(JSON.stringify(through.state)), { use: 'home', area: 1, owner: 'newcomer' }, 0)!.state) === JSON.stringify(after), '存档读回来再摆，逐位相同')
   const block = manualBlocker(after)!
   const moved = after.lots.find((l) => l.id === site.id)!
   ok(moved.poly.join() !== site.poly.join() && after.lots.filter((l) => l.ref !== undefined).every((l) => !block.poly(l.poly)), '下一次 place：被路压到的住户挪走了，没有规划的地块还压在手动的路上')
@@ -136,6 +143,44 @@ if (!('error' in through)) {
   const ids = new Map(after.lots.map((l) => [l.id, l]))
   ok(planned.every((l) => ids.get(l.id)?.owner === l.owner && ids.get(l.id)?.use === l.use), '改地形后：地块的 id、主人、用途不变')
   ok(JSON.stringify(paintTerrain(JSON.parse(JSON.stringify(after)), { tool: 'water', r: 60, pts: [[c[0], c[1] - 60], [c[0], c[1] + 60]] }).state) === JSON.stringify(dug), '改地形：存档读回来再改，逐位相同')
+}
+
+// 贴着规划的路并排铺一条手动的路：规划的那一段让开（状态里、画出来都没有），横着穿过去的不动
+{
+  const near = (st: GrowState, a: GrowP, b: GrowP) => {
+    let n = 0
+    for (const r of st.roads) if (r.id >= WAY_ID) for (const q of r.pts) if (segDist(q, a, b).d < 12) n++
+    return n
+  }
+  let done = false
+  for (const r of mid.roads) {
+    if (done || r.id < WAY_ID) continue
+    for (let i = 0; i + 1 < r.pts.length && !done; i++) {
+      // 找一段 60 米以上的直路，在它旁边 8 米处并排铺
+      const a = r.pts[i]
+      let j = i + 1
+      while (j + 1 < r.pts.length && Math.hypot(r.pts[j][0] - a[0], r.pts[j][1] - a[1]) < 60) j++
+      const b = r.pts[j]
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1])
+      if (L < 60 || L > 90) continue
+      const n: GrowP = [(-(b[1] - a[1]) / L) * 8, ((b[0] - a[0]) / L) * 8]
+      const line: GrowP[] = [[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]]]
+      if (line.some((q) => T0.waterAt(q) < 20)) continue
+      const beside = addRoad(mid, line, 'street', { bridge: true })
+      if ('error' in beside) continue
+      // 端点会吸到规划的路上：按实际铺下的线量
+      const [p0, p1] = [beside.road.pts[0], beside.road.pts[beside.road.pts.length - 1]]
+      const inner: [GrowP, GrowP] = [[p0[0] + (p1[0] - p0[0]) * 0.25, p0[1] + (p1[1] - p0[1]) * 0.25], [p0[0] + (p1[0] - p0[0]) * 0.75, p0[1] + (p1[1] - p0[1]) * 0.75]]
+      const was = near(beside.state, ...inner)
+      const tidy = settleNatural(beside.state)
+      const drawn = toSettlement(tidy).roads.filter((x) => !x.roundEnds).reduce((c, x) => c + x.line.filter((q) => segDist(q as GrowP, ...inner).d < 12).length, 0)
+      // 横着、斜着穿过去的规划的路留着（那是路口），所以不是一个点都不剩
+      ok(was > 0 && near(tidy, ...inner) <= was / 3 && drawn <= was / 3, `并排铺一条手动的路：旁边 12 米以内规划的路的点 ${was} → ${near(tidy, ...inner)}，画出来 ${drawn}`)
+      ok(tidy.roads.filter((x) => x.id >= WAY_ID).length >= mid.roads.length - 3, '别处规划的路都还在')
+      done = true
+    }
+  }
+  ok(done, '找得到一段可以并排铺路的规划的路')
 }
 
 // 小规划住满：place 返回 null

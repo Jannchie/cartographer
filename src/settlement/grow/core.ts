@@ -72,7 +72,18 @@ export const WAY_ID = 1_000_000
 export interface Blocker {
   poly: (q: GrowP[]) => boolean
   point: (p: GrowP, pad: number) => boolean
+  /**
+   * 规划的一条路里贴着手动的路走的那几段去掉（见 ROAD_NEAR、ROAD_ALONG），返回剩下的各段；没有要去掉的返回 null（原样）。
+   * 斜着、横着穿过手动的路的不动（那是路口）
+   */
+  trim: (line: GrowP[]) => GrowP[][] | null
 }
+/** 规划的路离手动的路的中线不到这么多米、走向又差不多（夹角的余弦超过 ROAD_ALONG，约 40°）的一段不要：两条路贴着并排走，中间连一排地都摆不下 */
+const ROAD_NEAR = 18
+const ROAD_ALONG = 0.766
+/** 修剪时沿规划的路每隔几米看一点；剩下的一段不到这么长的也不要（零碎的断头） */
+const TRIM_STEP = 3
+const TRIM_STUB = 12
 /** 最近一次的手动的东西与它们的 Blocker：逐步生长时手动的东西不变，不必每一步重建（调用方也凭同一个对象认出「没变」） */
 let blockerMemo: { lots: GrowLot[]; roads: GrowRoad[]; block: Blocker | null } | null = null
 const sameItems = <T>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i])
@@ -86,16 +97,57 @@ export function manualBlocker(state: GrowState): Blocker | null {
   const ways = state.roads.filter((r) => r.id < WAY_ID)
   if (blockerMemo && sameItems(blockerMemo.lots, hand) && sameItems(blockerMemo.roads, ways)) return blockerMemo.block
   const lots = hand.map((l) => ({ poly: l.poly, b: bboxOf(l.poly) }))
-  const segs: { a: GrowP; b: GrowP; hw: number; box: BBox }[] = []
+  const apart = (a: BBox, b: BBox) => a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]
+  const segs: { a: GrowP; b: GrowP; hw: number; box: BBox; u: GrowP }[] = []
   for (const r of ways) {
     const hw = ROAD_WIDTH[r.kind] / 2 + ROAD_CLEAR
     for (let i = 0; i + 1 < r.pts.length; i++) {
       const a = r.pts[i]
       const b = r.pts[i + 1]
-      segs.push({ a, b, hw, box: [Math.min(a[0], b[0]) - hw, Math.min(a[1], b[1]) - hw, Math.max(a[0], b[0]) + hw, Math.max(a[1], b[1]) + hw] })
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+      segs.push({ a, b, hw, box: [Math.min(a[0], b[0]) - hw, Math.min(a[1], b[1]) - hw, Math.max(a[0], b[0]) + hw, Math.max(a[1], b[1]) + hw], u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] })
     }
   }
-  const apart = (a: BBox, b: BBox) => a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]
+  /** 这一点（走向 d）是不是贴着某条手动的路走 */
+  const along = (p: GrowP, d: GrowP) => {
+    for (const s of segs) {
+      if (p[0] < s.box[0] - ROAD_NEAR || p[0] > s.box[2] + ROAD_NEAR || p[1] < s.box[1] - ROAD_NEAR || p[1] > s.box[3] + ROAD_NEAR) continue
+      if (Math.abs(d[0] * s.u[0] + d[1] * s.u[1]) > ROAD_ALONG && segDist(p, s.a, s.b).d < ROAD_NEAR) return true
+    }
+    return false
+  }
+  const trim = (line: GrowP[]): GrowP[][] | null => {
+    if (!segs.length || line.length < 2) return null
+    const lb = bboxOf(line)
+    if (!segs.some((s) => !apart(lb, [s.box[0] - ROAD_NEAR, s.box[1] - ROAD_NEAR, s.box[2] + ROAD_NEAR, s.box[3] + ROAD_NEAR]))) return null
+    // 沿路每 TRIM_STEP 米取一点（原来的顶点都留着），贴着手动的路走的点去掉，剩下的连成段
+    const runs: GrowP[][] = []
+    let run: GrowP[] = []
+    let cut = false
+    const close = () => {
+      if (run.length > 1) runs.push(run)
+      run = []
+    }
+    for (let i = 0; i + 1 < line.length; i++) {
+      const a = line[i]
+      const b = line[i + 1]
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1])
+      if (!L) continue
+      const d: GrowP = [(b[0] - a[0]) / L, (b[1] - a[1]) / L]
+      const n = Math.max(1, Math.ceil(L / TRIM_STEP))
+      for (let k = i === 0 ? 0 : 1; k <= n; k++) {
+        const p: GrowP = k === n ? b : [cm(a[0] + ((b[0] - a[0]) * k) / n), cm(a[1] + ((b[1] - a[1]) * k) / n)]
+        if (along(p, d)) {
+          cut = true
+          close()
+        } else run.push(p)
+      }
+    }
+    close()
+    if (!cut) return null
+    const length = (q: GrowP[]) => q.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - q[i][0], p[1] - q[i][1]), 0)
+    return runs.filter((q) => length(q) >= TRIM_STUB)
+  }
   const block: Blocker | null =
     lots.length || segs.length
       ? {
@@ -111,6 +163,7 @@ export function manualBlocker(state: GrowState): Blocker | null {
             for (const s of segs) if (p[0] >= s.box[0] - pad && p[0] <= s.box[2] + pad && p[1] >= s.box[1] - pad && p[1] <= s.box[3] + pad && segDist(p, s.a, s.b).d < s.hw + pad) return true
             return false
           },
+          trim,
         }
       : null
   blockerMemo = { lots: hand, roads: ways, block }

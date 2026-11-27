@@ -14,3 +14,8 @@ export declare function seedNatural(p: GrowParams, horizon: number): GrowState
  * 不调也行——下一次 place 开头会做同样的事，只是在那之前状态里还留着压在手动东西底下的规划地块
  */
 export declare function settleNatural(state: GrowState): GrowState
+/**
+ * 规划认的手动的路换成现在的这些（别的不动；本来就一样时原样返回）。place 摆新地块时自己会换；
+ * 先调它可以拿到换上之后的状态，提前把那份规划算好
+ */
+export declare function withGuides(state: GrowState): GrowState

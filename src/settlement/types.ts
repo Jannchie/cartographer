@@ -33,6 +33,11 @@ export type TerrainStroke = GrowStroke
 export interface SettlementParams {
   /** 生成的地形上再叠的手动笔画（没有就是生成的地形）：聚落按改过的地形规划 */
   strokes?: TerrainStroke[]
+  /**
+   * 已经手动铺好的路（村落生长模块）：规划把它们当作已有的街——片区沿它们布点、街巷的走向顺着它们、新修的路接到它们上面而不和它们重叠。
+   * 它们在生成的结果里带 given 标记（调用方自己有这些路，按标记去掉）
+   */
+  guides?: { line: P[]; width: number }[]
   seed: string
   /** 目标人口（连续）；规模档位 size 由它推出（见 scale.ts），不单独设置 */
   population: number
@@ -242,6 +247,8 @@ export interface Road {
   width: number
   kind: 'highway' | 'main' | 'street' | 'lane' | 'path' | 'stair'
   name?: Tri
+  /** 调用方给的、已经铺好的路（见 SettlementParams.guides），不是规划出来的 */
+  given?: boolean
   /** 端头画成圆的（不给是方头）：一段一段手铺的路首尾相接、几条交在一点时，接头不露棱角 */
   roundEnds?: boolean
 }

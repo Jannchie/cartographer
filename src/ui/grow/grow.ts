@@ -10,7 +10,7 @@ import {
 import { ROAD_WIDTH, UNIT_D, UNIT_W, WAY_ID, cm } from '../../settlement/grow/core'
 import { advance, newDriver, runOp, type GrowDriver, type GrowOp } from '../../settlement/grow/demands'
 import { toSettlement } from '../../settlement/grow/draw'
-import { naturalParams, naturalReady, primeNatural, seedNatural, settleNatural } from '../../settlement/grow/natural'
+import { naturalParams, naturalReady, primeNatural, seedNatural, settleNatural, withGuides } from '../../settlement/grow/natural'
 import { simplify } from '../../settlement/grow/place'
 import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
 import { settleThemes } from '../../settlement/themes'
@@ -301,12 +301,19 @@ function stepOnce() {
   gs.state = markRaw(r.state)
   gs.driver = r.driver
 }
+/**
+ * 要长了：手动的路变过的话，规划会把它们当骨架重算（引擎在摆下一块地时换上）——先等那份规划在后台线程里算好再长，
+ * 免得在主线程上卡住
+ */
+const whenPlanned = (then: () => void) => withPlan(withGuides(gs.state), then)
 export function step() {
   pause()
   if (gs.loading) return
-  checkpoint()
-  stepOnce()
-  commit(gs.state)
+  whenPlanned(() => {
+    checkpoint()
+    stepOnce()
+    commit(gs.state)
+  })
 }
 
 let raf = 0
@@ -320,13 +327,15 @@ let drawAt = 0
 export const SPEEDS = [2, 8, 30, 120]
 export function play() {
   if (gs.playing || gs.loading) return
-  checkpoint()
-  cancelDraft()
-  gs.playing = true
-  gs.msg = ''
-  last = performance.now()
-  due = 1
-  raf = requestAnimationFrame(frame)
+  whenPlanned(() => {
+    checkpoint()
+    cancelDraft()
+    gs.playing = true
+    gs.msg = ''
+    last = performance.now()
+    due = 1
+    raf = requestAnimationFrame(frame)
+  })
 }
 export function pause() {
   if (!gs.playing) return
@@ -371,12 +380,14 @@ export function addDemand(use: string) {
   const m = MANUAL.find((x) => x.use === use)
   if (!m || gs.loading) return
   pause()
-  checkpoint()
-  const op: GrowOp = { kind: 'place', req: { use, area: 1, owner: `hand${gs.state.nextId}`, ...(m.count > 1 ? { count: m.count } : {}) } }
-  const r = runOp(gs.state, gs.driver, op)
-  gs.msg = r.failed ? (use === 'field' ? t('眼下没有空着的田') : noRoom()) : ''
-  commit(r.state, r.driver)
-  if (r.lots.length) gs.sel = { kind: 'lot', id: r.lots[0].id }
+  whenPlanned(() => {
+    checkpoint()
+    const op: GrowOp = { kind: 'place', req: { use, area: 1, owner: `hand${gs.state.nextId}`, ...(m.count > 1 ? { count: m.count } : {}) } }
+    const r = runOp(gs.state, gs.driver, op)
+    gs.msg = r.failed ? (use === 'field' ? t('眼下没有空着的田') : noRoom()) : ''
+    commit(r.state, r.driver)
+    if (r.lots.length) gs.sel = { kind: 'lot', id: r.lots[0].id }
+  })
 }
 
 // —— 选中的、指针下的东西 ——
