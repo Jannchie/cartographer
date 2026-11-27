@@ -9,42 +9,21 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createCanvas } from '@napi-rs/canvas'
 import './lib/canvas'
-const { place, release, seedState, setState, growHash, lotCenter, lotAtPoint, addRoad, removeRoad, zone, unzone, zoneAtPoint } = await import('../src/settlement/grow')
+const { seedState, lotCenter, lotAtPoint, addRoad, removeRoad, zone, unzone, zoneAtPoint } = await import('../src/settlement/grow')
 const { LOT_OVERLAP_TOL, ROAD_WIDTH, terrainOf } = await import('../src/settlement/grow/core')
 const { bootPaint, drawGrow } = await import('../src/settlement/grow/paint')
+const { newDriver, runOp, villageOps } = await import('../src/settlement/grow/demands')
+type GrowOp = import('../src/settlement/grow/demands').GrowOp
 const { convexOverlap, pointInPoly, segPolyDist } = await import('../src/settlement/geom')
 type GrowState = import('../src/settlement/grow').GrowState
 type GrowP = import('../src/settlement/grow').GrowP
-type PlaceReq = import('../src/settlement/grow').PlaceReq
 
 const seed = process.argv[2] ?? 'aki'
 const outDir = process.argv[3] ?? 'exports/grow'
 const SHOTS = [10, 40, 120]
 const STYLES = ['color', 'kiriezu']
-/** 在建几步之后盖好 */
-const LAG = 3
-
-/** 一个村子从 12 人长到 200 人的需求（只由人数推出来，不用随机数）：每来一个人一处住处；每 4 人添一个农场岗位（4 块田）…… */
-type Op = { kind: 'place'; req: PlaceReq } | { kind: 'release'; owner: string }
-function demands(): Op[] {
-  const ops: Op[] = [
-    { kind: 'place', req: { use: 'public', area: 1, owner: 'office' } },
-    { kind: 'place', req: { use: 'yard', area: 1, owner: 'builders' } },
-  ]
-  let farmSlots = 0
-  for (let n = 1; n <= 200; n++) {
-    ops.push({ kind: 'place', req: { use: 'home', area: 1, owner: `p${n}` } })
-    if (n % 4 === 0) ops.push({ kind: 'place', req: { use: 'field', area: 1, owner: `farm${Math.floor(farmSlots++ / 7)}`, count: 4 } })
-    if (n % 8 === 0) ops.push({ kind: 'place', req: { use: 'yard', area: 1, owner: `quarry${Math.floor(n / 64)}`, count: 2 } })
-    if (n % 10 === 0) ops.push({ kind: 'place', req: { use: 'shop', area: 1, owner: `shop${Math.floor(n / 50)}` } })
-    if (n % 40 === 0) ops.push({ kind: 'place', req: { use: 'public', area: 1, owner: 'office' } })
-    // 翻盖：早来的人住处多占一块
-    if (n % 15 === 0) ops.push({ kind: 'place', req: { use: 'home', area: 1, owner: `p${n / 15}` } })
-    // 有人走了：住处空出来
-    if (n % 25 === 0) ops.push({ kind: 'release', owner: `p${n / 25 + 1}` })
-  }
-  return ops
-}
+/** 一个村子从 12 人长到 200 人的需求（见 src/settlement/grow/demands.ts） */
+const demands = (): GrowOp[] => Array.from({ length: 201 }, (_, n) => villageOps(n)).flat()
 
 const extra: Record<string, unknown> = {}
 /** --dump=目录：把两份最终状态（自动生长、先规划后生长）的 JSON 写进去（改引擎前后各跑一次比对，结果该逐位相同） */
@@ -60,32 +39,23 @@ for (const kv of process.argv.slice(4)) {
 const params = { seed, culture: 'wa', river: true, coast: false, hills: false, relief: 0.3, coastDir: null, riverDir: null, hillDir: null, size: [1600, 1600] as [number, number], ...extra }
 
 /** 跑一串需求；每步之后调用 onStep。saveAt 给了就在那一步存档、读回来接着跑 */
-function run(start: GrowState, ops: Op[], onStep?: (s: GrowState, k: number, ms: number) => void, saveAt = -1, quiet = false) {
+function run(start: GrowState, ops: GrowOp[], onStep?: (s: GrowState, k: number, ms: number) => void, saveAt = -1, quiet = false) {
   let s = start
-  const pending: { id: number; at: number }[] = []
-  let fails = 0
+  let d = newDriver()
   ops.forEach((op, k) => {
-    if (k === saveAt) s = JSON.parse(JSON.stringify(s))
-    const t = performance.now()
-    let ms = 0
-    if (op.kind === 'place') {
-      const got = place(s, { ...op.req, state: 'building' }, growHash(`${s.seed}|${s.nextId}`))
-      ms = performance.now() - t
-      if (got) {
-        s = got.state
-        for (const l of got.lots) pending.push({ id: l.id, at: k + LAG })
-      } else {
-        fails++
-        if (!quiet) console.log(`第 ${k} 步摆不下：${JSON.stringify(op.req)}`)
-      }
-    } else {
-      const lot = s.lots.find((l) => l.owner === op.owner)
-      if (lot) s = release(s, lot.id)
+    if (k === saveAt) {
+      s = JSON.parse(JSON.stringify(s))
+      d = JSON.parse(JSON.stringify(d))
     }
-    while (pending.length && pending[0].at <= k) s = setState(s, pending.shift()!.id, 'built')
+    const t = performance.now()
+    const r = runOp(s, d, op)
+    const ms = op.kind === 'place' ? performance.now() - t : 0
+    if (r.failed && !quiet) console.log(`第 ${k} 步摆不下：${JSON.stringify(op.kind === 'place' ? op.req : op)}`)
+    s = r.state
+    d = r.driver
     onStep?.(s, k + 1, ms)
   })
-  return { s, fails }
+  return { s, fails: d.fails }
 }
 
 let bad = 0
