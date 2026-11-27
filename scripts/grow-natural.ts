@@ -2,7 +2,9 @@
 // 按 3000 人规划一片地，照村子的需求序列（scripts/grow.ts 用的同一串）一步步 place，在几个时刻各出一张 PNG，打印每次 place 的用时。
 // 自检：同一串需求跑两遍逐位相同；中途存档读回来接着跑也逐位相同；每块在用的地都对着规划里眼下还在的房子、田，
 // 一栋房子住的户数不超过它的户数、一块田只有一个主人；手动的路、地块和规划混在一起、手动的优先（压到的住户挪走、压到的房子不画），
-// 规划的路不能拆；改了地形，规划的地块按新的规划重新落、id 不变；小规划住满以后 place 返回 null。有一项不成立，退出码是 1。
+// 规划的路不能拆；认路（adoptRoads）之后规划把手动的路当骨架、place 自己不认；改了地形，规划的地块按新的规划重新落、id 不变；
+// 贴着手动的路并排走的规划的路修剪掉（状态里和画出来的是同一份，拆掉手动的路就恢复），横着穿过去的不动；
+// 平地开局先刷地形不用规划；小规划住满以后 place 返回 null。有一项不成立，退出码是 1。
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createCanvas } from '@napi-rs/canvas'
 import './lib/canvas'
@@ -10,10 +12,10 @@ import './lib/canvas'
 import '../src/packs/all'
 const { addRoad, lotAtPoint, lotCenter, paintTerrain, place, placeAt, removeRoad, route } = await import('../src/settlement/grow')
 const { WAY_ID, manualBlocker, terrainOf } = await import('../src/settlement/grow/core')
-const { seedNatural, settleNatural } = await import('../src/settlement/grow/natural')
+const { adoptRoads, clearArea, naturalReady, seedNatural, settleNatural } = await import('../src/settlement/grow/natural')
 const { advance, newDriver } = await import('../src/settlement/grow/demands')
 const { toSettlement } = await import('../src/settlement/grow/draw')
-const { segDist } = await import('../src/settlement/geom')
+const { centroid, pointInPoly, polylineLength, segDist } = await import('../src/settlement/geom')
 const { buildSettlementVector } = await import('../src/settlement/render')
 type GrowState = import('../src/settlement/grow').GrowState
 type GrowP = import('../src/settlement/grow').GrowP
@@ -107,16 +109,17 @@ const c = lotCenter(site)
 const through = addRoad(mid, [[c[0] - 45, c[1]], [c[0] + 45, c[1]]], 'street', { bridge: true })
 ok(!('error' in through), `手动的路可以从规划的房子上穿过去${'error' in through ? `（${through.error}）` : ''}`)
 if (!('error' in through)) {
-  const got = place(through.state, { use: 'home', area: 1, owner: 'newcomer' }, 0)!
-  const after = got.state
-  // 摆新地块时规划把手动的路当骨架重算：记进 plan.guides，规划的地块照原来的先后重新落，画出来的路里没有规划自己的那一份
-  ok(after.plan!.guides?.length === 1 && through.state.plan!.guides === undefined, '摆新地块时规划认下了这条手动的路（铺路的当时不认）')
+  // 认路：规划把手动的路当骨架重算，记进 plan.guides，规划的地块照原来的先后重新落，画出来的路里没有规划自己的那一份
+  const newcomer = { use: 'home', area: 1, owner: 'newcomer' }
+  const after = place(adoptRoads(through.state), newcomer, 0)!.state
+  ok(after.plan!.guides?.length === 1 && through.state.plan!.guides === undefined && place(through.state, newcomer, 0)!.state.plan!.guides === undefined, '认路之后规划认下了这条手动的路（铺路、place 都不认）')
+  ok(adoptRoads(after) === after, '手动的路没再变：再认一次原样返回')
   ok(after.lots.filter((l) => l.ref !== undefined).length === through.state.lots.filter((l) => l.ref !== undefined).length + 1, '规划重算后规划的地块一块不少（多了新来的一户）')
   ok(toSettlement(after).roads.every((r) => !r.given) && after.roads.filter((r) => r.id < WAY_ID).length === 1, '认下的路不重复出现在规划的路里')
-  ok(JSON.stringify(place(JSON.parse(JSON.stringify(through.state)), { use: 'home', area: 1, owner: 'newcomer' }, 0)!.state) === JSON.stringify(after), '存档读回来再摆，逐位相同')
+  ok(JSON.stringify(place(adoptRoads(JSON.parse(JSON.stringify(through.state))), newcomer, 0)!.state) === JSON.stringify(after), '存档读回来再认路、再摆，逐位相同')
   const block = manualBlocker(after)!
   const moved = after.lots.find((l) => l.id === site.id)!
-  ok(moved.poly.join() !== site.poly.join() && after.lots.filter((l) => l.ref !== undefined).every((l) => !block.poly(l.poly)), '下一次 place：被路压到的住户挪走了，没有规划的地块还压在手动的路上')
+  ok(moved.poly.join() !== site.poly.join() && after.lots.filter((l) => l.ref !== undefined).every((l) => !block.poly(l.poly)), '认路之后：被路压到的住户挪走了，没有规划的地块还压在手动的路上')
   const drawn = toSettlement(after)
   ok(drawn.buildings.every((bd) => !block.poly(bd.poly as never)) && drawn.roads.some((r) => r.roundEnds), '画出来：路压到的房子不画，多了这条手动的路')
   const hand = placeAt(after, { use: 'shop' }, [c[0] + 20, c[1] + 16])
@@ -145,42 +148,103 @@ if (!('error' in through)) {
   ok(JSON.stringify(paintTerrain(JSON.parse(JSON.stringify(after)), { tool: 'water', r: 60, pts: [[c[0], c[1] - 60], [c[0], c[1] + 60]] }).state) === JSON.stringify(dug), '改地形：存档读回来再改，逐位相同')
 }
 
-// 贴着规划的路并排铺一条手动的路：规划的那一段让开（状态里、画出来都没有），横着穿过去的不动
+// 贴着规划的路并排铺一条手动的路：规划的那一段修剪掉（状态里、画出来是同一份），拆掉手动的路就恢复
 {
-  const near = (st: GrowState, a: GrowP, b: GrowP) => {
-    let n = 0
-    for (const r of st.roads) if (r.id >= WAY_ID) for (const q of r.pts) if (segDist(q, a, b).d < 12) n++
-    return n
-  }
-  let done = false
-  for (const r of mid.roads) {
-    if (done || r.id < WAY_ID) continue
-    for (let i = 0; i + 1 < r.pts.length && !done; i++) {
-      // 找一段 60 米以上的直路，在它旁边 8 米处并排铺
-      const a = r.pts[i]
-      let j = i + 1
-      while (j + 1 < r.pts.length && Math.hypot(r.pts[j][0] - a[0], r.pts[j][1] - a[1]) < 60) j++
-      const b = r.pts[j]
-      const L = Math.hypot(b[0] - a[0], b[1] - a[1])
-      if (L < 60 || L > 90) continue
-      const n: GrowP = [(-(b[1] - a[1]) / L) * 8, ((b[0] - a[0]) / L) * 8]
-      const line: GrowP[] = [[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]]]
-      if (line.some((q) => T0.waterAt(q) < 20)) continue
-      const beside = addRoad(mid, line, 'street', { bridge: true })
-      if ('error' in beside) continue
-      // 端点会吸到规划的路上：按实际铺下的线量
-      const [p0, p1] = [beside.road.pts[0], beside.road.pts[beside.road.pts.length - 1]]
-      const inner: [GrowP, GrowP] = [[p0[0] + (p1[0] - p0[0]) * 0.25, p0[1] + (p1[1] - p0[1]) * 0.25], [p0[0] + (p1[0] - p0[0]) * 0.75, p0[1] + (p1[1] - p0[1]) * 0.75]]
-      const was = near(beside.state, ...inner)
-      const tidy = settleNatural(beside.state)
-      const drawn = toSettlement(tidy).roads.filter((x) => !x.roundEnds).reduce((c, x) => c + x.line.filter((q) => segDist(q as GrowP, ...inner).d < 12).length, 0)
-      // 横着、斜着穿过去的规划的路留着（那是路口），所以不是一个点都不剩
-      ok(was > 0 && near(tidy, ...inner) <= was / 3 && drawn <= was / 3, `并排铺一条手动的路：旁边 12 米以内规划的路的点 ${was} → ${near(tidy, ...inner)}，画出来 ${drawn}`)
-      ok(tidy.roads.filter((x) => x.id >= WAY_ID).length >= mid.roads.length - 3, '别处规划的路都还在')
-      done = true
+  /** 找一段 60 到 90 米的规划的路，在它旁边 8 米处并排铺一条 */
+  const layBeside = () => {
+    for (const r of mid.roads) {
+      if (r.id < WAY_ID) continue
+      for (let i = 0; i + 1 < r.pts.length; i++) {
+        const a = r.pts[i]
+        let j = i + 1
+        while (j + 1 < r.pts.length && Math.hypot(r.pts[j][0] - a[0], r.pts[j][1] - a[1]) < 60) j++
+        const b = r.pts[j]
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1])
+        if (L < 60 || L > 90) continue
+        const n: GrowP = [(-(b[1] - a[1]) / L) * 8, ((b[0] - a[0]) / L) * 8]
+        const line: GrowP[] = [[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]]]
+        if (line.some((q) => T0.waterAt(q) < 20)) continue
+        const got = addRoad(mid, line, 'street', { bridge: true })
+        if (!('error' in got)) return got
+      }
     }
+    return null
   }
-  ok(done, '找得到一段可以并排铺路的规划的路')
+  const beside = layBeside()
+  ok(!!beside, '找得到一段可以并排铺路的规划的路')
+  if (beside) {
+    const inState = (st: GrowState) => st.roads.filter((r) => r.id >= WAY_ID).reduce((a, r) => a + polylineLength(r.pts), 0)
+    const drawn = (st: GrowState) => toSettlement(st).roads.filter((r) => !r.roundEnds).reduce((a, r) => a + polylineLength(r.line), 0)
+    const tidy = settleNatural(beside.state)
+    ok(inState(tidy) < inState(mid) - 30, `并排铺一条手动的路：规划的路 ${inState(mid).toFixed(0)} → ${inState(tidy).toFixed(0)} 米`)
+    ok(Math.abs(inState(tidy) - drawn(tidy)) < 1, '状态里规划的路和画出来的一样长（同一份修剪）')
+    const back = removeRoad(tidy, beside.road.id)
+    ok(!('error' in back) && Math.abs(inState(settleNatural(back.state)) - inState(mid)) < 0.01, '拆掉手动的路：规划的路恢复原样')
+    // 修剪的规矩本身：沿这条手动的路（p0 → p1）量
+    const block = manualBlocker(beside.state)!
+    const p0 = beside.road.pts[0]
+    const p1 = beside.road.pts.at(-1)!
+    const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+    const u = [(p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L]
+    /** 沿路 t 米、偏到一侧 d 米的点 */
+    const at = (t: number, d: number): GrowP => [p0[0] + u[0] * t - u[1] * d, p0[1] + u[1] * t + u[0] * d]
+    const both = block.trim([at(-40, 8), at(L + 40, 8)])
+    ok(both?.length === 2 && both.every((q) => polylineLength(q) >= 12), '修剪：并排的一条去掉贴着的中段，剩两头')
+    ok(block.trim([at(L / 2, -40), at(L / 2, 40)]) === null, '修剪：横着穿过去的不动（那是路口）')
+    ok(block.trim([at(-8, 8), at(L + 8, 8)])?.length === 0, '修剪：剩下的零碎断头不要')
+  }
+}
+
+// 平地开局、先刷地形：改地形、只画地形和手动的东西都用不着规划（规划到要长的时候才算）
+{
+  const flat = seedNatural({ ...params, river: false, flat: true }, 600)
+  const g = terrainOf(flat).terrain
+  ok(g.height.every((h) => h === g.height[0]) && g.water.every((w) => w > 0), '平地开局：地面一样高，没有水')
+  const c = flat.center
+  const dug = paintTerrain(flat, { tool: 'water', r: 30, pts: [[c[0] - 200, c[1] - 60], [c[0] + 200, c[1] - 20]] }).state
+  const bare = toSettlement(dug, { bare: true })
+  ok(!naturalReady(flat) && !naturalReady(dug), '还没有规划的地块时改地形、只画地形都不用算规划')
+  ok(terrainOf(dug).terrain.water.some((w) => w < 0) && bare.buildings.length === 0 && bare.terrain === terrainOf(dug).terrain, '只画地形的那一张：刷出来的水在，没有规划的东西')
+  ok(toSettlement(dug, { bare: true }) === bare, '只画地形的那一张：没变时是同一个对象')
+  const got = place(dug, { use: 'home', area: 1, owner: 'first' }, 0)
+  ok(!!got && naturalReady(dug) && got.lots.length === 1, '在刷过的平地上照常长（这时才算规划）')
+}
+
+// 生成从手画的路那儿长起；拆掉自动长出的房子：那里空着，接着长也不长回来，住在那儿的户挪走
+{
+  const flat = seedNatural({ ...params, river: false, flat: true }, 600)
+  const [W, H] = flat.size
+  const line: GrowP[] = [
+    [Math.round(W * 0.2), Math.round(H * 0.25)],
+    [Math.round(W * 0.38), Math.round(H * 0.3)],
+  ]
+  const laid = addRoad(flat, line, 'street')
+  ok(!('error' in laid), '空白平地上铺一条手动的路')
+  if (!('error' in laid)) {
+    const grow = (s: GrowState, k: number, tag: string) => {
+      for (let i = 0; i < k; i++) {
+        const got = place(s, { use: 'home', area: 1, owner: `${tag}${i}` }, 0)
+        if (!got) break
+        s = got.state
+      }
+      return s
+    }
+    let s = grow(adoptRoads(laid.state), 40, 'a')
+    const homes = s.lots.filter((l) => l.ref !== undefined)
+    const off = homes.map((l) => segDist(lotCenter(l), line[0], line[1]).d).sort((a, b) => a - b)
+    const mid = off[Math.floor(off.length / 2)] ?? Infinity
+    ok(homes.length > 20 && mid < 160, `住处离手画的路的中位距离 ${mid.toFixed(0)} 米（画幅 ${W} × ${H}）`)
+    const victim = homes[0]
+    const inside = (st: GrowState) => toSettlement(st).buildings.some((b) => pointInPoly(centroid(b.poly), victim.poly))
+    ok(inside(s), '拆之前那栋房子画着')
+    s = clearArea(s, victim.poly)
+    ok(!inside(s) && (s.cleared?.length ?? 0) === 1, '拆掉自动长出的房子：画面上没了，记进 cleared')
+    ok(clearArea(s, victim.poly) === s, '同一处拆两遍：原样返回')
+    s = grow(s, 40, 'b')
+    ok(!inside(s), '接着长：拆空的地方不长回来')
+    ok(!s.lots.some((l) => l.ref === victim.ref && l.use !== 'field' && l.state !== 'vacant'), '住在那栋房子里的户挪走了')
+    ok(JSON.stringify(grow(JSON.parse(JSON.stringify(clearArea(grow(adoptRoads(laid.state), 40, 'a'), victim.poly))), 40, 'b')) === JSON.stringify(s), '拆过的状态存档读回来接着长，逐位相同')
+  }
 }
 
 // 小规划住满：place 返回 null

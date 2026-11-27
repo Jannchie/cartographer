@@ -60,9 +60,8 @@ const growExports = [
   { label: '生长状态', title: '这一局的生长状态（.json）：路、地块、地形笔画', icon: IconDatabase, run: G.exportState },
 ]
 const growTabs = [
-  { id: 'grow' as const, label: '建造', icon: IconSprout, title: '建造与生长' },
-  { id: 'land' as const, label: '开局', icon: IconMountain, title: '开局的参数与绘图风格' },
-  { id: 'stats' as const, label: '统计', icon: IconChartBar },
+  { id: 'info' as const, label: '属性', icon: IconSprout, title: '人口、选中的东西与统计' },
+  { id: 'map' as const, label: '地图', icon: IconMountain, title: '新建地图与绘图风格' },
 ]
 
 const file = ref<HTMLInputElement>()
@@ -184,8 +183,8 @@ watchEffect(() => {
           <ExportMenu :items="worldExports" />
         </template>
         <template v-else-if="app.module === 'grow'">
-          <button type="button" class="primary" :class="{ dirty: G.dirty.value }" :title="t('按开局的参数重新开始，当前这一局会清空（可撤销）')" @click="G.restart()">
-            {{ t(G.dirty.value ? '按新参数重新开局' : '重新开局') }}
+          <button type="button" class="primary" :title="t('换一张地图从头来：当前这张清空（可撤销）')" @click="G.openNewMap()">
+            {{ t('新建地图') }}
           </button>
           <ExportMenu :items="growExports" />
         </template>

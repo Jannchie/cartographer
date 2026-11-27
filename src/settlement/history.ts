@@ -415,6 +415,8 @@ export function schedule(forms: Form[], o: { from: number; until: number; demand
   return life
 }
 
+/** 地图上按生卒筛的各样东西（注记另算：画在注记层上） */
+const DRAWN = ['roads', 'crossings', 'walls', 'wards', 'blocks', 'buildings', 'enclosures', 'plazas', 'greens', 'parkParts', 'fields', 'trees', 'piers', 'boats', 'wonders', 'landmarks'] as const
 /** 某个人口时的地图：只留那时还在的东西（stats 按留下的重算） */
 export function snapshot(h: SettlementHistory, pop: number): Settlement {
   const st = h.st
@@ -423,7 +425,7 @@ export function snapshot(h: SettlementHistory, pop: number): Settlement {
     return !l || (l.born <= pop && pop < l.died)
   }
   const out: any = { ...st }
-  for (const k of ['roads', 'crossings', 'walls', 'wards', 'blocks', 'buildings', 'enclosures', 'plazas', 'greens', 'parkParts', 'fields', 'trees', 'piers', 'boats', 'wonders', 'landmarks', 'labels'] as const)
+  for (const k of [...DRAWN, 'labels'] as const)
     out[k] = (st[k] as object[]).filter(at)
   out.stats = { ...st.stats, ...statsOf(out.buildings, out.wards, st.params.culture) }
   // 规模（村、镇、城）随那时的人口
@@ -431,28 +433,29 @@ export function snapshot(h: SettlementHistory, pop: number): Settlement {
   return out as Settlement
 }
 
-const DRAWN = ['roads', 'crossings', 'walls', 'wards', 'blocks', 'buildings', 'enclosures', 'plazas', 'greens', 'parkParts', 'fields', 'trees', 'piers', 'boats', 'wonders', 'landmarks'] as const
+/** 变了的东西的外接框四周放出几米：阴影、描边、树冠 */
+const CHANGE_PAD = 8
 /**
- * 两张地图（同一座聚落相邻的两个时刻）之间变了的地方：出现、消失的东西各自的外接框（米，四周放出 pad 米：阴影、描边、树冠）。
+ * 两张地图（同一座聚落相邻的两个时刻）之间变了的地方：出现、消失的东西各自的外接框（米，四周放出 CHANGE_PAD 米）。
  * 只看物件是不是同一个（快照之间没变的东西是同一个对象），注记不算（另画在注记层上）。
  * 地形、画幅不一样时返回 null：整张都变了
  */
-export function changedBoxes(a: Settlement, b: Settlement, pad = 8): BBox[] | null {
+export function changedBoxes(a: Settlement, b: Settlement): BBox[] | null {
   if (a.terrain !== b.terrain || a.width !== b.width || a.height !== b.height) return null
   const boxes: BBox[] = []
   const add = (item: object) => {
     const [x0, y0, x1, y1] = pieceBox(item).box
-    const w = ((item as { width?: number }).width ?? 0) / 2 + pad
+    const w = ((item as { width?: number }).width ?? 0) / 2 + CHANGE_PAD
     boxes.push([x0 - w, y0 - w, x1 + w, y1 + w])
   }
   for (const k of DRAWN) {
     const xs = a[k] as object[]
     const ys = b[k] as object[]
     if (xs === ys) continue
+    // 新的里有、旧的里没有的是出现的；旧的里剩下的是消失的
     const was = new Set(xs)
-    const is = new Set(ys)
-    for (const y of ys) if (!was.has(y)) add(y)
-    for (const x of xs) if (!is.has(x)) add(x)
+    for (const y of ys) if (!was.delete(y)) add(y)
+    for (const x of was) add(x)
   }
   return boxes
 }

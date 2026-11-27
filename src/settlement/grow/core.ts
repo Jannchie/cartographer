@@ -1,5 +1,6 @@
+import * as dmath from '../../gen/dmath'
 import { hashString } from '../../gen/rng'
-import { bboxOf, convexOverlap, pointInPoly, segDist, segPolyDist, type BBox } from '../geom'
+import { bboxOf, convexOverlap, pointInPoly, polylineLength, segDist, segPolyDist, type BBox } from '../geom'
 import { buildTerrain, type TerrainResult } from '../terrain'
 import type { Settlement, SettlementParams } from '../types'
 import type { GrowLot, GrowP, GrowParams, GrowRoad, GrowState, GrowStroke, GrowTerrain, PlaceReq, PlaceResult } from './api'
@@ -73,20 +74,76 @@ export interface Blocker {
   poly: (q: GrowP[]) => boolean
   point: (p: GrowP, pad: number) => boolean
   /**
-   * 规划的一条路里贴着手动的路走的那几段去掉（见 ROAD_NEAR、ROAD_ALONG），返回剩下的各段；没有要去掉的返回 null（原样）。
+   * 规划的一条路里贴着手动的路走的那几段去掉（见 trimAlong），返回剩下的各段；没有要去掉的返回 null（原样）。
    * 斜着、横着穿过手动的路的不动（那是路口）
    */
   trim: (line: GrowP[]) => GrowP[][] | null
+  /** 手动的路这一组的记号：手动的路没变时是同一个对象（手动的地块变了也不换）。修剪的结果只跟它有关，可以按它记 */
+  ways: object
 }
-/** 规划的路离手动的路的中线不到这么多米、走向又差不多（夹角的余弦超过 ROAD_ALONG，约 40°）的一段不要：两条路贴着并排走，中间连一排地都摆不下 */
+
+/**
+ * 规划的路离手动的路的中线不到 ROAD_NEAR 米、走向又差不多（夹角的余弦超过 ROAD_ALONG，约 40°）的一段不要：
+ * 两条路贴着并排走，中间连一排地都摆不下。（和整理路网时的「重叠」不是一回事：那是路面压在一起，见 roads.ts 的 tidyRoads）
+ */
 const ROAD_NEAR = 18
 const ROAD_ALONG = 0.766
 /** 修剪时沿规划的路每隔几米看一点；剩下的一段不到这么长的也不要（零碎的断头） */
 const TRIM_STEP = 3
 const TRIM_STUB = 12
+
+/** 手动的路的一段：路面半宽（含 ROAD_CLEAR）、外接框（放出半宽）、走向 */
+interface HandSeg {
+  a: GrowP
+  b: GrowP
+  hw: number
+  box: BBox
+  u: GrowP
+}
+const apart = (a: BBox, b: BBox) => a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]
+const grown = (b: BBox, d: number): BBox => [b[0] - d, b[1] - d, b[2] + d, b[3] + d]
+
+/** 一条折线里贴着 segs（手动的路）走的那几段去掉，返回剩下的各段；没有要去掉的返回 null */
+function trimAlong(segs: HandSeg[], line: GrowP[]): GrowP[][] | null {
+  if (line.length < 2) return null
+  // 只看外接框挨得着这条线的那几段
+  const lb = grown(bboxOf(line), ROAD_NEAR)
+  const near = segs.filter((s) => !apart(lb, s.box))
+  if (!near.length) return null
+  const along = (p: GrowP, d: GrowP) => near.some((s) => Math.abs(d[0] * s.u[0] + d[1] * s.u[1]) > ROAD_ALONG && segDist(p, s.a, s.b).d < ROAD_NEAR)
+  // 沿路每 TRIM_STEP 米取一点（原来的顶点都留着），贴着手动的路走的点去掉，剩下的连成段
+  const runs: GrowP[][] = []
+  let run: GrowP[] = []
+  let cut = false
+  const close = () => {
+    if (run.length > 1) runs.push(run)
+    run = []
+  }
+  for (let i = 0; i + 1 < line.length; i++) {
+    const a = line[i]
+    const b = line[i + 1]
+    const L = dmath.hypot(b[0] - a[0], b[1] - a[1])
+    if (!L) continue
+    const d: GrowP = [(b[0] - a[0]) / L, (b[1] - a[1]) / L]
+    const n = Math.max(1, Math.ceil(L / TRIM_STEP))
+    for (let k = i === 0 ? 0 : 1; k <= n; k++) {
+      const p: GrowP = k === n ? b : [cm(a[0] + ((b[0] - a[0]) * k) / n), cm(a[1] + ((b[1] - a[1]) * k) / n)]
+      if (along(p, d)) {
+        cut = true
+        close()
+      } else run.push(p)
+    }
+  }
+  close()
+  return cut ? runs.filter((q) => polylineLength(q) >= TRIM_STUB) : null
+}
+
 /** 最近一次的手动的东西与它们的 Blocker：逐步生长时手动的东西不变，不必每一步重建（调用方也凭同一个对象认出「没变」） */
-let blockerMemo: { lots: GrowLot[]; roads: GrowRoad[]; block: Blocker | null } | null = null
-const sameItems = <T>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i])
+let blockerMemo: { lots: GrowLot[]; roads: GrowRoad[]; cleared: GrowP[][] | undefined; segs: HandSeg[]; block: Blocker | null } | null = null
+/** 两个数组里是不是同样的那些对象（逐个比是不是同一个） */
+export const sameItems = <T>(a: readonly T[], b: readonly T[]) => a.length === b.length && a.every((x, i) => x === b[i])
+/** 两条折线是不是同样的点（同一个数组，或者逐点相同） */
+export const samePts = (a: readonly GrowP[], b: readonly GrowP[]) => a === b || (a.length === b.length && a.every((p, i) => p[0] === b[i][0] && p[1] === b[i][1]))
 
 /**
  * 手动的东西（手动摆的地块、手动铺的路）压着的地方：自然生长的聚落里手动的优先，规划里的房子、田、树落在这些地方就不要了。
@@ -94,60 +151,24 @@ const sameItems = <T>(a: T[], b: T[]) => a.length === b.length && a.every((x, i)
  */
 export function manualBlocker(state: GrowState): Blocker | null {
   const hand = state.lots.filter((l) => l.ref === undefined && l.state !== 'vacant')
-  const ways = state.roads.filter((r) => r.id < WAY_ID)
-  if (blockerMemo && sameItems(blockerMemo.lots, hand) && sameItems(blockerMemo.roads, ways)) return blockerMemo.block
-  const lots = hand.map((l) => ({ poly: l.poly, b: bboxOf(l.poly) }))
-  const apart = (a: BBox, b: BBox) => a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]
-  const segs: { a: GrowP; b: GrowP; hw: number; box: BBox; u: GrowP }[] = []
-  for (const r of ways) {
-    const hw = ROAD_WIDTH[r.kind] / 2 + ROAD_CLEAR
-    for (let i = 0; i + 1 < r.pts.length; i++) {
-      const a = r.pts[i]
-      const b = r.pts[i + 1]
-      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
-      segs.push({ a, b, hw, box: [Math.min(a[0], b[0]) - hw, Math.min(a[1], b[1]) - hw, Math.max(a[0], b[0]) + hw, Math.max(a[1], b[1]) + hw], u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] })
-    }
-  }
-  /** 这一点（走向 d）是不是贴着某条手动的路走 */
-  const along = (p: GrowP, d: GrowP) => {
-    for (const s of segs) {
-      if (p[0] < s.box[0] - ROAD_NEAR || p[0] > s.box[2] + ROAD_NEAR || p[1] < s.box[1] - ROAD_NEAR || p[1] > s.box[3] + ROAD_NEAR) continue
-      if (Math.abs(d[0] * s.u[0] + d[1] * s.u[1]) > ROAD_ALONG && segDist(p, s.a, s.b).d < ROAD_NEAR) return true
-    }
-    return false
-  }
-  const trim = (line: GrowP[]): GrowP[][] | null => {
-    if (!segs.length || line.length < 2) return null
-    const lb = bboxOf(line)
-    if (!segs.some((s) => !apart(lb, [s.box[0] - ROAD_NEAR, s.box[1] - ROAD_NEAR, s.box[2] + ROAD_NEAR, s.box[3] + ROAD_NEAR]))) return null
-    // 沿路每 TRIM_STEP 米取一点（原来的顶点都留着），贴着手动的路走的点去掉，剩下的连成段
-    const runs: GrowP[][] = []
-    let run: GrowP[] = []
-    let cut = false
-    const close = () => {
-      if (run.length > 1) runs.push(run)
-      run = []
-    }
-    for (let i = 0; i + 1 < line.length; i++) {
-      const a = line[i]
-      const b = line[i + 1]
-      const L = Math.hypot(b[0] - a[0], b[1] - a[1])
-      if (!L) continue
-      const d: GrowP = [(b[0] - a[0]) / L, (b[1] - a[1]) / L]
-      const n = Math.max(1, Math.ceil(L / TRIM_STEP))
-      for (let k = i === 0 ? 0 : 1; k <= n; k++) {
-        const p: GrowP = k === n ? b : [cm(a[0] + ((b[0] - a[0]) * k) / n), cm(a[1] + ((b[1] - a[1]) * k) / n)]
-        if (along(p, d)) {
-          cut = true
-          close()
-        } else run.push(p)
+  const roads = state.roads.filter((r) => r.id < WAY_ID)
+  const was = blockerMemo
+  const sameRoads = !!was && sameItems(was.roads, roads)
+  if (was && sameRoads && sameItems(was.lots, hand) && was.cleared === state.cleared) return was.block
+  // 手动的路没变（只是地块变了）：路段、路的记号沿用，按路记着的修剪结果不作废
+  const segs: HandSeg[] = sameRoads ? was!.segs : []
+  if (!sameRoads)
+    for (const r of roads) {
+      const hw = ROAD_WIDTH[r.kind] / 2 + ROAD_CLEAR
+      for (let i = 0; i + 1 < r.pts.length; i++) {
+        const a = r.pts[i]
+        const b = r.pts[i + 1]
+        const L = dmath.hypot(b[0] - a[0], b[1] - a[1]) || 1
+        segs.push({ a, b, hw, box: grown(bboxOf([a, b]), hw), u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] })
       }
     }
-    close()
-    if (!cut) return null
-    const length = (q: GrowP[]) => q.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - q[i][0], p[1] - q[i][1]), 0)
-    return runs.filter((q) => length(q) >= TRIM_STUB)
-  }
+  // 手动拆掉的地方和手动的地块一样压着规划的东西
+  const lots = [...hand.map((l) => l.poly), ...(state.cleared ?? [])].map((poly) => ({ poly, b: bboxOf(poly) }))
   const block: Blocker | null =
     lots.length || segs.length
       ? {
@@ -159,14 +180,16 @@ export function manualBlocker(state: GrowState): Blocker | null {
             return false
           },
           point(p, pad) {
-            for (const l of lots) if (p[0] >= l.b[0] - pad && p[0] <= l.b[2] + pad && p[1] >= l.b[1] - pad && p[1] <= l.b[3] + pad && pointInPoly(p, l.poly)) return true
-            for (const s of segs) if (p[0] >= s.box[0] - pad && p[0] <= s.box[2] + pad && p[1] >= s.box[1] - pad && p[1] <= s.box[3] + pad && segDist(p, s.a, s.b).d < s.hw + pad) return true
+            const pb: BBox = [p[0] - pad, p[1] - pad, p[0] + pad, p[1] + pad]
+            for (const l of lots) if (!apart(pb, l.b) && pointInPoly(p, l.poly)) return true
+            for (const s of segs) if (!apart(pb, s.box) && segDist(p, s.a, s.b).d < s.hw + pad) return true
             return false
           },
-          trim,
+          trim: (line) => trimAlong(segs, line),
+          ways: segs,
         }
       : null
-  blockerMemo = { lots: hand, roads: ways, block }
+  blockerMemo = { lots: hand, roads, cleared: state.cleared, segs, block }
   return block
 }
 
@@ -176,8 +199,9 @@ export function manualBlocker(state: GrowState): Blocker | null {
  */
 export const naturalHooks: {
   place?: (state: GrowState, req: PlaceReq) => PlaceResult | null
-  draw?: (state: GrowState) => Settlement
-  /** 地形改了（笔画变了）之后：规划的地块按新的规划重新落一遍 */
+  /** 规划在这一刻的样子；block（手动的东西）给了，贴着手动的路走的规划的路已经修剪掉 */
+  draw?: (state: GrowState, block: Blocker | null) => Settlement
+  /** 规划变了（改了地形、换了认的路）之后：规划的地块按新的规划重新落一遍 */
   rebase?: (state: GrowState) => GrowState
 } = {}
 
@@ -193,6 +217,7 @@ export function growTerrain(p: GrowParams): GrowTerrain {
     riverDir: p.riverDir,
     hillDir: p.hillDir,
     ...(p.terrainSeed ? { terrainSeed: p.terrainSeed } : {}),
+    ...(p.flat ? { flat: true } : {}),
   }
 }
 
@@ -213,6 +238,7 @@ export function terrainFields(seed: string, t: GrowTerrain) {
     riverDir: dir(t.riverDir),
     hillDir: dir(t.hillDir),
     terrainSeed: t.terrainSeed ?? '',
+    ...(t.flat ? { flat: true } : {}),
   }
 }
 export function naturalHook<K extends keyof typeof naturalHooks>(k: K): NonNullable<(typeof naturalHooks)[K]> {
@@ -287,10 +313,11 @@ interface TerrainMemo {
 }
 const terrainMemo: TerrainMemo[] = []
 const TERRAIN_MEMO = 6
-const strokeText = new WeakMap<GrowStroke, string>()
-const textOf = (st: GrowStroke) => {
-  let v = strokeText.get(st)
-  if (v === undefined) strokeText.set(st, (v = JSON.stringify(st)))
+const texts = new WeakMap<object, string>()
+/** 一个对象的 JSON 文本，记着（状态不可变：同一个对象的文本不变） */
+export const textOf = (x: object) => {
+  let v = texts.get(x)
+  if (v === undefined) texts.set(x, (v = JSON.stringify(x)))
   return v
 }
 /** a 是不是 b 开头的一段（同一个对象，或内容相同） */

@@ -53,7 +53,9 @@ interface Field {
 export const terrainKey = (p: Pick<SettlementParams, 'seed' | 'culture' | 'terrainSeed'>) => p.terrainSeed || `${p.seed}|${p.culture}`
 
 /** 地形只由这些参数定（与人口、规模无关） */
-const fieldKey = (p: SettlementParams) => [terrainKey(p), p.river, p.coast, p.hills, p.relief, p.coastDir, p.riverDir, p.hillDir].join('|')
+const fieldKey = (p: SettlementParams) => [terrainKey(p), p.river, p.coast, p.hills, p.relief, p.coastDir, p.riverDir, p.hillDir, p.flat ? 'flat' : ''].join('|')
+/** 平地（SettlementParams.flat）的高程（米；海面是 0） */
+const FLAT_H = 8
 
 /** 画框之外多算的一圈（米）：水距、河谷这类距离场在画框边上也不受截断影响 */
 const MARGIN = 300
@@ -165,7 +167,7 @@ function computeField(p: SettlementParams, rng: RNG, extent: [number, number]): 
     for (let ci = 0; ci < CW; ci++) {
       const x = (oi + (ci - 1) * step) * cell
       const y = (oj + (cj - 1) * step) * cell
-      let h = 6 + rel * (fbm(x, y, 520, 0, 0, 4) * 16 + 12) + rel * fbm(x, y, 140, 7, -3, 3) * 3.5
+      let h = p.flat ? FLAT_H : 6 + rel * (fbm(x, y, 520, 0, 0, 4) * 16 + 12) + rel * fbm(x, y, 140, 7, -3, 3) * 3.5
       if (p.hills) {
         const d = (x - cx) * hd[0] + (y - cy) * hd[1]
         const t = smoothstep(R * 0.1, R * 1.5, d + fbm(x, y, 380, -5, 9, 3) * R * 0.3)

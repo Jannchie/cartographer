@@ -15,6 +15,11 @@ import { ROAD_WIDTH, USES, WAY_ID, manualBlocker, naturalHook, settleParams, ter
 export interface DrawOpts {
   /** 田的种类（和风、东方用 paddy 水田；默认 crop） */
   fieldKind?: Field['kind']
+  /**
+   * 自然生长的状态只画地形和手动的东西，不画规划（也就用不着规划）：规划还没算好时先给一张看（见 natural.ts 的 naturalReady）。
+   * 图名是种子，不是规划起的名字
+   */
+  bare?: boolean
 }
 
 /** 每户几口人（只用于 stats.population） */
@@ -41,37 +46,51 @@ const inset = (l: GrowLot, d: number) => {
 }
 
 export function toSettlement(state: GrowState, o: DrawOpts = {}): Settlement {
-  return state.plan ? composed(state, o) : fromLots(state, o)
+  if (!state.plan) return fromLots(state, o)
+  return o.bare ? handLayer(state, manualBlocker(state), o) : composed(state, o)
+}
+
+/** 自然生长的状态里手动的那一层（手动铺的路、手动摆的地块，底下是地形）。只跟手动的东西、地形有关：没变就是同一张 */
+function handLayer(state: GrowState, block: Blocker | null, o: DrawOpts): Settlement {
+  const T = terrainOf(state)
+  if (!handMemo || handMemo.block !== block || handMemo.field !== o.fieldKind || handMemo.T !== T)
+    handMemo = { block, field: o.fieldKind, T, st: fromLots({ ...state, lots: state.lots.filter((l) => l.ref === undefined), roads: state.roads.filter((r) => r.id < WAY_ID) }, o) }
+  return handMemo.st
 }
 
 /**
  * 自然生长的聚落：规划的成长史在这一刻的样子（见 natural.ts），上面叠手动铺的路、手动摆的地块。
- * 手动的优先：规划里的房子、田、院墙、绿地、树落在手动的地块、路上的不画
+ * 手动的优先：规划里的房子、田、院墙、绿地、树落在手动的地块、路上的不画，规划的路里贴着手动的路走的那几段不画（规划那一层给的时候已经去掉）。
+ * 没变的东西每次都是同一个对象（规划的东西来自成长史，手动的那一层、修剪过的路都记着）：调用方只重画变了的地方（见 history.ts 的 changedBoxes）
  */
 function composed(state: GrowState, o: DrawOpts): Settlement {
-  const plan = naturalHook('draw')(state)
   const block = manualBlocker(state)
+  const plan = naturalHook('draw')(state, block)
   if (!block) return plan
   // 规划的那一刻、手动的东西、田的画法都没变：还是上次那张（调用方凭同一个对象知道不用重画）
   if (last && last.plan === plan && last.block === block && last.field === o.fieldKind) return last.out
-  const hand = fromLots({ ...state, lots: state.lots.filter((l) => l.ref === undefined), roads: state.roads.filter((r) => r.id < WAY_ID) }, o)
-  const clear = <T>(xs: T[], poly: (x: T) => P[]) => xs.filter((x) => !block.poly(poly(x) as GrowP[]))
+  // 手动的那一层：规划往前走时不重画
+  const hand = handLayer(state, block, o)
+  // 规划里的各样东西压没压到：查过的记着（快照之间东西是同一个对象）
+  let hit = covered.get(block)
+  if (!hit) covered.set(block, (hit = new WeakMap()))
+  const seen = hit
+  const clear = <X extends object>(xs: X[], test: (x: X) => boolean) =>
+    xs.filter((x) => {
+      let v = seen.get(x)
+      if (v === undefined) seen.set(x, (v = test(x)))
+      return !v
+    })
+  const poly = (q: P[]) => block.poly(q as GrowP[])
   const out: Settlement = {
     ...plan,
-    buildings: [...clear(plan.buildings, (b) => b.poly), ...hand.buildings],
-    fields: [...clear(plan.fields, (f) => f.poly), ...hand.fields],
-    greens: [...clear(plan.greens, (g) => g.poly), ...hand.greens],
-    enclosures: [...clear(plan.enclosures, (q) => q), ...hand.enclosures],
+    buildings: [...clear(plan.buildings, (b) => poly(b.poly)), ...hand.buildings],
+    fields: [...clear(plan.fields, (f) => poly(f.poly)), ...hand.fields],
+    greens: [...clear(plan.greens, (g) => poly(g.poly)), ...hand.greens],
+    enclosures: [...clear(plan.enclosures, poly), ...hand.enclosures],
     plazas: [...plan.plazas, ...hand.plazas],
-    trees: [...plan.trees.filter((t) => !block.point(t.p as GrowP, t.r)), ...hand.trees],
-    // 规划的路里贴着手动的路走的那几段不画（和状态里的路同一条规矩，见 natural.ts 的 roadsAt）
-    roads: [
-      ...plan.roads.flatMap((r) => {
-        const parts = block.trim(r.line as GrowP[])
-        return parts ? parts.map((line) => ({ ...r, line })) : [r]
-      }),
-      ...hand.roads,
-    ],
+    trees: [...clear(plan.trees, (t) => block.point(t.p as GrowP, t.r)), ...hand.trees],
+    roads: [...plan.roads, ...hand.roads],
     crossings: [...plan.crossings, ...hand.crossings],
     stats: {
       ...plan.stats,
@@ -84,8 +103,10 @@ function composed(state: GrowState, o: DrawOpts): Settlement {
   last = { plan, block, field: o.fieldKind, out }
   return out
 }
-/** 最近合成的一张（见 composed） */
+/** 最近合成的一张、最近画的手动的那一层、各个 Blocker 查过的东西（见 composed） */
 let last: { plan: Settlement; block: Blocker; field: DrawOpts['fieldKind']; out: Settlement } | null = null
+let handMemo: { block: Blocker | null; field: DrawOpts['fieldKind']; T: object; st: Settlement } | null = null
+const covered = new WeakMap<Blocker, WeakMap<object, boolean>>()
 
 /** 沿路摆的地块、手动铺的路 → 聚落（没有规划的状态整个是它；有规划的状态里只是手动的那一层） */
 function fromLots(state: GrowState, o: DrawOpts): Settlement {

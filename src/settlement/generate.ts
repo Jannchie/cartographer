@@ -383,21 +383,29 @@ function countPopper(p: SettlementParams, walled: boolean) {
 
 // —————————————————————— 选址与干道 ——————————————————————
 
-/** 在地图中部找一块平坦、离水适中（便于取水与渡河）的地方作为中心 */
+/**
+ * 在地图中部找一块平坦、离水适中（便于取水与渡河）的地方作为中心。
+ * 给了 anchor（村落生长里手动铺的路所在处）就在它近旁找：半径小些，离它远的罚得重些，城心落在手画的东西旁边
+ */
 function pickCenter(ctx: Ctx): P {
   const { T, MW, MH, p } = ctx
   // 在地图中心附近固定半径内找（半径、候选点都与地图大小无关，各规模的城心是同一处）
   const rng = seedRng(ctx, 'center')
-  let best: P = [MW / 2, MH / 2]
+  // anchor 收进画幅里一圈（太贴边的话城的大半在画幅外）
+  const inside = (v: number, n: number) => Math.min(n * 0.88, Math.max(n * 0.12, v))
+  const o: P = p.anchor ? [inside(p.anchor[0], MW), inside(p.anchor[1], MH)] : [MW / 2, MH / 2]
+  let best: P = o
   let bs = Infinity
   const R = 450
+  const reach = p.anchor ? 0.12 : 0.32
+  const pull = p.anchor ? 8 : 2.5
   for (let k = 0; k < 500; k++) {
     const a = rng.next() * Math.PI * 2
-    const r = Math.sqrt(rng.next()) * R * 0.32
-    const q: P = [MW / 2 + dmath.cos(a) * r, MH / 2 + dmath.sin(a) * r]
+    const r = Math.sqrt(rng.next()) * R * reach
+    const q: P = [o[0] + dmath.cos(a) * r, o[1] + dmath.sin(a) * r]
     const w = T.waterAt(q)
     if (w < ctx.cfg.patch * 0.45) continue
-    let s = T.slopeAt(q) * 40 + (r / R) * 2.5
+    let s = T.slopeAt(q) * 40 + (r / R) * pull
     if (p.river || p.coast) s += Math.abs(w - ctx.cfg.patch * 1.1) / (ctx.cfg.patch * 1.5)
     // 依山：稍微往高处靠，但别上山
     if (p.hills) s += Math.abs(T.heightAt(q) - 14) * 0.01

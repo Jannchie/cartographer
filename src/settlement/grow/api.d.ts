@@ -19,6 +19,8 @@ export interface GrowTerrain {
   hillDir: number | null
   /** 固定地形的种子（空串或不填：跟着种子与文明） */
   terrainSeed?: string
+  /** 基底是一块平地（没有起伏的缓坡；relief 不起作用）：地形从头用笔刷刷出来的开局 */
+  flat?: boolean
 }
 
 export interface GrowParams extends GrowTerrain {
@@ -78,6 +80,12 @@ export interface GrowStroke {
   pts: GrowP[]
 }
 
+/** 规划认作骨架的一条手动的路：中线与路面宽（米） */
+export interface GrowGuide {
+  line: GrowP[]
+  width: number
+}
+
 /**
  * 手动操作被拒绝的原因：edge 出画幅、lot 压到地块、road 压到路、water 离水太近或跨水、sea 下海、bridge 桥太长、
  * slope 太陡、far 离路太远、short 太短
@@ -97,6 +105,11 @@ export interface GrowState {
   /** 手动改地形的笔画（没改过时没有这一项） */
   strokes?: GrowStroke[]
   /**
+   * 自然生长里手动拆掉的规划的东西所在的地方（房子、田的轮廓）：算作手动的东西，规划的房子、田、树落在这里的不要，空着、不再长回来。
+   * 没拆过时没有这一项
+   */
+  cleared?: GrowP[][]
+  /**
    * 自然生长（见 natural-api.d.ts）：聚落沿着一次成形的生成器按 horizon 人规划好的成长史长，pop 是走到的时刻（按人口计）。
    * 有这一项时 place 摆的位置由规划定（地块带 ref，路的 id 在一百万以上）。手动铺的路、手动摆的地块照常和它混在同一份状态里，
    * 手动的优先：规划里落在手动的东西上的房子、田让开，贴着手动的路并排走的规划的路不要；规划的路不能拆。
@@ -105,8 +118,8 @@ export interface GrowState {
   plan?: {
     horizon: number
     pop: number
-    /** 规划认作骨架的手动的路（中线与路面宽）：摆新地块时换成那时的手动的路，规划跟着重算 */
-    guides?: { line: GrowP[]; width: number }[]
+    /** 规划认作骨架的手动的路：认路时（自然生长入口的 adoptRoads）换成那时的手动的路，规划跟着重算 */
+    guides?: GrowGuide[]
   }
   nextId: number
   /** 已经走了几步（每次 place 加一） */
