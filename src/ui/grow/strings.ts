@@ -38,7 +38,6 @@ defineStrings([
   ['拆掉这块地（Delete）', 'Remove this lot (Delete)', 'この区画を取り壊す（Delete）'],
   ['拆掉', 'Remove', '取り壊す'],
   ['路', 'Road', '道'],
-  ['手动铺的', 'Laid by hand', '手で敷いた'],
   ['长度', 'Length', '長さ'],
   ['临街的地块', 'Lots along it', '沿道の区画'],
   ['连同临街的手动地块一起拆（Delete）', 'Removes the hand-placed lots along it too (Delete)', '沿道の手で置いた区画ごと取り壊す（Delete）'],

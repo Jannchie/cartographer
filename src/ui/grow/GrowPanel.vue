@@ -11,14 +11,16 @@ import * as G from './grow'
 import { gs, picture, ROAD_NAME, USE_COLOR, USE_NAME } from './grow'
 
 const swatches = settleThemes.all().map((th) => ({ id: th.id, name: th.name, desc: th.desc, paper: th.ground, ink: th.ink }))
-const SIZE_NAME: Record<number, string> = { 600: '小', 3000: '中', 8000: '大' }
 
 const sel = computed(() => G.selected())
 const roadLength = (pts: [number, number][]) => Math.round(polylineLength(pts))
 const frontage = (roadId: number) => gs.state.lots.filter((l) => l.road === roadId && l.state !== 'vacant').length
 
 /** 统计：各用途的地块（自动 / 手动）、各种路（只在「属性」页时算：每长一步都要数一遍地块） */
-const stats = computed(() => {
+let lastStats: ReturnType<typeof countStats> | null = null
+// 长的时候不数（每一步都换状态）：停下来再数
+const stats = computed(() => (gs.run !== 'idle' && lastStats ? lastStats : (lastStats = countStats())))
+function countStats() {
   const s = gs.state
   const uses = ['center', 'home', 'field', 'shop', 'yard', 'public'].map((u) => {
     const ls = s.lots.filter((l) => l.use === u && l.state !== 'vacant')
@@ -29,10 +31,9 @@ const stats = computed(() => {
     return { kind: k, n: rs.length, hand: rs.filter((r) => !G.planned(r.id)).length, m: rs.reduce((a, r) => a + roadLength(r.pts), 0) }
   })
   return { uses, roads }
-})
+}
 const terrainName = computed(() => {
-  const tr = gs.state.terrain
-  if (tr.flat && !tr.river && !tr.coast && !tr.hills) return t('空白平地')
+  if (G.isBlank(gs.state.terrain)) return t('空白平地')
   return `${t('按种子生成')} · ${gs.state.seed}`
 })
 </script>
@@ -82,7 +83,7 @@ const terrainName = computed(() => {
     <Section v-show="gs.tab === 'map'">
       <dl class="grow-rows">
         <div><dt>{{ t('地形') }}</dt><dd>{{ terrainName }}</dd></div>
-        <div><dt>{{ t('地图大小') }}</dt><dd>{{ t(SIZE_NAME[gs.state.plan!.horizon] ?? '') }} · {{ t('约 {n} 人', { n: gs.state.plan!.horizon.toLocaleString() }) }}</dd></div>
+        <div><dt>{{ t('地图大小') }}</dt><dd>{{ t(G.sizeName(gs.state.plan!.horizon)) }} · {{ t('约 {n} 人', { n: gs.state.plan!.horizon.toLocaleString() }) }}</dd></div>
       </dl>
       <button type="button" class="wide" :title="t('换一张地图从头来：当前这张清空（可撤销）')" @click="G.openNewMap()"><Icon :icon="IconPlus" :size="14" />{{ t('新建地图') }}</button>
       <div class="tool-group">

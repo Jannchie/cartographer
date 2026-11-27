@@ -15,6 +15,7 @@ import Notices from '../kit/Notices.vue'
 import Scale from '../kit/Scale.vue'
 import Seg from '../kit/Seg.vue'
 import * as G from './grow'
+import { ROAD_WIDTH } from '../../settlement/grow/core'
 import { BRUSH_COLOR, BRUSH_NAME, BRUSH_R, gs, picture, ROAD_NAME, TOOL_KEYS, USE_COLOR, USE_NAME, type GrowTool } from './grow'
 
 const host = ref<HTMLElement>()
@@ -58,15 +59,20 @@ const outline = (x: ReturnType<typeof G.selected>) => {
   if (x?.kind === 'road') return { pts: pts(x.road.pts), closed: false }
   return null
 }
-/** 标出手动的东西：手动的路、手动摆的地块、拆空的地方 */
+/** 标出手动的东西：手动的路、手动摆的地块、拆空的地方。点按米记，平移、缩放只换外面的 transform（不重算这些点） */
+const meters = (ps: GrowP[]) => ps.map((q) => `${q[0]},${q[1]}`).join(' ')
 const hand = computed(() => {
   if (!gs.showHand) return null
   const s = gs.state
   return {
-    roads: s.roads.filter((r) => !G.planned(r.id)).map((r) => ({ pts: pts(r.pts), w: Math.max(3, px(r.kind === 'highway' ? 6 : r.kind === 'street' ? 5 : 3.5) + 2) })),
-    lots: s.lots.filter((l) => l.ref === undefined && l.state !== 'vacant').map((l) => pts(l.poly)),
-    cleared: (s.cleared ?? []).map(pts),
+    roads: s.roads.filter((r) => !G.planned(r.id)).map((r) => ({ pts: meters(r.pts), w: ROAD_WIDTH[r.kind] + 2 })),
+    lots: s.lots.filter((l) => l.ref === undefined && l.state !== 'vacant').map((l) => meters(l.poly)),
+    cleared: (s.cleared ?? []).map(meters),
   }
+})
+const handTf = computed(() => {
+  const P = gs.paper
+  return `translate(${P.x + P.M * P.k} ${P.y + P.M * P.k}) scale(${P.S * P.k})`
 })
 const sel = computed(() => outline(G.selected()))
 const hot = computed(() => outline(G.hovered()))
@@ -96,7 +102,7 @@ const targetIdx = computed(() => {
   const i = stops.value.findIndex((v) => v >= gs.target)
   return i < 0 ? stops.value.length - 1 : i
 })
-const full = computed(() => G.grownPop() >= gs.state.plan!.horizon)
+const full = computed(() => G.full())
 const targetLabel = computed(() => (targetIdx.value === stops.value.length - 1 ? t('长满') : `${stops.value[targetIdx.value].toLocaleString()} ${t('人')}`))
 const onTarget = (e: Event, go: boolean) => G.setTarget(stops.value[Number((e.target as HTMLInputElement).value)], go)
 
@@ -112,14 +118,14 @@ const pan = computed(() => (gs.tool === 'look' ? '' : '右键或中键拖动平�
 // —— 新建地图 ——
 const p = gs.setup
 const SIZE_OPTS = computed(() =>
-  G.HORIZONS.map((v, i) => ({ value: v, label: `${t(['小', '中', '大'][i])} · ${t('约 {n} 人', { n: v.toLocaleString() })}`, title: '地图越大，能长的人越多，规划也越久' })),
+  G.SIZES.map(({ pop, name }) => ({ value: pop, label: `${t(name)} · ${t('约 {n} 人', { n: pop.toLocaleString() })}`, title: '地图越大，能长的人越多，规划也越久' })),
 )
 const CULTURE_OPTS = cultures.ids().map((c) => ({ value: c, label: cultures.get(c).name, title: cultures.get(c).desc }))
 const LAND_OPTS = [
   { value: 'blank' as const, label: '空白平地', title: '没有河、海、山，也不起伏：从零画路、摆建筑，地形自己刷' },
   { value: 'random' as const, label: '按种子生成', title: '按种子生成的地形：河、海、山可选' },
 ]
-const blankOf = () => (p.flat && !p.river && !p.coast && !p.hills ? 'blank' : 'random')
+const blankOf = () => (G.isBlank(p) ? 'blank' : 'random')
 const land = ref<'blank' | 'random'>(blankOf())
 watch(
   () => gs.creating,
@@ -139,7 +145,7 @@ const canCancel = computed(() => gs.undoCount > 0 || gs.state.lots.length > 0 ||
   <main class="stage">
     <div ref="host" class="view paper-view" :class="[`tool-${gs.tool}`]"></div>
     <svg class="grow-overlay" aria-hidden="true" :style="clip">
-      <g v-if="hand" class="hand">
+      <g v-if="hand" class="hand" :transform="handTf">
         <polyline v-for="(r, i) in hand.roads" :key="`r${i}`" :points="r.pts" :stroke-width="r.w" />
         <polygon v-for="(l, i) in hand.lots" :key="`l${i}`" :points="l" />
         <polygon v-for="(c, i) in hand.cleared" :key="`c${i}`" :points="c" class="cleared" />
@@ -210,21 +216,21 @@ const canCancel = computed(() => gs.undoCount > 0 || gs.state.lots.length > 0 ||
         </div>
         <label class="grow-size grow-target" :title="t('生成到多少人：拖到右边松手就接着长')">
           <span>{{ t('目标') }}</span>
-          <input type="range" min="0" :max="stops.length - 1" step="1" :value="targetIdx" :disabled="gs.loading || gs.rushing" @input="onTarget($event, false)" @change="onTarget($event, true)" />
+          <input type="range" min="0" :max="stops.length - 1" step="1" :value="targetIdx" :disabled="gs.loading || gs.run === 'rush'" @input="onTarget($event, false)" @change="onTarget($event, true)" />
           <output>{{ targetLabel }}</output>
         </label>
-        <button type="button" class="grow-go" :class="{ on: gs.rushing }" :disabled="gs.loading || (full && !gs.rushing)" :title="t('一口气长到目标人口，记一步撤销（G）')" @click="G.generate()">
-          <Icon :icon="gs.rushing ? IconPause : IconFastForward" :size="14" />{{ t(gs.rushing ? '停下' : '生成') }}<kbd>G</kbd>
+        <button type="button" class="grow-go" :class="{ on: gs.run === 'rush' }" :disabled="gs.loading || (full && gs.run !== 'rush')" :title="t('一口气长到目标人口，记一步撤销（G）')" @click="G.generate()">
+          <Icon :icon="gs.run === 'rush' ? IconPause : IconFastForward" :size="14" />{{ t(gs.run === 'rush' ? '停下' : '生成') }}<kbd>G</kbd>
         </button>
-        <button type="button" :class="{ on: gs.playing && !gs.rushing }" :disabled="gs.loading || gs.rushing || (full && !gs.playing)" :title="t('按步速一步步长，看它怎么长起来（空格）')" @click="G.toggle()">
-          <Icon :icon="gs.playing && !gs.rushing ? IconPause : IconPlay" :size="14" />{{ t(gs.playing && !gs.rushing ? '暂停' : '回放') }}<kbd>␣</kbd>
+        <button type="button" :class="{ on: gs.run === 'replay' }" :disabled="gs.loading || gs.run === 'rush' || (full && gs.run !== 'replay')" :title="t('按步速一步步长，看它怎么长起来（空格）')" @click="G.toggle()">
+          <Icon :icon="gs.run === 'replay' ? IconPause : IconPlay" :size="14" />{{ t(gs.run === 'replay' ? '暂停' : '回放') }}<kbd>␣</kbd>
         </button>
-        <div v-if="gs.playing && !gs.rushing" class="grow-speed" :title="t('每秒走几步')">
+        <div v-if="gs.run === 'replay'" class="grow-speed" :title="t('每秒走几步')">
           <button v-for="v in G.SPEEDS" :key="v" type="button" :class="{ on: gs.speed === v }" :aria-pressed="gs.speed === v" @click="G.setSpeed(v)">{{ v }}</button>
           <span>{{ t('步/秒') }}</span>
         </div>
       </div>
-      <div v-if="G.reflow.value && !gs.playing" class="grow-reflow" role="status">{{ t('手画的路会并入规划：再生成时已长出的 {n} 栋自动建筑会重新布局', { n: G.reflow.value }) }}</div>
+      <div v-if="gs.run === 'idle' && G.reflow.value" class="grow-reflow" role="status">{{ t('手画的路会并入规划：再生成时已长出的 {n} 栋自动建筑会重新布局', { n: G.reflow.value }) }}</div>
       <div class="grow-tools" role="toolbar" :aria-label="t('工具')">
         <button v-for="tl in TOOLS" :key="tl.id" type="button" :class="{ on: gs.tool === tl.id }" :aria-pressed="gs.tool === tl.id" :title="`${t(tl.title)}（${TOOL_KEYS[tl.id]}）`" @click="G.setTool(tl.id)">
           <Icon :icon="tl.icon" :size="18" /><span>{{ t(tl.label) }}</span><kbd>{{ TOOL_KEYS[tl.id] }}</kbd>
@@ -286,6 +292,9 @@ polyline.hot.erase {
   stroke-width: 5;
 }
 /* 标出手动的东西：手动的路、地块描成强调色，拆空的地方画虚线 */
+.hand polygon {
+  vector-effect: non-scaling-stroke;
+}
 .hand polyline {
   fill: none;
   stroke: var(--accent);

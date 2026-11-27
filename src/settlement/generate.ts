@@ -1,5 +1,5 @@
 import { RNG, hashString } from '../gen/rng'
-import { MinHeap } from '../gen/util'
+import { MinHeap, clamp } from '../gen/util'
 import { contours, simplify } from '../render/atlas/svg/contour'
 import { dryArea, emitArea, Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, StreetCuts, mainCore, squareness, seedRng, wardRng, type Core, type CorridorTag, mark, type Ctx } from './ctx'
 import { FEATURE, FEATURES, featureEnv, resolveCounts, type FeatureId } from './features'
@@ -383,22 +383,49 @@ function countPopper(p: SettlementParams, walled: boolean) {
 
 // —————————————————————— 选址与干道 ——————————————————————
 
+/** 调用方给的路的落脚点：各段按长度加权的重心，再挪到路上离它最近的一点（几条路分得很开时重心可能落在空地里）。没有路时是 null */
+function guidesAnchor(guides: SettlementParams['guides']): P | null {
+  const lines = (guides ?? []).map((g) => g.line).filter((l) => l.length > 1)
+  if (!lines.length) return null
+  let sx = 0
+  let sy = 0
+  let sw = 0
+  for (const l of lines)
+    for (let i = 0; i + 1 < l.length; i++) {
+      const L = dmath.hypot(l[i + 1][0] - l[i][0], l[i + 1][1] - l[i][1])
+      sx += ((l[i][0] + l[i + 1][0]) / 2) * L
+      sy += ((l[i][1] + l[i + 1][1]) / 2) * L
+      sw += L
+    }
+  const c: P = sw ? [sx / sw, sy / sw] : [lines[0][0][0], lines[0][0][1]]
+  let best: P = c
+  let bd = Infinity
+  for (const l of lines)
+    for (let i = 0; i + 1 < l.length; i++) {
+      const { d, t } = segDist(c, l[i], l[i + 1])
+      if (d >= bd) continue
+      bd = d
+      best = [l[i][0] + (l[i + 1][0] - l[i][0]) * t, l[i][1] + (l[i + 1][1] - l[i][1]) * t]
+    }
+  return best
+}
+
 /**
  * 在地图中部找一块平坦、离水适中（便于取水与渡河）的地方作为中心。
- * 给了 anchor（村落生长里手动铺的路所在处）就在它近旁找：半径小些，离它远的罚得重些，城心落在手画的东西旁边
+ * 有调用方给的路（guides，村落生长里手动铺的路）就在它们的落脚点近旁找：半径小些，离它远的罚得重些，城心落在这些路旁边
  */
 function pickCenter(ctx: Ctx): P {
   const { T, MW, MH, p } = ctx
   // 在地图中心附近固定半径内找（半径、候选点都与地图大小无关，各规模的城心是同一处）
   const rng = seedRng(ctx, 'center')
-  // anchor 收进画幅里一圈（太贴边的话城的大半在画幅外）
-  const inside = (v: number, n: number) => Math.min(n * 0.88, Math.max(n * 0.12, v))
-  const o: P = p.anchor ? [inside(p.anchor[0], MW), inside(p.anchor[1], MH)] : [MW / 2, MH / 2]
+  const anchor = guidesAnchor(p.guides)
+  // 落脚点收进画幅里一圈（太贴边的话城的大半在画幅外）
+  const o: P = anchor ? [clamp(anchor[0], MW * 0.12, MW * 0.88), clamp(anchor[1], MH * 0.12, MH * 0.88)] : [MW / 2, MH / 2]
   let best: P = o
   let bs = Infinity
   const R = 450
-  const reach = p.anchor ? 0.12 : 0.32
-  const pull = p.anchor ? 8 : 2.5
+  const reach = anchor ? 0.12 : 0.32
+  const pull = anchor ? 8 : 2.5
   for (let k = 0; k < 500; k++) {
     const a = rng.next() * Math.PI * 2
     const r = Math.sqrt(rng.next()) * R * reach

@@ -35,11 +35,9 @@ export interface SettlementParams {
   strokes?: TerrainStroke[]
   /**
    * 已经手动铺好的路（村落生长模块）：规划把它们当作已有的街——片区沿它们布点、街巷的走向顺着它们、新修的路接到它们上面而不和它们重叠。
-   * 它们在生成的结果里带 given 标记（调用方自己有这些路，按标记去掉）
+   * 城心在它们旁边找。它们在生成的结果里带 given 标记（调用方自己有这些路，按标记去掉）
    */
   guides?: GrowGuide[]
-  /** 城心在这一点附近找（村落生长：手动铺的路所在处），没有就在画幅中部找 */
-  anchor?: [number, number]
   /** 基底是一块平地，没有随噪声起伏的缓坡（山、河、海照 hills / river / coast 另加）：地形从头手动刷的开局用 */
   flat?: boolean
   seed: string

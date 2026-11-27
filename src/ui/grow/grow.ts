@@ -53,8 +53,16 @@ export interface GrowSetup {
 }
 // 默认的文明：和风（它所在的插件没启用时用注册表的默认）
 const DEFAULT_SETUP: GrowSetup = { seed: 'aki', culture: cultures.has('wa') ? 'wa' : cultures.defaultId(), river: true, coast: false, hills: false, relief: 0.3, flat: false, horizon: 3000 }
-/** 规划的规模（人口）：村、镇、城 */
-export const HORIZONS = [600, 3000, 8000]
+/** 地图大小：规划的规模（人口；画幅由它定）与界面上的叫法 */
+export const SIZES = [
+  { pop: 600, name: '小' },
+  { pop: 3000, name: '中' },
+  { pop: 8000, name: '大' },
+]
+export const HORIZONS = SIZES.map((x) => x.pop)
+export const sizeName = (pop: number) => SIZES.find((x) => x.pop === pop)?.name ?? ''
+/** 空白平地：没有河、海、山，也不起伏 */
+export const isBlank = (t: { flat?: boolean; river: boolean; coast: boolean; hills: boolean }) => !!t.flat && !t.river && !t.coast && !t.hills
 const paramsOf = (p: GrowSetup): GrowParams => ({
   seed: p.seed,
   culture: p.culture,
@@ -167,14 +175,13 @@ export const gs = reactive({
   creating: !saved && !fromUrl,
   /** 生成的目标人口 */
   target: 0,
-  /** 正在生成（一口气长到目标；不是按步速回放） */
-  rushing: false,
   style: fromUrl?.style ?? stored('growStyle', settleThemes, startNotices),
   /** 当前这一局（markRaw：状态是不可变的大对象，整个替换） */
   state: markRaw(first.state) as GrowState,
   driver: first.driver as GrowDriver,
-  playing: false,
-  /** 播放速度（步 / 秒） */
+  /** 在长：生成（一口气长到目标）、回放（按步速一步步长），或停着 */
+  run: 'idle' as 'idle' | 'replay' | 'rush',
+  /** 回放速度（步 / 秒） */
   speed: Number(storeGet('growSpeed')) || 8,
   tool: 'look' as GrowTool,
   roadKind: 'street' as GrowRoadKind,
@@ -245,8 +252,7 @@ function restore(from: Snap[], to: Snap[]) {
   const other = !sameSetup(setupOf(u.state), setupOf(gs.state))
   commit(u.state, u.driver)
   if (other) {
-    // 回到了另一局（重新开局之前的）：面板、地址、视图跟着换
-    Object.assign(gs.setup, setupOf(u.state))
+    // 回到了另一局（新建之前的）：地址、视图跟着换
     syncRoute('grow')
     requestAnimationFrame(fitView)
   }
@@ -279,7 +285,7 @@ function persist() {
 
 // —— 新建地图 ——
 /** 按 gs.setup 新建一张（当前这一张清空，可撤销） */
-export function restart() {
+function restart() {
   if (gs.loading) return
   pause()
   cancelDraft()
@@ -320,6 +326,8 @@ export const targetStops = () => {
 }
 /** 眼下长到的人口（成长史走到的时刻） */
 export const grownPop = () => gs.state.plan!.pop
+/** 这张地图住满了 */
+export const full = () => grownPop() >= gs.state.plan!.horizon
 /** 默认的目标：比眼下多一档 */
 const defaultTarget = () => targetStops().find((v) => v > grownPop()) ?? gs.state.plan!.horizon
 gs.target = defaultTarget()
@@ -327,33 +335,13 @@ export function setTarget(v: number, go = false) {
   gs.target = v
   if (go && v > grownPop()) generate()
 }
-/** 长到目标人口；正在长时再点一下停下 */
-export function generate() {
-  if (gs.rushing) return pause()
-  if (gs.loading) return
-  if (grownPop() >= gs.target) {
-    // 已经到了：目标往上挪一档再长
-    const next = targetStops().find((v) => v > grownPop())
-    if (next === undefined) return (gs.msg = noRoom())
-    gs.target = next
-  }
-  pause()
-  whenPlanned(() => {
-    cancelDraft()
-    gs.msg = ''
-    gs.rushing = true
-    gs.playing = true
-    raf = requestAnimationFrame(frame)
-  })
-}
 const noRoom = () => t('这张地图住满了：新建一张更大的地图接着长')
-/** 走一步需求序列；住满了在舞台上说一声 */
+/** 走一步需求序列；住满了在舞台上说一声，停下 */
 function stepOnce() {
   const r = advance(gs.state, gs.driver)
   if (r.failed && r.op.kind === 'place' && r.op.req.use !== 'field') {
     gs.msg = noRoom()
-    // 再播也不会长
-    gs.playing = false
+    gs.run = 'idle'
   }
   gs.state = markRaw(r.state)
   gs.driver = r.driver
@@ -368,7 +356,7 @@ const whenPlanned = (then: () => void) =>
     gs.state = markRaw(adoptRoads(gs.state))
     then()
   })
-export function step() {
+function step() {
   pause()
   if (gs.loading) return
   whenPlanned(() => {
@@ -377,72 +365,67 @@ export function step() {
   })
 }
 
-let raf = 0
-let last = 0
-let due = 0
-const FRAME_STEPS = 24
-/** 播放时画面隔多久换一次（毫秒） */
-const DRAW_EVERY = 50
-let drawAt = 0
-/** 播放速度的几档（步 / 秒） */
-export const SPEEDS = [2, 8, 30, 120]
-export function play() {
-  if (gs.playing || gs.loading) return
-  if (grownPop() >= gs.state.plan!.horizon) return void (gs.msg = noRoom())
+/** 开始生成或回放（住满了只说一声） */
+function begin(run: 'replay' | 'rush') {
+  if (gs.loading) return
+  if (full()) return void (gs.msg = noRoom())
+  pause()
   whenPlanned(() => {
     cancelDraft()
-    gs.playing = true
     gs.msg = ''
+    gs.run = run
     last = performance.now()
     due = 1
     raf = requestAnimationFrame(frame)
   })
 }
-export function pause() {
-  if (!gs.playing) return
-  gs.playing = false
-  gs.rushing = false
+/** 长到目标人口；正在长时再点一下停下。已经到了目标就往上挪一档再长 */
+export function generate() {
+  if (gs.run === 'rush') return pause()
+  if (grownPop() >= gs.target) gs.target = targetStops().find((v) => v > grownPop()) ?? gs.target
+  begin('rush')
+}
+export const toggle = () => (gs.run === 'replay' ? pause() : begin('replay'))
+function pause() {
+  if (gs.run === 'idle') return
+  gs.run = 'idle'
   cancelAnimationFrame(raf)
-  // 停下时画到这一刻（播放时画面、图题是隔一会儿才换的），存档
+  // 停下时画到这一刻（长的时候画面、图题是隔一会儿才换的），存档
   draw()
   persist()
 }
-export const toggle = () => (gs.playing ? pause() : play())
-/** 生成时每帧最多算多久（毫秒）：其余留给画面与指针 */
+
+let raf = 0
+let last = 0
+let due = 0
+let drawAt = 0
+/** 回放：一帧最多走几步（免得慢机器上越积越多）、画面隔多久换一次（毫秒） */
+const FRAME_STEPS = 24
+const DRAW_EVERY = 50
+/** 生成：每帧最多算多久（毫秒，其余留给画面与指针）、画面隔多久换一次（边长边看见它长起来，又不至于把时间都花在画上） */
 const RUSH_BUDGET = 30
-/** 生成时画面隔多久换一次（毫秒）：边长边看见它长起来，又不至于把时间都花在画上 */
 const RUSH_DRAW_EVERY = 160
+/** 回放速度的几档（步 / 秒） */
+export const SPEEDS = [2, 8, 30, 120]
 function frame(now: number) {
-  if (!gs.playing) return
-  if (gs.rushing) {
-    while (gs.playing && grownPop() < gs.target && performance.now() - now < RUSH_BUDGET) stepOnce()
-    if (grownPop() >= gs.target) gs.playing = false
-    if (!gs.playing) {
-      gs.rushing = false
-      commit(gs.state)
-      return
-    }
-    if (now - drawAt >= RUSH_DRAW_EVERY) {
-      drawAt = now
-      commit(gs.state)
-    }
-    raf = requestAnimationFrame(frame)
-    return
+  if (gs.run === 'idle') return
+  const rush = gs.run === 'rush'
+  if (rush) {
+    while (gs.run === 'rush' && grownPop() < gs.target && performance.now() - now < RUSH_BUDGET) stepOnce()
+    if (grownPop() >= gs.target) gs.run = 'idle'
+  } else {
+    due += ((now - last) / 1000) * gs.speed
+    last = now
+    const n = Math.min(FRAME_STEPS, Math.floor(due))
+    due -= n
+    for (let i = 0; i < n && gs.run === 'replay'; i++) stepOnce()
   }
-  due +=((now - last) / 1000) * gs.speed
-  last = now
-  // 一帧最多走 FRAME_STEPS 步，免得慢机器上越积越多
-  const n = Math.min(FRAME_STEPS, Math.floor(due))
-  due -= n
-  if (n > 0) {
-    for (let i = 0; i < n && gs.playing; i++) stepOnce()
-    // 步子照走，画面隔 DRAW_EVERY 毫秒换一次：中间的几帧留给拖动、缩放；住满停下时照常画
-    if (!gs.playing || now - drawAt >= DRAW_EVERY) {
-      drawAt = now
-      commit(gs.state)
-    }
+  // 步子照走，画面隔一会儿换一次：中间的几帧留给拖动、缩放；停下时照常画
+  if (gs.run === 'idle' || now - drawAt >= (rush ? RUSH_DRAW_EVERY : DRAW_EVERY)) {
+    drawAt = now
+    commit(gs.state)
   }
-  if (gs.playing) raf = requestAnimationFrame(frame)
+  if (gs.run !== 'idle') raf = requestAnimationFrame(frame)
 }
 export function setSpeed(v: number) {
   gs.speed = v
@@ -532,7 +515,7 @@ export function pickOption(i: number) {
   else if (gs.tool === 'terrain' && BRUSHES[i]) gs.brush = BRUSHES[i]
   refreshHover()
 }
-export function cancelDraft() {
+function cancelDraft() {
   gs.draft = []
   gs.free = null
   gs.snap = null
@@ -659,7 +642,7 @@ function commitRoad(pts: GrowP[]) {
   commit(settle(r.state))
 }
 /** 画完一下一下点出来的路（回车、再点一下最后一个点） */
-export function finishDraft() {
+function finishDraft() {
   if (gs.tool === 'road' && gs.draft.length >= 2) commitRoad(gs.draft.slice())
 }
 // —— 建筑 ——
@@ -878,7 +861,7 @@ function render(s: GrowState, bare = false) {
   // 画面没变（没到规划的下一刻、手动的东西也没动：toSettlement 给的是同一个对象）：不用重画
   if (drawn && drawn.st === st && drawn.key === key) {
     // 图题里的人口播放时隔一会儿才换：停下了补上这一刻的
-    if (!gs.playing) viewer?.refreshChrome()
+    if (gs.run === 'idle') viewer?.refreshChrome()
     return
   }
   // 注记（地名、片区名）用的字体到齐以后再画一遍
@@ -903,7 +886,7 @@ function render(s: GrowState, bare = false) {
   if (was?.key !== key) {
     const style = gs.style
     viewer.setChrome((w, h, box, k) => buildSettlementChrome(drawn!.st, style, { labels: true, contours: true, ornaments: true, lang }, chromeMeasurer, w, h, box, k, null), settleBackdrop(style), frameInset)
-  } else if (!gs.playing || now - chromeAt > CHROME_EVERY) {
+  } else if (gs.run === 'idle' || now - chromeAt > CHROME_EVERY) {
     chromeAt = now
     viewer.refreshChrome()
   }
@@ -1055,6 +1038,11 @@ export const TOOL_KEYS: Record<GrowTool, string> = { look: 'V', road: 'R', build
 window.addEventListener('keydown', (e) => {
   if (app.module !== 'grow' || isTypingTarget(e)) return
   const key = e.key.toLowerCase()
+  // 「新建地图」卡片开着：只认 Esc（关掉它）
+  if (gs.creating) {
+    if (key === 'escape') closeNewMap()
+    return
+  }
   if (e.ctrlKey || e.metaKey) {
     if (key === 'z' || key === 'y') {
       e.preventDefault()
@@ -1064,11 +1052,6 @@ window.addEventListener('keydown', (e) => {
     return
   }
   if (e.altKey) return
-  // 「新建地图」卡片开着：只认 Esc（关掉它）
-  if (gs.creating) {
-    if (key === 'escape') closeNewMap()
-    return
-  }
   const tool = (Object.keys(TOOL_KEYS) as GrowTool[]).find((k) => TOOL_KEYS[k].toLowerCase() === key)
   if (tool) setTool(tool)
   else if (key >= '1' && key <= '9') pickOption(Number(key) - 1)

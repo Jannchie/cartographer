@@ -1,6 +1,5 @@
-import * as dmath from '../../gen/dmath'
 import { generateHistory, settlementExtent } from '../generate'
-import { area, centroid, segDist, type P } from '../geom'
+import { area, centroid, type P } from '../geom'
 import { snapshot, type SettlementHistory } from '../history'
 import { DEFAULT_SETTLEMENT, type Building, type Field, type Road, type Settlement, type SettlementParams } from '../types'
 import { dwelling } from '../undo'
@@ -70,43 +69,10 @@ const KIND: Record<Road['kind'], GrowRoadKind> = { highway: 'highway', main: 'st
 
 /**
  * 这片地的规划参数：布局用聚落地图的默认值，所以和那边同一个种子、人口取 horizon 的是同一座城；手动改地形的笔画也交过去。
- * 认了手动的路时城心在它们旁边找（anchor，见 anchorOf）：聚落从手画的路那儿长起来
+ * 认了手动的路时生成器在它们旁边找城心：聚落从手画的路那儿长起来
  */
 function paramsOf(seed: string, t: GrowTerrain, horizon: number, strokes?: GrowStroke[], guides?: GrowGuide[]): SettlementParams {
-  return {
-    ...DEFAULT_SETTLEMENT,
-    ...terrainFields(seed, t),
-    population: horizon,
-    ...(strokes?.length ? { strokes } : {}),
-    ...(guides?.length ? { guides, anchor: anchorOf(guides) } : {}),
-  }
-}
-
-/** 手动的路的落脚点：各段按长度加权的重心，再挪到路上离它最近的一点（几条路分得很开时重心可能落在空地里） */
-function anchorOf(guides: GrowGuide[]): [number, number] {
-  let sx = 0
-  let sy = 0
-  let sw = 0
-  for (const g of guides)
-    for (let i = 0; i + 1 < g.line.length; i++) {
-      const [a, b] = [g.line[i], g.line[i + 1]]
-      const L = dmath.hypot(b[0] - a[0], b[1] - a[1])
-      sx += ((a[0] + b[0]) / 2) * L
-      sy += ((a[1] + b[1]) / 2) * L
-      sw += L
-    }
-  const c: P = sw ? [sx / sw, sy / sw] : [guides[0].line[0][0], guides[0].line[0][1]]
-  let best: [number, number] = [c[0], c[1]]
-  let bd = Infinity
-  for (const g of guides)
-    for (let i = 0; i + 1 < g.line.length; i++) {
-      const { d, t } = segDist(c, g.line[i], g.line[i + 1])
-      if (d >= bd) continue
-      bd = d
-      const [a, b] = [g.line[i], g.line[i + 1]]
-      best = [cm(a[0] + (b[0] - a[0]) * t), cm(a[1] + (b[1] - a[1]) * t)]
-    }
-  return best
+  return { ...DEFAULT_SETTLEMENT, ...terrainFields(seed, t), population: horizon, ...(strokes?.length ? { strokes } : {}), ...(guides?.length ? { guides } : {}) }
 }
 
 /**
