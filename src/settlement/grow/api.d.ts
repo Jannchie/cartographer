@@ -65,6 +65,23 @@ export interface GrowZone {
   born: number
 }
 
+/** 地形笔刷：raise 抬高、lower 压低、flat 平整（压到起笔处的高程）、water 挖成水面、land 填成陆地 */
+export type GrowBrush = 'raise' | 'lower' | 'flat' | 'water' | 'land'
+
+/** 手动改地形的一笔：沿 pts（只有一个点时是一个圆）半径 r 米以内按笔刷改。地形 = 按参数生成的地形依次叠上每一笔 */
+export interface GrowStroke {
+  tool: GrowBrush
+  /** 笔刷半径（米） */
+  r: number
+  pts: GrowP[]
+}
+
+/**
+ * 手动操作被拒绝的原因：edge 出画幅、lot 压到地块、road 压到路、water 离水太近或跨水、sea 下海、bridge 桥太长、
+ * slope 太陡、far 离路太远、short 太短
+ */
+export type GrowFault = 'edge' | 'lot' | 'road' | 'water' | 'sea' | 'bridge' | 'slope' | 'far' | 'short'
+
 export interface GrowState {
   v: number
   seed: string
@@ -75,6 +92,8 @@ export interface GrowState {
   roads: GrowRoad[]
   lots: GrowLot[]
   zones: GrowZone[]
+  /** 手动改地形的笔画（没改过时没有这一项） */
+  strokes?: GrowStroke[]
   nextId: number
   /** 已经走了几步（每次 place 加一） */
   step: number
@@ -104,16 +123,51 @@ export declare const GROW_VERSION: number
 
 /** 一片空地 + 一两条对外的路 + 村心（一块 center 地） */
 export declare function seedState(p: GrowParams): GrowState
+/** 只有一片空地（没有路、没有村心；center 暂取画幅中间）：从零开始手动铺路、摆地块；铺了路以后 place 才找得到地方 */
+export declare function blankState(p: GrowParams): GrowState
 /** 找一处摆下；不修改传入的 state，返回新的。找不到（连延路也不行）返回 null */
 export declare function place(state: GrowState, req: PlaceReq, salt: number): PlaceResult | null
 /** 退掉一块地：变成 vacant、去掉 owner（返回新的 state） */
 export declare function release(state: GrowState, lotId: number): GrowState
 /** 改一块地的状态：在建 → 盖好（返回新的 state；没有这块、已经是这个状态时原样返回） */
 export declare function setState(state: GrowState, lotId: number, s: 'building' | 'built'): GrowState
-/** 手动铺一条路：端点离已有的路不到几米就接上去；跨水、压到地块、出画幅、太短的拒绝，error 说明原因 */
-export declare function addRoad(state: GrowState, pts: GrowP[], kind: GrowRoadKind): { state: GrowState; road: GrowRoad } | { error: string }
-/** 拆掉一条路：路上还有临街的地块（在用的）就拒绝；临着它的空地一并去掉 */
-export declare function removeRoad(state: GrowState, roadId: number): { state: GrowState } | { error: string }
+/**
+ * 手动铺一条路：端点离已有的路不到几米就接上去；跨水、压到地块、出画幅、太短的拒绝，error 说明原因、fault 是原因的代号。
+ * opts.bridge：可以跨过河、湖（画图时那一段是桥；两头要在岸上，一座桥不能太长，海不能跨）
+ */
+export declare function addRoad(
+  state: GrowState,
+  pts: GrowP[],
+  kind: GrowRoadKind,
+  opts?: { bridge?: boolean },
+): { state: GrowState; road: GrowRoad } | { error: string; fault: GrowFault }
+/** 拆掉一条路：路上还有临街的地块（在用的）就拒绝（opts.lots：连同这些地块一起拆）；临着它的空地一并去掉 */
+export declare function removeRoad(state: GrowState, roadId: number, opts?: { lots?: boolean }): { state: GrowState } | { error: string }
+
+/** 手动摆放时试出来的位置：poly 是地块的四个角，road 是临的路；fault 给了就是摆不下的原因 */
+export interface LotProbe {
+  poly: GrowP[]
+  road: number
+  fault?: GrowFault
+}
+/**
+ * 在 p 附近试一块地（不改状态；指针悬停时的预览）：沿最近的路吸附到临街的位置，田、料场还可以接在同类地块的背后、两旁。
+ * 附近有摆得下的位置就给最近的那个；都摆不下给最近的那个和原因；附近没有路返回 null
+ */
+export declare function probeLot(state: GrowState, use: string, area: number, p: GrowP): LotProbe | null
+/**
+ * 手动在 p 附近摆一块地（位置同 probeLot）：马上盖好（req.state 可以改）。和 place 不同，不给以后的岔路留路口、压到的空地直接去掉。
+ * use 是 center 时村心（state.center）挪到这块地上
+ */
+export declare function placeAt(
+  state: GrowState,
+  req: { use: string; area?: number; owner?: string; state?: 'building' | 'built' },
+  p: GrowP,
+): { state: GrowState; lot: GrowLot } | { error: string; fault: GrowFault }
+/** 拆掉一块地：整块去掉（release 是空出来、形状留着） */
+export declare function removeLot(state: GrowState, lotId: number): GrowState
+/** 在地形上画一笔（返回新的 state）；水漫到的地块一并去掉，flooded 是去掉了几块 */
+export declare function paintTerrain(state: GrowState, stroke: GrowStroke): { state: GrowState; flooded: number }
 /** 划一片分区（至少三个点、在画幅里） */
 export declare function zone(state: GrowState, poly: GrowP[], use: string): { state: GrowState; zone: GrowZone } | { error: string }
 /** 取消一片分区（已经盖在里面的不动） */

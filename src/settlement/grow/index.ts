@@ -6,6 +6,8 @@
 // 三种来源改的是同一份状态，可以混着用（模拟城市那样：玩家手动铺路、划区，也可以交给它自己长）：
 //   手动铺路   addRoad / removeRoad（plan.ts：端点接到已有的路上；跨水、压到地块拒绝并说明原因；路上还有临街地块不让拆）
 //   规划分区   zone / unzone（plan.ts：只记下「这片地打算给什么用」，不立刻盖）
+//   手动摆放   probeLot / placeAt / removeLot（manual.ts：位置由指针定，沿路吸附；blankState 从什么都没有的空地起）
+//   手动改地形 paintTerrain（manual.ts、relief.ts：笔画记进 state.strokes，地形 = 生成的地形叠上每一笔）
 //   自动生长   place（选址时相符的分区大幅加分、别的用途的分区不进；延路也往相符的分区里延）
 //
 //   seedState(params)          一片空地 + 一两条对外的路（从村心按地形寻路到画幅边）+ 村心（一块 center 地）
@@ -39,12 +41,15 @@
 //   - 片区骨架：没有片区（住、商、工、田的分区只是打分里的远近）；以后先长出片区边界，再在片区里摆地。
 //   - 桥：延路一律不跨水（对外的路下水时画一座桥，只是画）；以后按河宽、两岸的需求架桥。
 //   - 路网成环（尽头接上附近的路）、路的分级加宽、地块合并与拆分、退掉的路。
-//   - 手动操作的界面：cartographer 里一个能点着试的页面（铺路、划区、看它自己长）；无尽幻想里让领头人「修路 / 划区」。
+//   - 无尽幻想里让领头人「修路 / 划区」（cartographer 里的界面是村落生长模块，见 src/ui/grow）。
 //   - 分区的细节：密度、只许某些人用、分区边界自动长出路。拆路时接在它上面的路不管（会断开）。
 
 // 这里只导出 api.d.ts 里有的东西（外部项目只看得到那些）；本仓库的脚本要用的内部常量、函数直接从 ./core、./draw 引。
-export type { GrowLot, GrowLotState, GrowP, GrowParams, GrowRoad, GrowRoadKind, GrowState, GrowTerrain, GrowZone, PlaceReq, PlaceResult } from './api'
+export type {
+  GrowBrush, GrowFault, GrowLot, GrowLotState, GrowP, GrowParams, GrowRoad, GrowRoadKind, GrowState, GrowStroke, GrowTerrain, GrowZone, LotProbe, PlaceReq, PlaceResult,
+} from './api'
 export { GROW_VERSION, growHash, lotAtPoint, lotCenter, release, setState } from './core'
-export { place, seedState } from './place'
+export { blankState, place, seedState } from './place'
 export { addRoad, removeRoad, unzone, zone, zoneAtPoint } from './plan'
+export { paintTerrain, placeAt, probeLot, removeLot } from './manual'
 export { route } from './route'

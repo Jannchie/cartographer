@@ -1,8 +1,9 @@
 import { hashString } from '../../gen/rng'
 import { pointInPoly } from '../geom'
-import { buildTerrain, type TerrainResult } from '../terrain'
+import { buildTerrain, retouchTerrain, type TerrainResult } from '../terrain'
 import type { SettlementParams } from '../types'
-import type { GrowLot, GrowP, GrowState, GrowTerrain } from './api'
+import type { GrowLot, GrowP, GrowState, GrowStroke, GrowTerrain } from './api'
+import { applyStroke } from './relief'
 
 // 生长引擎的公共部分：常量、地形缓存、几个不用找地方的操作（退地、改状态）。选址与延路在 place.ts。
 
@@ -117,17 +118,57 @@ export function settleParams(seed: string, t: GrowTerrain, population = 100): Se
 }
 
 /**
- * 地形不存进 state，按参数重算（15 ~ 30 毫秒）。这里记着最近两份：地形只由参数定，缓存不改变结果
+ * 地形不存进 state：按参数重算（15 ~ 30 毫秒），再依次叠上手动改地形的笔画（state.strokes）。
+ * 这里记着最近几份：地形只由参数与笔画定，缓存不改变结果。笔画只多出后面几笔时接着上一份的网格画（撤销、连着画都落在这条路上）
  */
-const terrainMemo: { key: string; T: TerrainResult }[] = []
-export function terrainOf(s: { seed: string; terrain: GrowTerrain; size: [number, number] }): TerrainResult {
+interface TerrainMemo {
+  key: string
+  strokes: readonly GrowStroke[]
+  T: TerrainResult
+  /** 叠完笔画的水面（1 为水）；没用到过时是 null */
+  wet: Uint8Array | null
+}
+const terrainMemo: TerrainMemo[] = []
+const TERRAIN_MEMO = 6
+const strokeText = new WeakMap<GrowStroke, string>()
+const textOf = (st: GrowStroke) => {
+  let v = strokeText.get(st)
+  if (v === undefined) strokeText.set(st, (v = JSON.stringify(st)))
+  return v
+}
+/** a 是不是 b 开头的一段（同一个对象，或内容相同） */
+const isPrefix = (a: readonly GrowStroke[], b: readonly GrowStroke[]) => a.length <= b.length && a.every((st, i) => st === b[i] || textOf(st) === textOf(b[i]))
+
+export function terrainOf(s: { seed: string; terrain: GrowTerrain; size: [number, number]; strokes?: GrowStroke[] }): TerrainResult {
   const key = JSON.stringify([s.seed, s.terrain, s.size])
-  const hit = terrainMemo.find((m) => m.key === key)
-  if (hit) return hit.T
-  const T = buildTerrain(settleParams(s.seed, s.terrain), s.size)
-  terrainMemo.unshift({ key, T })
-  if (terrainMemo.length > 2) terrainMemo.pop()
-  return T
+  const strokes = s.strokes ?? []
+  let from: TerrainMemo | null = null
+  for (const m of terrainMemo) {
+    if (m.key !== key || !isPrefix(m.strokes, strokes)) continue
+    if (m.strokes.length === strokes.length) return m.T
+    if (!from || m.strokes.length > from.strokes.length) from = m
+  }
+  const keep = (m: TerrainMemo) => {
+    terrainMemo.unshift(m)
+    if (terrainMemo.length > TERRAIN_MEMO) terrainMemo.pop()
+    return m
+  }
+  if (!from) {
+    from = keep({ key, strokes: [], T: buildTerrain(settleParams(s.seed, s.terrain), s.size), wet: null })
+    if (!strokes.length) return from.T
+  }
+  const { W, H, cell } = from.T.terrain
+  const height = from.T.terrain.height.slice()
+  let wet = from.wet
+  if (wet) wet = wet.slice()
+  else {
+    const water = from.T.terrain.water
+    wet = new Uint8Array(W * H)
+    for (let k = 0; k < W * H; k++) wet[k] = water[k] < 0 ? 1 : 0
+  }
+  let changed = false
+  for (let i = from.strokes.length; i < strokes.length; i++) changed = applyStroke({ W, H, cell, height, wet }, strokes[i]) || changed
+  return keep({ key, strokes, T: retouchTerrain(from.T, height, changed ? wet : null), wet }).T
 }
 
 export function checkState(s: GrowState) {
