@@ -55,6 +55,8 @@ export interface GrowLot {
   born: number
   /** 占几个单位（一个单位 = 20 × 20 米） */
   area: number
+  /** 自然生长的聚落里按规划长出来的地块才有（手动摆的没有）：这块地对着规划里的哪一栋房子、哪一块田（poly 是它的轮廓，不一定是四个角） */
+  ref?: number
 }
 
 /** 分区（规划）：这片地打算给什么用（use 与地块的用途同一套字），不立刻盖东西 */
@@ -94,6 +96,12 @@ export interface GrowState {
   zones: GrowZone[]
   /** 手动改地形的笔画（没改过时没有这一项） */
   strokes?: GrowStroke[]
+  /**
+   * 自然生长（见 natural-api.d.ts）：聚落沿着一次成形的生成器按 horizon 人规划好的成长史长，pop 是走到的时刻（按人口计）。
+   * 有这一项时 place 摆的位置由规划定（地块带 ref，路的 id 在一百万以上）。手动铺的路、手动摆的地块照常和它混在同一份状态里，
+   * 手动的优先：规划里落在手动的东西上的房子、田让开；规划的路不能拆。手动改了地形，规划按改过的地形重算
+   */
+  plan?: { horizon: number; pop: number }
   nextId: number
   /** 已经走了几步（每次 place 加一） */
   step: number
@@ -166,7 +174,12 @@ export declare function placeAt(
 ): { state: GrowState; lot: GrowLot } | { error: string; fault: GrowFault }
 /** 拆掉一块地：整块去掉（release 是空出来、形状留着） */
 export declare function removeLot(state: GrowState, lotId: number): GrowState
-/** 在地形上画一笔（返回新的 state）；水漫到的地块一并去掉，flooded 是去掉了几块 */
+/**
+ * 把一笔记进状态（半径、坐标取整），别的不动：paintTerrain 的头一步。
+ * 可以先拿它得到改完地形的状态（比如先在别处把它的规划算好），再调 paintTerrain
+ */
+export declare function withStroke(state: GrowState, stroke: GrowStroke): GrowState
+/** 在地形上画一笔（返回新的 state）；水漫到的手动地块一并去掉，flooded 是去掉了几块。自然生长的聚落里规划的地块按新地形的规划重新落 */
 export declare function paintTerrain(state: GrowState, stroke: GrowStroke): { state: GrowState; flooded: number }
 /** 划一片分区（至少三个点、在画幅里） */
 export declare function zone(state: GrowState, poly: GrowP[], use: string): { state: GrowState; zone: GrowZone } | { error: string }

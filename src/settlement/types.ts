@@ -1,6 +1,7 @@
 import { cultures } from './culture'
 import type { CityFunction, FeatureId } from './features'
 import type { P, Poly } from './geom'
+import type { GrowStroke } from './grow/api'
 import type { Motif } from './tensor'
 
 /** 规模：决定地图范围、街区数、是否设防 */
@@ -26,7 +27,12 @@ export type WallMode = 'auto' | 'none' | 'palisade' | 'stone'
  */
 export const LAYOUT_DEFAULT = { regularity: 0.2, radial: 0.3 }
 
+/** 手动改地形的一笔（村落生长模块里的地形笔刷，见 grow/relief.ts） */
+export type TerrainStroke = GrowStroke
+
 export interface SettlementParams {
+  /** 生成的地形上再叠的手动笔画（没有就是生成的地形）：聚落按改过的地形规划 */
+  strokes?: TerrainStroke[]
   seed: string
   /** 目标人口（连续）；规模档位 size 由它推出（见 scale.ts），不单独设置 */
   population: number

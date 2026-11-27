@@ -46,7 +46,7 @@ const plates = [
       </div>
       <footer class="home-foot">
         <button type="button" class="link" @click="emit('open')"><Icon :icon="IconLibrary" :size="14" />{{ t('世界库…') }}</button>
-        <button type="button" class="link" :title="t('从一片空地起一块一块地长出村子：生长引擎的试验场')" @click="app.module = 'grow'"><Icon :icon="IconSprout" :size="14" />{{ t('村落生长…') }}</button>
+        <button type="button" class="link" :title="t('从一片荒地长成聚落：按规划自己长，也可以随时动手画路、摆建筑、改地形')" @click="app.module = 'grow'"><Icon :icon="IconSprout" :size="14" />{{ t('村落生长…') }}</button>
         <button type="button" class="link" data-open="plugins" @click="openPlugins()"><Icon :icon="IconPuzzle" :size="14" />{{ t('插件…') }}</button>
         <LangSelect />
       </footer>

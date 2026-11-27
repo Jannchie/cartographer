@@ -43,6 +43,7 @@ import type { PlanLot, PlanZone } from './plans/types'
 import { buildPatches, crossings, farm, type FarmGroup, latticeStreets, radialStreets, sharedEdge, sitePad, spacing, vegetation, wild, type Patch } from './outer'
 import { SettleNamer } from './names'
 import { buildTerrain, landPieces, levelTerrain, routeOnTerrain, terrainKey } from './terrain'
+import { reliefTerrain } from './grow/relief'
 import { blindAlleys, buildField, fieldTraits, joinEnds, traceStreamlines, type CityField } from './tensor'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, type Building, type Wall, type Crossing, type Density, type Landmark, type Road, type MapLabel, type Tri, type Tree, type Field, same, type Settlement, type SettlementParams, type Ward, type WardType } from './types'
 import { eastCompound } from './compose/chinese'
@@ -147,7 +148,8 @@ function build(input: SettlementParams, lazy = false): { st: Settlement; history
   const rng = new RNG(hashString(`${p.seed}|${p.culture}`))
   // 地形用自己的随机数流（见 terrainKey）；这里照样分出一支，后面的随机数不变
   rng.fork()
-  const T = buildTerrain(p, extent)
+  // 手动改过的地形（村落生长模块的地形笔刷）：聚落按改过的地形规划
+  const T = p.strokes?.length ? reliefTerrain(buildTerrain(p, extent), p.strokes) : buildTerrain(p, extent)
   const [MW, MH] = extent
   const namer = new SettleNamer(p.seed, p.culture, !!T.coast)
   const ctx: Ctx = {

@@ -57,11 +57,11 @@ const settleTabs = computed(() => [
 const growExports = [
   { label: 'PNG', title: '按 2 倍分辨率导出', icon: IconImage, run: G.exportPng },
   { label: 'SVG', title: '矢量版本，可无损放大', icon: IconShapes, run: G.exportSvg },
-  { label: '生长状态', title: '这一局的生长状态（.json）：路、地块、分区、地形笔画', icon: IconDatabase, run: G.exportState },
+  { label: '生长状态', title: '这一局的生长状态（.json）：路、地块、地形笔画', icon: IconDatabase, run: G.exportState },
 ]
 const growTabs = [
-  { id: 'grow' as const, label: '建造', icon: IconSprout, title: '手动建造与自动生长' },
-  { id: 'land' as const, label: '开局', icon: IconMountain, title: '开局的地形参数、起始方式与绘图风格' },
+  { id: 'grow' as const, label: '建造', icon: IconSprout, title: '建造与生长' },
+  { id: 'land' as const, label: '开局', icon: IconMountain, title: '开局的参数与绘图风格' },
   { id: 'stats' as const, label: '统计', icon: IconChartBar },
 ]
 

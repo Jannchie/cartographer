@@ -88,9 +88,3 @@ export function advance(s: GrowState, d: GrowDriver): StepResult & { op: GrowOp 
   const last = d.i + 1 >= ops.length
   return { ...r, op, driver: { ...r.driver, n: last ? d.n + 1 : d.n, i: last ? 0 : d.i + 1 } }
 }
-
-/** 把在建的全部盖好（不走步） */
-export function finishAll(s: GrowState, d: GrowDriver): { state: GrowState; driver: GrowDriver } {
-  for (const p of d.pending) s = setState(s, p.id, 'built')
-  return { state: s, driver: { ...d, pending: [] } }
-}

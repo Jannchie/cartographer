@@ -4,8 +4,11 @@ import type * as Api from './api'
 import * as Impl from './index'
 import type * as PaintApi from './paint-api'
 import * as PaintImpl from './paint'
+import type * as NaturalApi from './natural-api'
+import * as NaturalImpl from './natural'
 
 type Fns<T> = { [K in keyof T as T[K] extends (...a: never[]) => unknown ? K : never]: T[K] }
 
 export const growApiMatches: Fns<typeof Api> = Impl
 export const paintApiMatches: Fns<typeof PaintApi> = PaintImpl
+export const naturalApiMatches: Fns<typeof NaturalApi> = NaturalImpl

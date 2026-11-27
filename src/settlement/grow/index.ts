@@ -8,6 +8,9 @@
 //   规划分区   zone / unzone（plan.ts：只记下「这片地打算给什么用」，不立刻盖）
 //   手动摆放   probeLot / placeAt / removeLot（manual.ts：位置由指针定，沿路吸附；blankState 从什么都没有的空地起）
 //   手动改地形 paintTerrain（manual.ts、relief.ts：笔画记进 state.strokes，地形 = 生成的地形叠上每一笔）
+// 另有自然生长（natural.ts，单独一个入口 grow/natural：要整套一次成形的生成器、要先启动插件）：
+//   seedNatural 开局的状态带 plan，聚落沿着生成器给这片地规划好的成长史长——长出来的是「一键生成」的那种聚落（片区、街坊、田野、地标）。
+//   place、release、setState、route、画图照常用，place 摆的位置由规划定；手动铺路、摆放、改地形照旧，和规划的东西混在同一份状态里，手动的优先。
 //   自动生长   place（选址时相符的分区大幅加分、别的用途的分区不进；延路也往相符的分区里延）
 //
 //   seedState(params)          一片空地 + 一两条对外的路（从村心按地形寻路到画幅边）+ 村心（一块 center 地）
@@ -51,5 +54,5 @@ export type {
 export { GROW_VERSION, growHash, lotAtPoint, lotCenter, release, setState } from './core'
 export { blankState, place, seedState } from './place'
 export { addRoad, removeRoad, unzone, zone, zoneAtPoint } from './plan'
-export { paintTerrain, placeAt, probeLot, removeLot } from './manual'
+export { paintTerrain, placeAt, probeLot, removeLot, withStroke } from './manual'
 export { route } from './route'

@@ -310,10 +310,11 @@ function sample(W: number, H: number, height: Float32Array, water: Float32Array,
 }
 
 /**
- * 换一套网格的地形（手动改过高程、水面之后）：height 是新的高程；wet 给了就按它重算水距（1 为水），不给就沿用原来的水距。
- * 原来是海的格子还是水的话仍算海，新挖出来的水面不算海（当河、湖）。不改传入的 T
+ * 换一套网格的地形（手动改过高程、水面之后）：height 是新的高程；wet 给了就按它重算水距（1 为水），不给就沿用 T 的水距。
+ * base 是没改过的原地形：现在是水、在原地形里是海的格子算海，新挖出来的水面不算海（当河、湖）——
+ * 只看原地形与现在的水面，和中间一笔一笔怎么改的无关。不改传入的 T
  */
-export function retouchTerrain(T: TerrainResult, height: Float32Array, wet: Uint8Array | null): TerrainResult {
+export function retouchTerrain(T: TerrainResult, height: Float32Array, wet: Uint8Array | null, base: TerrainResult = T): TerrainResult {
   const { W, H, cell } = T.terrain
   const N = W * H
   let water = T.terrain.water
@@ -326,7 +327,7 @@ export function retouchTerrain(T: TerrainResult, height: Float32Array, wet: Uint
     water = new Float32Array(N)
     for (let k = 0; k < N; k++) water[k] = (wet[k] ? -dIn[k] + 0.5 : dOut[k] - 0.5) * cell
   }
-  for (let k = 0; k < N; k++) sea[k] = water[k] < 0 && T.seaAt([(k % W) * cell, Math.floor(k / W) * cell]) ? 1 : 0
+  for (let k = 0; k < N; k++) sea[k] = water[k] < 0 && base.seaAt([(k % W) * cell, Math.floor(k / W) * cell]) ? 1 : 0
   return { ...sample(W, H, height, water, sea), river: T.river, coast: T.coast, hillDir: T.hillDir }
 }
 

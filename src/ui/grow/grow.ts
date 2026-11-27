@@ -2,34 +2,43 @@ import { computed, markRaw, reactive, watch } from 'vue'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { cultures } from '../../settlement/culture'
-import { chaikin, pointInPoly, segDist, type P } from '../../settlement/geom'
+import { chaikin, polylineLength, segDist, type P } from '../../settlement/geom'
 import {
-  addRoad, blankState, GROW_VERSION, lotAtPoint, lotCenter, paintTerrain, place, placeAt, probeLot, removeLot, removeRoad, seedState, setState, unzone, zone, zoneAtPoint,
-  type GrowBrush, type GrowFault, type GrowLot, type GrowP, type GrowParams, type GrowRoadKind, type GrowState, type GrowZone,
+  addRoad, GROW_VERSION, lotAtPoint, paintTerrain, placeAt, probeLot, release, removeLot, removeRoad, withStroke,
+  type GrowBrush, type GrowFault, type GrowLot, type GrowP, type GrowParams, type GrowRoadKind, type GrowState, type GrowStroke,
 } from '../../settlement/grow'
-import { ROAD_WIDTH } from '../../settlement/grow/core'
-import { advance, finishAll, newDriver, placeSalt, runOp, type GrowDriver, type GrowOp } from '../../settlement/grow/demands'
+import { ROAD_WIDTH, UNIT_D, UNIT_W, WAY_ID, cm } from '../../settlement/grow/core'
+import { advance, newDriver, runOp, type GrowDriver, type GrowOp } from '../../settlement/grow/demands'
 import { toSettlement } from '../../settlement/grow/draw'
-import { buildSettlementVector } from '../../settlement/render'
+import { naturalParams, naturalReady, primeNatural, seedNatural, settleNatural } from '../../settlement/grow/natural'
+import { simplify } from '../../settlement/grow/place'
+import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, ensureSettleFonts, settleBackdrop } from '../../settlement/render'
 import { settleThemes } from '../../settlement/themes'
+import { changedBoxes } from '../../settlement/history'
+import type { Settlement } from '../../settlement/types'
 import { lang } from '../../i18n'
 import { app, download, initialQuery, registerRoute, storeGet, storeSet, stored, syncRoute, type Notice } from '../app'
+import { mapFontsReady } from '../fonts'
 import { t } from '../i18n'
 import { isTypingTarget } from '../keys'
 import { bindPanZoom, fitInto } from '../panZoom'
 import { syllableSeed } from '../seed'
+import { planInWorker } from './planWorker'
 import './strings'
 
 /**
- * 村落生长模块：生长引擎（settlement/grow）上的自由编辑器。
- * 可以从生成的村子起，也可以从什么都没有的空地起；舞台底部的工具栏像游戏的建造栏：
+ * 村落生长模块：生长引擎（settlement/grow）的界面。只有一种聚落：
+ *   这片地按选定的规模规划好一份成长史（和聚落地图「一键生成」的是同一套规划），聚落沿着它长——需求一条条来，
+ *   路、房子、田、地标按规划一步步出现（播放、单步，或点「让引擎挑地方摆」）。
+ *   同一座聚落上可以随时动手：舞台底部的工具栏像游戏的建造栏——
  *   道路（按住拖动随手画，或一下一下点出折线；过河自动架桥）、建筑（点一下摆一块，按住沿路拖摆一排）、
- *   分区（拖一个框，或点出多边形）、地形（抬高、压低、平整、挖水、填陆的笔刷）、拆除（点一下，或按住拖着拆地块）。
- * 也可以交给需求序列自己长（播放、单步）。每一步都能撤销、重做，进度存在本机；地址里只有开局的参数（#/grow?seed=...）。
+ *   地形（抬高、压低、平整、挖水、填陆的笔刷）、拆除（点一下，或按住拖着拆）。
+ *   手动的东西优先于规划：规划里的房子、田落在手动的路、地块上的就让开；改了地形，规划按新的地形重算。
+ * 每一步都能撤销、重做，进度存在本机；地址里只有开局的参数（#/grow?seed=...）。
  * 选了工具时左键归工具，右键或中键拖动平移；点选工具下左键拖动平移。
  */
 
-/** 开局的参数：地形参数（方向总是随种子）、画幅边长（米）、起始（生成的村子 / 空地） */
+/** 开局的参数：地形参数（方向总是随种子）、规划的规模（人口；画幅由它定） */
 export interface GrowSetup {
   seed: string
   culture: string
@@ -37,11 +46,12 @@ export interface GrowSetup {
   coast: boolean
   hills: boolean
   relief: number
-  size: number
-  start: 'village' | 'blank'
+  horizon: number
 }
-const DEFAULT_SETUP: GrowSetup = { seed: 'aki', culture: 'wa', river: true, coast: false, hills: false, relief: 0.3, size: 1600, start: 'village' }
-export const SIZES = [800, 1600, 2400]
+// 默认的文明：和风（它所在的插件没启用时用注册表的默认）
+const DEFAULT_SETUP: GrowSetup = { seed: 'aki', culture: cultures.has('wa') ? 'wa' : cultures.defaultId(), river: true, coast: false, hills: false, relief: 0.3, horizon: 3000 }
+/** 规划的规模（人口）：村、镇、城 */
+export const HORIZONS = [600, 3000, 8000]
 const paramsOf = (p: GrowSetup): GrowParams => ({
   seed: p.seed,
   culture: p.culture,
@@ -52,9 +62,10 @@ const paramsOf = (p: GrowSetup): GrowParams => ({
   coastDir: null,
   riverDir: null,
   hillDir: null,
-  size: [p.size, p.size],
+  size: [0, 0],
 })
-const newGame = (p: GrowSetup) => (p.start === 'blank' ? blankState(paramsOf(p)) : seedState(paramsOf(p)))
+const newGame = (p: GrowSetup) => seedNatural(paramsOf(p), p.horizon)
+const setupOf = (s: GrowState): GrowSetup => ({ seed: s.seed, culture: s.terrain.culture, river: s.terrain.river, coast: s.terrain.coast, hills: s.terrain.hills, relief: s.terrain.relief, horizon: s.plan!.horizon })
 const sameSetup = (a: GrowSetup, b: GrowSetup) => JSON.stringify(a) === JSON.stringify(b)
 
 // —— 地址 ——
@@ -64,8 +75,7 @@ function encode(p: GrowSetup, style: string) {
   if (p.culture !== DEFAULT_SETUP.culture) q.set('culture', p.culture)
   for (const k of ['river', 'coast', 'hills'] as const) if (p[k] !== DEFAULT_SETUP[k]) q.set(k, p[k] ? '1' : '0')
   if (p.relief !== DEFAULT_SETUP.relief) q.set('relief', String(p.relief))
-  if (p.size !== DEFAULT_SETUP.size) q.set('size', String(p.size))
-  if (p.start !== DEFAULT_SETUP.start) q.set('start', p.start)
+  if (p.horizon !== DEFAULT_SETUP.horizon) q.set('horizon', String(p.horizon))
   if (style !== settleThemes.defaultId()) q.set('style', style)
   return q
 }
@@ -81,27 +91,23 @@ function decode(q: URLSearchParams, notices: Notice[]): { setup: GrowSetup; styl
   for (const k of ['river', 'coast', 'hills'] as const) if (q.has(k)) p[k] = q.get(k) === '1'
   const r = Number(q.get('relief'))
   if (q.has('relief') && Number.isFinite(r)) p.relief = Math.min(1, Math.max(0, r))
-  if (SIZES.includes(Number(q.get('size')))) p.size = Number(q.get('size'))
-  if (q.get('start') === 'blank') p.start = 'blank'
+  if (HORIZONS.includes(Number(q.get('horizon')))) p.horizon = Number(q.get('horizon'))
   const st = q.get('style') ?? undefined
   if (st && !settleThemes.has(st)) notices.push({ source: 'link', what: settleThemes.label, id: st })
   return { setup: p, style: st && settleThemes.has(st) ? st : undefined }
 }
 
-// —— 存档：本机记着最近一局（开局参数、生长状态、驱动） ——
+// —— 存档：本机记着最近一局（生长状态、驱动）；开局的参数从状态里读 ——
 interface Save {
   v: number
-  setup: GrowSetup
   state: GrowState
   driver: GrowDriver
 }
 function loadSave(): Save | null {
   try {
     const s = JSON.parse(storeGet('growSave') ?? 'null') as Save | null
-    if (!s || s.v !== GROW_VERSION || s.state?.v !== GROW_VERSION || !cultures.has(s.state.terrain.culture)) return null
-    // 旧存档没有记开局参数：从状态推出来
-    const g = s.state
-    s.setup ??= { seed: g.seed, culture: g.terrain.culture, river: g.terrain.river, coast: g.terrain.coast, hills: g.terrain.hills, relief: g.terrain.relief, size: g.size[0], start: 'village' }
+    // 旧版本存下的、不带规划的一局（沿路一块块摆的那种）不再接着来
+    if (!s || s.v !== GROW_VERSION || s.state?.v !== GROW_VERSION || !s.state.plan || !cultures.has(s.state.terrain.culture)) return null
     return s
   } catch {
     return null
@@ -115,16 +121,12 @@ const fromUrl = (() => {
 })()
 const saved = loadSave()
 /** 地址里的参数与存档的一局相同就接着存档来，否则按参数开一局新的 */
-const first: Save = (() => {
-  if (saved && (!fromUrl || sameSetup(fromUrl.setup, saved.setup))) return saved
-  const setup = fromUrl?.setup ?? DEFAULT_SETUP
-  return { v: GROW_VERSION, setup, state: newGame(setup), driver: newDriver() }
-})()
+const first: Save = saved && (!fromUrl || sameSetup(fromUrl.setup, setupOf(saved.state))) ? saved : { v: GROW_VERSION, state: newGame(fromUrl?.setup ?? DEFAULT_SETUP), driver: newDriver() }
 
 export type GrowTab = 'grow' | 'land' | 'stats'
-/** 点选、道路、建筑、分区、地形、拆除 */
-export type GrowTool = 'look' | 'road' | 'build' | 'zone' | 'terrain' | 'erase'
-export type GrowSel = { kind: 'lot' | 'road' | 'zone'; id: number } | null
+/** 点选、道路、建筑、地形、拆除 */
+export type GrowTool = 'look' | 'road' | 'build' | 'terrain' | 'erase'
+export type GrowSel = { kind: 'lot' | 'road'; id: number } | null
 
 /** 用途的名称、颜色（面板、舞台共用） */
 export const USE_NAME: Record<string, string> = { center: '村心', home: '住处', shop: '铺子', public: '公所', yard: '料场', field: '田' }
@@ -135,7 +137,6 @@ export const BRUSH_COLOR: Record<GrowBrush, string> = { raise: '#8a6a3c', lower:
 /** 各工具的子选项（工具栏上面的一行；数字键 1 ~ 9 选） */
 export const ROAD_KINDS: GrowRoadKind[] = ['highway', 'street', 'lane']
 export const BUILD_USES = ['home', 'field', 'shop', 'yard', 'public', 'center']
-export const ZONE_USES = ['home', 'field', 'shop', 'yard', 'public']
 export const BRUSHES: GrowBrush[] = ['raise', 'lower', 'flat', 'water', 'land']
 export const BRUSH_R = { min: 10, max: 150, step: 5 }
 
@@ -154,10 +155,8 @@ const FAULT: Record<GrowFault, string> = {
 
 export const gs = reactive({
   tab: (['grow', 'land', 'stats'].includes(storeGet('growTab') ?? '') ? storeGet('growTab') : 'grow') as GrowTab,
-  /** 面板上的开局参数（与 applied 不同即有待重开的改动） */
-  setup: { ...first.setup } as GrowSetup,
-  /** 当前这一局开局时的参数 */
-  applied: { ...first.setup } as GrowSetup,
+  /** 面板上的开局参数（与当前这一局的不同即有待重开的改动） */
+  setup: setupOf(first.state) as GrowSetup,
   style: fromUrl?.style ?? stored('growStyle', settleThemes, startNotices),
   /** 当前这一局（markRaw：状态是不可变的大对象，整个替换） */
   state: markRaw(first.state) as GrowState,
@@ -168,20 +167,17 @@ export const gs = reactive({
   tool: 'look' as GrowTool,
   roadKind: 'street' as GrowRoadKind,
   buildUse: 'home',
-  zoneUse: 'home',
-  /** 划完分区马上沿路盖满（关掉就只是规划：留给自动生长） */
-  zoneFill: storeGet('growZoneFill') !== '0',
   brush: 'raise' as GrowBrush,
   /** 笔刷半径（米） */
   brushR: Number(storeGet('growBrushR')) || 40,
-  /** 一下一下点出来的路或分区的顶点（米） */
+  /** 一下一下点出来的路的顶点（米） */
   draft: [] as GrowP[],
-  /** 按住拖动中的一笔：路的走线、分区框的两个角、地形笔画（米） */
+  /** 按住拖动中的一笔：路的走线、地形笔画（米） */
   free: null as GrowP[] | null,
   /** 指针所在处（米） */
   cursor: null as GrowP | null,
-  /** 路、分区的预览（接到已有的路上之后的样子）：ok 为 false 时画成不行的颜色 */
-  preview: null as { pts: GrowP[]; ok: boolean; closed: boolean } | null,
+  /** 路的预览（接到已有的路上之后的样子）：ok 为 false 时画成不行的颜色 */
+  preview: null as { pts: GrowP[]; ok: boolean } | null,
   /** 建筑工具下指针处会摆出来的地块 */
   ghost: null as { poly: GrowP[]; ok: boolean } | null,
   /** 画路时指针吸到的已有的路上的点（画一个圈） */
@@ -194,14 +190,16 @@ export const gs = reactive({
   /** 舞台上的一行说明：拒绝的原因、摆不下…… */
   msg: '',
   notices: startNotices,
-  /** 地图在舞台上的位置（叠加层跟着它）：米 → 页面 = M + 米·S；页面 → 舞台 = x + 页面·k */
-  paper: { x: 0, y: 0, k: 1, M: 0, S: 1 },
+  /** 地图在舞台上的位置（叠加层跟着它）：米 → 页面 = M + 米·S；页面 → 舞台 = x + 页面·k；frame 是露出地图的图框内框 */
+  paper: { x: 0, y: 0, k: 1, M: 0, S: 1, frame: { x: 0, y: 0, w: 0, h: 0 } },
+  /** 规划正在后台线程里算（算好之前不画、不长、不让动手） */
+  loading: false,
   /** 能撤销、重做几步 */
   undoCount: 0,
   redoCount: 0,
 })
 
-export const dirty = computed(() => !sameSetup(gs.setup, gs.applied))
+export const dirty = computed(() => !sameSetup(gs.setup, setupOf(gs.state)))
 
 export function setTab(tab: GrowTab) {
   gs.tab = tab
@@ -209,11 +207,11 @@ export function setTab(tab: GrowTab) {
 }
 
 // —— 撤销、重做：每次手动操作（一个手势算一次）、单步、一段播放之前记一份 ——
-type Snap = { state: GrowState; driver: GrowDriver; applied: GrowSetup }
+type Snap = { state: GrowState; driver: GrowDriver }
 const undoStack: Snap[] = []
 const redoStack: Snap[] = []
 const UNDO_MAX = 200
-const snap = (): Snap => ({ state: gs.state, driver: gs.driver, applied: { ...gs.applied } })
+const snap = (): Snap => ({ state: gs.state, driver: gs.driver })
 function checkpoint() {
   undoStack.push(snap())
   if (undoStack.length > UNDO_MAX) undoStack.shift()
@@ -222,6 +220,7 @@ function checkpoint() {
   gs.redoCount = 0
 }
 function restore(from: Snap[], to: Snap[]) {
+  if (gs.loading) return
   const u = from.pop()
   if (!u) return
   pause()
@@ -229,11 +228,14 @@ function restore(from: Snap[], to: Snap[]) {
   to.push(snap())
   gs.undoCount = undoStack.length
   gs.redoCount = redoStack.length
-  const resized = u.state.size[0] !== gs.state.size[0]
-  gs.applied = u.applied
+  const other = !sameSetup(setupOf(u.state), setupOf(gs.state))
   commit(u.state, u.driver)
-  syncRoute('grow')
-  if (resized) requestAnimationFrame(fitView)
+  if (other) {
+    // 回到了另一局（重新开局之前的）：面板、地址、视图跟着换
+    Object.assign(gs.setup, setupOf(u.state))
+    syncRoute('grow')
+    requestAnimationFrame(fitView)
+  }
 }
 export const undo = () => restore(undoStack, redoStack)
 export const redo = () => restore(redoStack, undoStack)
@@ -252,7 +254,7 @@ let saveTimer = 0
 function persist() {
   clearTimeout(saveTimer)
   saveTimer = window.setTimeout(() => {
-    const s: Save = { v: GROW_VERSION, setup: gs.applied, state: gs.state, driver: gs.driver }
+    const s: Save = { v: GROW_VERSION, state: gs.state, driver: gs.driver }
     try {
       storeSet('growSave', JSON.stringify(s))
     } catch {
@@ -263,13 +265,13 @@ function persist() {
 
 // —— 开局、种子 ——
 export function restart() {
+  if (gs.loading) return
   pause()
-  checkpoint()
   cancelDraft()
   gs.sel = null
   gs.msg = ''
-  gs.applied = { ...gs.setup }
-  commit(newGame(gs.applied), newDriver())
+  checkpoint()
+  commit(newGame({ ...gs.setup }), newDriver())
   syncRoute('grow')
   requestAnimationFrame(fitView)
 }
@@ -279,24 +281,29 @@ export function randomSeed() {
   gs.setup.seed = syllableSeed(SYL)
   restart()
 }
-/** 一张白纸：没有河、海、山的平地，什么都没有，直接拿起道路工具 */
+/** 一张白纸：没有河、海、山的平地，直接拿起道路工具 */
 export function blankSlate() {
-  Object.assign(gs.setup, { river: false, coast: false, hills: false, relief: 0, start: 'blank' })
+  Object.assign(gs.setup, { river: false, coast: false, hills: false, relief: 0 })
   restart()
   setTool('road')
 }
 
-// —— 自动生长 ——
-const noRoom = (use: string) => (gs.state.roads.length ? t('摆不下：{what}', { what: t(USE_NAME[use] ?? use) }) : t('还没有路：先用「道路」画一条'))
-/** 走一步需求序列；摆不下时在舞台上说一声 */
+// —— 生长 ——
+const noRoom = () => t('规划的规模住满了：在「开局」里选大一档的规模重新开局')
+/** 走一步需求序列；住满了在舞台上说一声 */
 function stepOnce() {
   const r = advance(gs.state, gs.driver)
-  if (r.failed && r.op.kind === 'place') gs.msg = noRoom(r.op.req.use)
+  if (r.failed && r.op.kind === 'place' && r.op.req.use !== 'field') {
+    gs.msg = noRoom()
+    // 再播也不会长
+    gs.playing = false
+  }
   gs.state = markRaw(r.state)
   gs.driver = r.driver
 }
 export function step() {
   pause()
+  if (gs.loading) return
   checkpoint()
   stepOnce()
   commit(gs.state)
@@ -305,8 +312,14 @@ export function step() {
 let raf = 0
 let last = 0
 let due = 0
+const FRAME_STEPS = 24
+/** 播放时画面隔多久换一次（毫秒） */
+const DRAW_EVERY = 50
+let drawAt = 0
+/** 播放速度的几档（步 / 秒） */
+export const SPEEDS = [2, 8, 30, 120]
 export function play() {
-  if (gs.playing) return
+  if (gs.playing || gs.loading) return
   checkpoint()
   cancelDraft()
   gs.playing = true
@@ -316,37 +329,37 @@ export function play() {
   raf = requestAnimationFrame(frame)
 }
 export function pause() {
+  if (!gs.playing) return
   gs.playing = false
   cancelAnimationFrame(raf)
+  // 停下时画到这一刻（播放时画面、图题是隔一会儿才换的），存档
+  draw()
+  persist()
 }
 export const toggle = () => (gs.playing ? pause() : play())
 function frame(now: number) {
   if (!gs.playing) return
   due += ((now - last) / 1000) * gs.speed
   last = now
-  // 一帧最多走 8 步，免得慢机器上越积越多
-  const n = Math.min(8, Math.floor(due))
+  // 一帧最多走 FRAME_STEPS 步，免得慢机器上越积越多
+  const n = Math.min(FRAME_STEPS, Math.floor(due))
   due -= n
   if (n > 0) {
-    for (let i = 0; i < n; i++) stepOnce()
-    commit(gs.state)
+    for (let i = 0; i < n && gs.playing; i++) stepOnce()
+    // 步子照走，画面隔 DRAW_EVERY 毫秒换一次：中间的几帧留给拖动、缩放；住满停下时照常画
+    if (!gs.playing || now - drawAt >= DRAW_EVERY) {
+      drawAt = now
+      commit(gs.state)
+    }
   }
-  raf = requestAnimationFrame(frame)
+  if (gs.playing) raf = requestAnimationFrame(frame)
 }
 export function setSpeed(v: number) {
   gs.speed = v
   storeSet('growSpeed', String(v))
 }
 
-/** 在建的全部盖好 */
-export function finishBuilding() {
-  if (!gs.driver.pending.length) return
-  checkpoint()
-  const r = finishAll(gs.state, gs.driver)
-  commit(r.state, r.driver)
-}
-
-/** 交给引擎挑地方摆一种需求（不走需求序列；和序列里的同样先在建、过几步盖好） */
+/** 交给引擎按规划摆一种需求（不走需求序列） */
 export const MANUAL: { use: string; count: number }[] = [
   { use: 'home', count: 1 },
   { use: 'field', count: 4 },
@@ -356,12 +369,12 @@ export const MANUAL: { use: string; count: number }[] = [
 ]
 export function addDemand(use: string) {
   const m = MANUAL.find((x) => x.use === use)
-  if (!m) return
+  if (!m || gs.loading) return
   pause()
   checkpoint()
   const op: GrowOp = { kind: 'place', req: { use, area: 1, owner: `hand${gs.state.nextId}`, ...(m.count > 1 ? { count: m.count } : {}) } }
   const r = runOp(gs.state, gs.driver, op)
-  gs.msg = r.failed ? noRoom(use) : ''
+  gs.msg = r.failed ? (use === 'field' ? t('眼下没有空着的田') : noRoom()) : ''
   commit(r.state, r.driver)
   if (r.lots.length) gs.sel = { kind: 'lot', id: r.lots[0].id }
 }
@@ -374,23 +387,14 @@ function find(sel: GrowSel) {
     const l = s.lots.find((x) => x.id === sel.id)
     return l && l.state !== 'vacant' ? { kind: 'lot' as const, lot: l } : null
   }
-  if (sel.kind === 'road') {
-    const r = s.roads.find((x) => x.id === sel.id)
-    return r ? { kind: 'road' as const, road: r } : null
-  }
-  const z = s.zones.find((x) => x.id === sel.id)
-  return z ? { kind: 'zone' as const, zone: z } : null
+  const r = s.roads.find((x) => x.id === sel.id)
+  return r ? { kind: 'road' as const, road: r } : null
 }
 export const selected = () => find(gs.sel)
 export const hovered = () => find(gs.hot)
-export function buildSel() {
-  const x = selected()
-  if (x?.kind !== 'lot' || x.lot.state !== 'building') return
-  checkpoint()
-  const d = { ...gs.driver, pending: gs.driver.pending.filter((p) => p.id !== x.lot.id) }
-  commit(setState(gs.state, x.lot.id, 'built'), d)
-}
-/** 拆掉选中的地块、路（连同临街的地块）、分区 */
+/** 这条路是规划里的（不能拆） */
+export const planned = (roadId: number) => roadId >= WAY_ID
+/** 拆掉选中的：手动的地块、手动的路（连同临街的地块）拆掉；规划的地块退掉（空出来，以后的需求接着用） */
 export function removeSel() {
   if (gs.sel) remove(gs.sel, true)
 }
@@ -399,10 +403,15 @@ function remove(x: NonNullable<GrowSel>, mark: boolean): boolean {
   const s = gs.state
   let next: GrowState
   let msg = ''
-  if (x.kind === 'lot') next = removeLot(s, x.id)
-  else if (x.kind === 'zone') next = unzone(s, x.id)
-  else {
-    const n = s.lots.filter((l) => l.road === x.id && l.state !== 'vacant').length
+  if (x.kind === 'lot') {
+    const lot = s.lots.find((l) => l.id === x.id)
+    next = lot?.ref !== undefined ? release(s, x.id) : removeLot(s, x.id)
+  } else {
+    if (planned(x.id)) {
+      gs.msg = t('规划的路不能拆')
+      return false
+    }
+    const n = s.lots.filter((l) => l.road === x.id && l.ref === undefined && l.state !== 'vacant').length
     const r = removeRoad(s, x.id, { lots: true })
     if ('error' in r) return false
     next = r.state
@@ -431,7 +440,6 @@ export function setBrushR(r: number) {
 export function pickOption(i: number) {
   if (gs.tool === 'road' && ROAD_KINDS[i]) gs.roadKind = ROAD_KINDS[i]
   else if (gs.tool === 'build' && BUILD_USES[i]) gs.buildUse = BUILD_USES[i]
-  else if (gs.tool === 'zone' && ZONE_USES[i]) gs.zoneUse = ZONE_USES[i]
   else if (gs.tool === 'terrain' && BRUSHES[i]) gs.brush = BRUSHES[i]
   refreshHover()
 }
@@ -448,7 +456,7 @@ export function cancelDraft() {
 const HIT_PX = 8
 const pxToM = (px: number) => px / (gs.paper.S * gs.paper.k)
 const near = (a: GrowP, b: GrowP, px = HIT_PX) => Math.hypot(a[0] - b[0], a[1] - b[1]) < pxToM(px)
-const cm = (p: GrowP): GrowP => [Math.round(p[0] * 100) / 100, Math.round(p[1] * 100) / 100]
+const cmP = (p: GrowP): GrowP => [cm(p[0]), cm(p[1])]
 function roadAt(p: GrowP) {
   let best: { id: number; d: number } | null = null
   for (const r of gs.state.roads) {
@@ -459,38 +467,16 @@ function roadAt(p: GrowP) {
   }
   return best?.id
 }
-/** 指针下的东西：地块、路、分区（先上后下） */
+/** 指针下的东西：地块、路（先上后下） */
 function hitAt(p: GrowP): GrowSel {
   const lot = lotAtPoint(gs.state, p)
   if (lot) return { kind: 'lot', id: lot.id }
   const road = roadAt(p)
-  if (road !== undefined) return { kind: 'road', id: road }
-  const z = zoneAtPoint(gs.state, p)
-  return z ? { kind: 'zone', id: z.id } : null
+  return road !== undefined ? { kind: 'road', id: road } : null
 }
 
-/** 道格拉斯–普克简化（保留首尾） */
-function simplify(pts: GrowP[], tol: number): GrowP[] {
-  if (pts.length < 3) return pts
-  let far = -1
-  let at = 0
-  for (let k = 1; k + 1 < pts.length; k++) {
-    const d = segDist(pts[k], pts[0], pts[pts.length - 1]).d
-    if (d > far) {
-      far = d
-      at = k
-    }
-  }
-  if (far <= tol) return [pts[0], pts[pts.length - 1]]
-  return [...simplify(pts.slice(0, at + 1), tol).slice(0, -1), ...simplify(pts.slice(at), tol)]
-}
-const lengthOf = (pts: GrowP[]) => pts.slice(1).reduce((a, q, i) => a + Math.hypot(q[0] - pts[i][0], q[1] - pts[i][1]), 0)
 /** 随手画的走线 → 路的中线：简化到 2 米，拐弯处抹圆 */
-const roadLine = (pts: GrowP[]): GrowP[] => {
-  const s = simplify(pts, 2)
-  return s.length > 2 ? (chaikin(s as P[], 2) as GrowP[]) : s
-}
-const rectOf = (a: GrowP, b: GrowP): GrowP[] => [a, [b[0], a[1]], b, [a[0], b[1]]]
+const roadLine = (pts: GrowP[]): GrowP[] => chaikin(simplify(pts, 2) as P[], 2) as GrowP[]
 
 // —— 道路 ——
 /** 吸附的范围（屏幕像素）：路的端头、路身；折成米以后不小于引擎自己的 8 米 */
@@ -524,7 +510,7 @@ function snapToRoad(p: GrowP): GrowP | null {
       bd = d
       const q: GrowP = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
       const end = [r.pts[0], r.pts[r.pts.length - 1]].find((e) => Math.hypot(q[0] - e[0], q[1] - e[1]) < SNAP_M)
-      best = end ? [end[0], end[1]] : cm(q)
+      best = end ? [end[0], end[1]] : cmP(q)
     }
   return best
 }
@@ -542,11 +528,11 @@ function previewRoad(pts: GrowP[]) {
   }
   const r = addRoad(gs.state, pts, gs.roadKind, { bridge: true })
   if ('error' in r) {
-    gs.preview = { pts, ok: r.fault === 'short', closed: false }
+    gs.preview = { pts, ok: r.fault === 'short' }
     gs.tip = r.fault === 'short' ? null : { text: t(FAULT[r.fault]), bad: true }
   } else {
-    gs.preview = { pts: r.road.pts, ok: true, closed: false }
-    gs.tip = { text: `${Math.round(lengthOf(r.road.pts))} m`, bad: false }
+    gs.preview = { pts: r.road.pts, ok: true }
+    gs.tip = { text: `${Math.round(polylineLength(r.road.pts))} m`, bad: false }
   }
 }
 function commitRoad(pts: GrowP[]) {
@@ -559,78 +545,12 @@ function commitRoad(pts: GrowP[]) {
   }
   checkpoint()
   gs.msg = ''
-  commit(r.state)
+  // 路压到的规划的住户当场挪走
+  commit(settleNatural(r.state))
 }
-// —— 分区 ——
-/** 一片分区一次最多盖多少块 */
-const FILL_MAX = 200
-/** 分区往外放多少米再盖：随手划的框差一点没盖住临街那排地块的中心时，那一排也算在分区里（半块地多一点） */
-const FILL_MARGIN = 12
-/** 多边形每条边往外推 d 米（顶点沿相邻两边外法线的合方向挪；很尖的角不无限伸出去） */
-function inflate(poly: GrowP[], d: number): GrowP[] {
-  const n = poly.length
-  let area = 0
-  for (let i = 0; i < n; i++) area += poly[i][0] * poly[(i + 1) % n][1] - poly[(i + 1) % n][0] * poly[i][1]
-  const sign = area >= 0 ? 1 : -1
-  const normal = (a: GrowP, b: GrowP): GrowP => {
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
-    return [((b[1] - a[1]) / L) * sign, (-(b[0] - a[0]) / L) * sign]
-  }
-  return poly.map((q, i) => {
-    const n1 = normal(poly[(i + n - 1) % n], q)
-    const n2 = normal(q, poly[(i + 1) % n])
-    const k = d / Math.max(0.35, 1 + n1[0] * n2[0] + n1[1] * n2[1])
-    return [q[0] + (n1[0] + n2[0]) * k, q[1] + (n1[1] + n2[1]) * k]
-  })
-}
-/**
- * 把一片分区盖满：一块一块地交给引擎摆这种用途（引擎优先摆进相符的分区，路不够时自己往里延），
- * 摆到分区外面去了、或者摆不下了为止。盖的时候分区按往外放 FILL_MARGIN 米算，盖完还是原来的范围。返回新的状态和盖了几块
- */
-function fillZone(s: GrowState, z: GrowZone): { state: GrowState; n: number } {
-  const wide: GrowZone = { ...z, poly: inflate(z.poly, FILL_MARGIN) }
-  const swap = (st: GrowState, to: GrowZone): GrowState => ({ ...st, zones: st.zones.map((q) => (q.id === z.id ? to : q)) })
-  let cur = swap(s, wide)
-  let n = 0
-  for (; n < FILL_MAX; n++) {
-    const got = place(cur, { use: z.use, area: 1 }, placeSalt(cur))
-    if (!got || !pointInPoly(lotCenter(got.lots[0]), wide.poly)) break
-    cur = got.state
-  }
-  return { state: swap(cur, z), n }
-}
-const fillMsg = (n: number) => (n ? '' : t(gs.state.roads.length ? '这片分区里摆不下：把路通到分区边上再试' : '还没有路：先用「道路」画一条'))
-function commitZone(poly: GrowP[]) {
-  cancelDraft()
-  if (poly.length < 3) return
-  const r = zone(gs.state, poly, gs.zoneUse)
-  if ('error' in r) {
-    gs.msg = t(FAULT.edge)
-    return
-  }
-  checkpoint()
-  const filled = gs.zoneFill ? fillZone(r.state, r.zone) : null
-  gs.msg = filled ? fillMsg(filled.n) : ''
-  commit(filled?.state ?? r.state)
-}
-/** 把选中的分区盖满 */
-export function fillSel() {
-  const x = selected()
-  if (x?.kind !== 'zone') return
-  const r = fillZone(gs.state, x.zone)
-  gs.msg = fillMsg(r.n)
-  if (!r.n) return
-  checkpoint()
-  commit(r.state)
-}
-export function setZoneFill(on: boolean) {
-  gs.zoneFill = on
-  storeSet('growZoneFill', on ? '1' : '0')
-}
-/** 画完一下一下点出来的路或分区（回车、再点一下最后一个点） */
+/** 画完一下一下点出来的路（回车、再点一下最后一个点） */
 export function finishDraft() {
   if (gs.tool === 'road' && gs.draft.length >= 2) commitRoad(gs.draft.slice())
-  else if (gs.tool === 'zone' && gs.draft.length >= 3) commitZone(gs.draft.slice())
 }
 // —— 建筑 ——
 function probe(p: GrowP) {
@@ -660,15 +580,21 @@ function build(p: GrowP, strict: boolean, g: Gesture) {
   if ('error' in r) return
   mark(g)
   gs.msg = ''
-  commit(r.state)
+  commit(settleNatural(r.state))
   probe(p)
 }
 // —— 地形 ——
-function commitStroke(pts: GrowP[], g: Gesture) {
-  const r = paintTerrain(gs.state, { tool: gs.brush, r: gs.brushR, pts: simplify(pts.map(cm), Math.max(1, gs.brushR / 12)) })
-  mark(g)
-  gs.msg = r.flooded ? t('水漫掉了 {n} 块地（Ctrl+Z 撤销）', { n: r.flooded }) : ''
-  commit(r.state)
+/** 画完一笔：地形变了，规划要按新的地形重算——等改完地形的那个状态的规划算好（见 withPlan），再落这一笔 */
+function commitStroke(pts: GrowP[]) {
+  const base = gs.state
+  const stroke: GrowStroke = { tool: gs.brush, r: gs.brushR, pts: simplify(pts.map(cmP), Math.max(1, gs.brushR / 12)) }
+  withPlan(withStroke(base, stroke), () => {
+    if (gs.state !== base) return
+    const r = paintTerrain(base, stroke)
+    checkpoint()
+    gs.msg = r.flooded ? t('水漫掉了 {n} 块地（Ctrl+Z 撤销）', { n: r.flooded }) : ''
+    commit(r.state)
+  })
 }
 
 // —— 指针手势 ——
@@ -692,12 +618,12 @@ function toolDown(p: GrowP, g: Gesture) {
   else if (gs.tool === 'erase') {
     const h = hitAt(p)
     if (h && remove(h, !g.marked)) g.marked = true
-  } else if (!gs.draft.length) gs.free = [gs.tool === 'road' ? snapped(p) : p]
+  } else if (gs.tool === 'road' && !gs.draft.length) gs.free = [snapped(p)]
 }
 function toolDrag(p: GrowP, g: Gesture) {
   if (gs.tool === 'build') build(p, true, g)
   else if (gs.tool === 'erase') {
-    // 按住拖着拆：只拆地块（路和分区要点一下才拆，免得一拖带走一片）
+    // 按住拖着拆：只拆地块（路要点一下才拆，免得一拖带走一片）
     const lot = lotAtPoint(gs.state, p)
     if (lot && remove({ kind: 'lot', id: lot.id }, !g.marked)) g.marked = true
   } else if (gs.tool === 'terrain' && gs.free) {
@@ -708,31 +634,22 @@ function toolDrag(p: GrowP, g: Gesture) {
     const end = snapToRoad(p)
     gs.snap = end
     previewRoad(roadLine(end ? [...gs.free, end] : gs.free))
-  } else if (gs.tool === 'zone' && gs.free) {
-    gs.free = [gs.free[0], p]
-    gs.preview = { pts: rectOf(gs.free[0], p), ok: true, closed: true }
   }
 }
 function toolUp(p: GrowP, g: Gesture) {
   const free = gs.free
   gs.free = null
   if (gs.tool === 'terrain') {
-    if (free) commitStroke(free, g)
+    if (free) commitStroke(free)
     return
   }
-  if (gs.tool !== 'road' && gs.tool !== 'zone') return
-  // 拖出来的一笔：路的走线、分区的框
-  if (g.moved && free && !gs.draft.length) {
-    if (gs.tool === 'road') commitRoad(roadLine([...free, snapToRoad(p) ?? p]).map(cm))
-    else if (Math.abs(p[0] - free[0][0]) > 8 && Math.abs(p[1] - free[0][1]) > 8) commitZone(rectOf(cm(free[0]), cm(p)))
-    else cancelDraft()
-    return
-  }
-  // 点一下：加一个顶点；路再点一下最后一个点就铺，分区点回第一个点就划
+  if (gs.tool !== 'road') return
+  // 拖出来的一笔：路的走线
+  if (g.moved && free && !gs.draft.length) return commitRoad(roadLine([...free, snapToRoad(p) ?? p]).map(cmP))
+  // 点一下：加一个顶点；再点一下最后一个点就铺
   const d = gs.draft
-  if (gs.tool === 'road' && d.length >= 2 && near(p, d[d.length - 1])) return finishDraft()
-  if (gs.tool === 'zone' && d.length >= 3 && near(p, d[0])) return finishDraft()
-  gs.draft = [...d, cm(gs.tool === 'road' ? snapped(p) : p)]
+  if (d.length >= 2 && near(p, d[d.length - 1])) return finishDraft()
+  gs.draft = [...d, cmP(snapped(p))]
   toolHover(p)
 }
 /** 没按着的时候指针挪动：各工具的预览 */
@@ -746,8 +663,6 @@ function toolHover(p: GrowP) {
   else if (gs.tool === 'road') {
     const q = snapped(p)
     if (gs.draft.length) previewRoad([...gs.draft, q])
-  } else if (gs.tool === 'zone') {
-    gs.preview = gs.draft.length ? { pts: [...gs.draft, p], ok: true, closed: true } : null
   }
 }
 /** 换了子选项之后按指针现在的位置重算预览 */
@@ -761,56 +676,116 @@ let host: HTMLElement | null = null
 let shown: DisplayList | null = null
 const view = { x: 0, y: 0, k: 1 }
 const measurer = document.createElement('canvas').getContext('2d')!
+const chromeMeasurer = document.createElement('canvas').getContext('2d')!
+/** 图框内框离舞台边的距离：底边让出工具栏 */
+const frameInset = (w: number, h: number) => {
+  // 类型上它可以是固定的边距或函数（实际是函数）
+  const base = typeof SETTLE_FRAME_INSET === 'function' ? SETTLE_FRAME_INSET(w, h) : SETTLE_FRAME_INSET
+  return { ...base, t: base.t - 14, b: w < 720 ? 150 : 196 }
+}
 
 /** 这一局画成的聚落里的人口、住户（面板上的读数） */
 export const picture = reactive({ population: 0, households: 0 })
 
+/**
+ * 等 s 的规划算好再做 then：算好了当场做；没算好就放到后台线程里算（一到几秒，界面照常响应，期间 gs.loading 挡住各种操作），
+ * 算完再做。线程起不来、出错也照做（引擎用到规划时会当场算）。已经有一份在算时什么也不做（那一份算完会重画）
+ */
+function withPlan(s: GrowState, then: () => void) {
+  if (naturalReady(s)) return then()
+  if (gs.loading) return
+  gs.loading = true
+  pause()
+  const done = () => {
+    gs.loading = false
+    then()
+  }
+  planInWorker(naturalParams(s)).then((hist) => {
+    primeNatural(s, hist)
+    done()
+  }, done)
+}
+
 function draw() {
   if (!host || app.module !== 'grow') return
   const s = gs.state
+  // 规划算好了再画；等的时候状态换了（不该有：等的时候各种操作都挡着）就按新的再来
+  withPlan(s, () => (gs.state === s ? render(s) : draw()))
+}
+function render(s: GrowState) {
+  if (!host) return
   const st = toSettlement(s, { fieldKind: cultures.get(s.terrain.culture).traits.paddy ? 'paddy' : 'crop' })
   picture.population = st.stats.population
   picture.households = st.stats.households
-  const list = buildSettlementVector(st, gs.style, { labels: false, contours: true, lang }, measurer)
-  if (!viewer) viewer = markRaw(new AtlasViewer(host))
-  const fresh = !shown
+  const key = `${gs.style}|${lang}`
+  // 画面没变（没到规划的下一刻、手动的东西也没动：toSettlement 给的是同一个对象）：不用重画
+  if (drawn && drawn.st === st && drawn.key === key) {
+    // 图题里的人口播放时隔一会儿才换：停下了补上这一刻的
+    if (!gs.playing && chromeStale) setChrome(st)
+    return
+  }
+  // 注记（地名、片区名）用的字体到齐以后再画一遍
+  wantFonts(st)
+  const list = buildSettlementVector(st, gs.style, { labels: true, contours: true, lang }, measurer)
+  // 底图切成格子：每一步只重画变了的那几格（见 AtlasViewer.patchList）
+  if (!viewer) viewer = markRaw(new AtlasViewer(host, { cell: 256 }))
+  const fresh = !shown || shown.width !== list.width || shown.height !== list.height
+  const S = list.MW / st.width
+  // 和上一张只差几处（成长的一步、摆了一块地）：底图只重画变了的那几块，不整张重画（整张要几百毫秒，期间拖动、缩放都卡住）
+  const dirty = !fresh && drawn && drawn.key === key ? changedBoxes(drawn.st, st) : null
+  // 图廓（纸边、图框、图题、指北针、比例尺）固定在舞台上，缩放只动图框里的地图；图题里的人口播放时隔一会儿才换一次
+  const now = performance.now()
+  if (!dirty || !gs.playing || now - chromeAt > CHROME_EVERY) {
+    chromeAt = now
+    setChrome(st)
+  } else chromeStale = true
+  if (dirty) {
+    const was = drawn!.st
+    // 注记层只在注记、地标（带符号的）变了时重画
+    const same = (a: object[], b: object[]) => a.length === b.length && a.every((x, i) => x === b[i])
+    viewer.patchList(list, dirty.map(([x0, y0, x1, y1]) => [list.M + x0 * S, list.M + y0 * S, list.M + x1 * S, list.M + y1 * S] as const), !same(was.labels, st.labels) || !same(was.landmarks, st.landmarks))
+  }
+  else viewer.setList(list)
   shown = list
-  viewer.setList(list)
+  drawn = { st, key }
   gs.paper.M = list.M
-  gs.paper.S = list.MW / st.width
+  gs.paper.S = S
   if (fresh) fitView()
   else applyView()
+}
+/** 上一次画的那张地图（下一次只重画和它不同的地方） */
+let drawn: { st: Settlement; key: string } | null = null
+/** 图廓上的图题还是早先那一刻的（播放时隔一会儿才换） */
+let chromeStale = false
+function setChrome(st: Settlement) {
+  chromeStale = false
+  const style = gs.style
+  viewer!.setChrome((w, h, box, k) => buildSettlementChrome(st, style, { labels: true, contours: true, ornaments: true, lang }, chromeMeasurer, w, h, box, k, null), settleBackdrop(style), frameInset)
+}
+/** 播放时图廓（图题里的人口）隔多久换一次（毫秒） */
+const CHROME_EVERY = 500
+let chromeAt = 0
+
+/** 已经要过字体的（风格、语言、注记的条数）：注记多了可能要新的字 */
+let fontKey = ''
+function wantFonts(st: Settlement) {
+  const key = `${gs.style}|${lang}|${st.labels.length}`
+  if (key === fontKey) return
+  fontKey = key
+  void mapFontsReady()
+    .then(() => ensureSettleFonts(st, gs.style, lang, 3000))
+    .then((f) => (f.ready ? undefined : f.later))
+    .then(() => key === fontKey && draw())
 }
 
 function applyView() {
   viewer?.setView(view.x, view.y, view.k)
-  Object.assign(gs.paper, { x: view.x, y: view.y, k: view.k })
+  Object.assign(gs.paper, { x: view.x, y: view.y, k: view.k, frame: viewer?.frame() ?? gs.paper.frame })
 }
-/** 适配视图：对准村子（地块的范围外扩 150 米，至少 500 米见方，不超过画幅）；没有地块时看整张图 */
+/** 适配视图：整张图放进图框（田野、林子都是画面） */
 export function fitView() {
   if (!shown || !viewer) return
   fitInto(view, viewer.inner(), shown)
-  const lots = gs.state.lots.filter((l) => l.state !== 'vacant')
-  if (lots.length) {
-    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity]
-    for (const l of lots)
-      for (const [x, y] of l.poly) {
-        x0 = Math.min(x0, x)
-        y0 = Math.min(y0, y)
-        x1 = Math.max(x1, x)
-        y1 = Math.max(y1, y)
-      }
-    const [W, H] = gs.state.size
-    const half = Math.min(W / 2, H / 2, Math.max(250, (x1 - x0) / 2 + 150, (y1 - y0) / 2 + 150))
-    const cx = Math.min(W - half, Math.max(half, (x0 + x1) / 2))
-    const cy = Math.min(H - half, Math.max(half, (y0 + y1) / 2))
-    const f = viewer.inner()
-    const { M, S } = gs.paper
-    const k = Math.max(view.k, Math.min(f.w, f.h) / (2 * half * S))
-    view.k = k
-    view.x = f.x + f.w / 2 - (M + cx * S) * k
-    view.y = f.y + f.h / 2 - (M + cy * S) * k
-  }
   applyView()
 }
 
@@ -845,11 +820,13 @@ export function mountGrow(el: HTMLElement) {
     g = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, marked: false }
     const p = toMeters(e.clientX, e.clientY)
     gs.cursor = p
-    if (gs.tool !== 'look') toolDown(p, g)
+    // 规划还在算：先不让动手
+    if (gs.tool !== 'look' && !gs.loading) toolDown(p, g)
   })
   el.addEventListener('pointermove', (e) => {
     const p = toMeters(e.clientX, e.clientY)
     gs.cursor = p
+    if (gs.loading) return
     if (g && g.id === e.pointerId) {
       if (!g.moved && Math.hypot(e.clientX - g.x, e.clientY - g.y) >= 5) g.moved = true
       if (g.moved && gs.tool !== 'look') toolDrag(p, g)
@@ -868,6 +845,7 @@ export function mountGrow(el: HTMLElement) {
     if (!g || g.id !== e.pointerId) return
     const done = g
     g = null
+    if (gs.loading) return abort()
     const p = toMeters(e.clientX, e.clientY)
     if (gs.tool === 'look') {
       if (!done.moved) gs.sel = hitAt(p)
@@ -920,7 +898,7 @@ export function exportState() {
 
 // —— 键盘 ——
 /** 工具的快捷键（工具栏的按钮上标着） */
-export const TOOL_KEYS: Record<GrowTool, string> = { look: 'V', road: 'R', build: 'B', zone: 'Z', terrain: 'T', erase: 'X' }
+export const TOOL_KEYS: Record<GrowTool, string> = { look: 'V', road: 'R', build: 'B', terrain: 'T', erase: 'X' }
 window.addEventListener('keydown', (e) => {
   if (app.module !== 'grow' || isTypingTarget(e)) return
   const key = e.key.toLowerCase()
@@ -955,13 +933,14 @@ window.addEventListener('keydown', (e) => {
 
 // —— 地址：#/grow?seed=... ——
 registerRoute('grow', {
-  query: () => encode(gs.applied, gs.style),
+  query: () => encode(setupOf(gs.state), gs.style),
   apply(q) {
     if (![...q.keys()].length) return
     const d = decode(q, gs.notices)
     if (d.style) gs.style = d.style
-    if (sameSetup(d.setup, gs.applied)) return draw()
-    gs.setup = d.setup
+    if (sameSetup(d.setup, setupOf(gs.state))) return draw()
+    // 原地改（面板拿着 gs.setup 这个对象）
+    Object.assign(gs.setup, d.setup)
     restart()
   },
 })
@@ -970,8 +949,8 @@ registerRoute('grow', {
 export function lotRows(l: GrowLot): [string, string][] {
   return [
     ['用途', t(USE_NAME[l.use] ?? l.use)],
+    ['来历', t(l.ref === undefined ? '手动摆的' : '按规划长的')],
     ['主人', l.owner ?? '—'],
-    ['状态', t(l.state === 'building' ? '在建' : '盖好了')],
-    ['面积', `${l.area * 400} m²`],
+    ['面积', `${l.area * UNIT_W * UNIT_D} m²`],
   ]
 }

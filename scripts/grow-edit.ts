@@ -99,6 +99,23 @@ ok('error' in inWater && inWater.fault === 'water', '路的一头在水里：拒
 const filled = paintTerrain(dug.state, { tool: 'land', r: 30, pts: [[450, 300], [450, 500]] }).state
 ok(terrainOf(filled).waterAt([450, 350]) > 0, '填陆：水面填回陆地')
 
+// 海面只按原地形认：海上先填陆再挖水，接着上一份叠的和从头叠的都还是海
+{
+  const sea = blankState({ ...params, coast: true })
+  const T = terrainOf(sea)
+  let spot: GrowP | null = null
+  for (let y = 40; y < 800 && !spot; y += 20) for (let x = 40; x < 800 && !spot; x += 20) if (T.seaAt([x, y]) && T.waterAt([x, y]) < -40) spot = [x, y]
+  if (spot) {
+    const a1 = paintTerrain(sea, { tool: 'land', r: 20, pts: [spot] }).state
+    const a2 = paintTerrain(a1, { tool: 'water', r: 20, pts: [spot] }).state
+    const step = terrainOf(a2).seaAt(spot)
+    for (let k = 0; k < 8; k++) terrainOf(blankState({ ...params, seed: `evict-sea${k}` }))
+    const whole = terrainOf(JSON.parse(JSON.stringify(a2))).seaAt(spot)
+    ok(!terrainOf(a1).waterAt(spot) || terrainOf(a1).waterAt(spot) > 0, '海上填陆：成了陆地')
+    ok(step === true && whole === true, `海上先填陆再挖水：还是海（接着叠 ${step}，从头叠 ${whole}）`)
+  } else ok(false, '找不到一处海（临海的地形）')
+}
+
 // —— 缓存与存档 ——
 const grids = (st: GrowState) => {
   const t = terrainOf(st).terrain

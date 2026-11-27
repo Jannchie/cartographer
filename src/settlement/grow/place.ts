@@ -2,9 +2,9 @@ import * as dmath from '../../gen/dmath'
 import { hash3, hashString } from '../../gen/rng'
 import { at, bboxOf as bboxOfPts, box, chaikin, convexOverlap, dist, pointInPoly, polylineLength, rot, segPolyDist, segSegDist, unit, type BBox, type Frame } from '../geom'
 import { routeOnTerrain, type TerrainResult } from '../terrain'
-import type { GrowFault, GrowLot, GrowP, GrowParams, GrowRoad, GrowRoadKind, GrowState, GrowTerrain, PlaceReq, PlaceResult } from './api'
+import type { GrowFault, GrowLot, GrowP, GrowParams, GrowRoad, GrowRoadKind, GrowState, PlaceReq, PlaceResult } from './api'
 import {
-  GROW_VERSION, LOT_EDGE, LOT_GAP, LOT_OVERLAP_TOL, ROAD_CLEAR, ROAD_WATER, ROAD_WIDTH, SETBACK, UNIT_D, UNIT_W, checkState, cm, lotCenter, terrainOf, useOf, type UseDef,
+  GROW_VERSION, LOT_EDGE, LOT_GAP, LOT_OVERLAP_TOL, ROAD_CLEAR, ROAD_WATER, ROAD_WIDTH, SETBACK, UNIT_D, UNIT_W, checkState, cm, growTerrain, lotCenter, naturalHook, terrainOf, useOf, type UseDef,
 } from './core'
 
 // 选址与延路（规则见 index.ts 顶上的说明；这里的常量一条一句）。
@@ -72,7 +72,7 @@ interface Cand {
 }
 
 /** 一块候选地的四个角：临街一角 o、沿街 u、进深 n，面宽 w、进深 UNIT_D */
-const quadOf = (c: { o: GrowP; u: GrowP; n: GrowP; w: number }): Quad => box({ o: c.o, f: c.u, l: c.n }, 0, c.w, 0, UNIT_D)
+export const quadOf = (c: { o: GrowP; u: GrowP; n: GrowP; w: number }): Quad => box({ o: c.o, f: c.u, l: c.n }, 0, c.w, 0, UNIT_D)
 /** 外接框，四周再放出 pad 米 */
 const bboxOf = (pts: GrowP[], pad = 0): BBox => {
   const b = bboxOfPts(pts)
@@ -103,7 +103,7 @@ class Bins<T> {
 }
 
 /** 道格拉斯–普克简化（保留首尾） */
-function simplify(pts: GrowP[], tol: number): GrowP[] {
+export function simplify(pts: GrowP[], tol: number): GrowP[] {
   if (pts.length < 3) return pts
   const keep = new Uint8Array(pts.length)
   keep[0] = keep[pts.length - 1] = 1
@@ -255,6 +255,22 @@ export class Work {
     return v - (z > 0 ? ZONE_BONUS : 0) + hash3(Math.round(cx * 2), Math.round(cy * 2), salt) * W_HASH
   }
 
+  /** 验地里地形的那一段：四个角、四边中点、中心离水都不到 WATER_GAP 以内，五点的平均坡度不超过 MAX_SLOPE。合格返回平均坡度 */
+  private ground(q: Quad): number | 'water' | 'slope' {
+    const T = this.T
+    const mid: GrowP = [(q[0][0] + q[2][0]) / 2, (q[0][1] + q[2][1]) / 2]
+    for (let i = 0; i < 4; i++) {
+      const a = q[i]
+      const c = q[(i + 1) % 4]
+      if (T.waterAt(a) < WATER_GAP || T.waterAt([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2]) < WATER_GAP) return 'water'
+    }
+    if (T.waterAt(mid) < WATER_GAP) return 'water'
+    let slope = T.slopeAt(mid)
+    for (const a of q) slope += T.slopeAt(a)
+    slope /= 5
+    return slope > MAX_SLOPE ? 'slope' : slope
+  }
+
   /** 验地：压到路、别的地、路口空当，下水、太陡、出画幅的不要；合格的返回坡度的分 */
   check(q: Quad, skip: number, extra?: { segs: Seg[]; gaps: Quad[] }): number | null {
     const b = bboxOf(q)
@@ -264,40 +280,21 @@ export class Work {
     const near = (s: Seg) => segPolyDist(s.a, s.b, q) < s.hw + ROAD_CLEAR
     if (this.segBins.some([b[0] - 4, b[1] - 4, b[2] + 4, b[3] + 4], near)) return null
     if (extra && (extra.segs.some(near) || extra.gaps.some((g) => convexOverlap(q, g, LOT_OVERLAP_TOL)))) return null
-    const T = this.T
-    const mid: GrowP = [(q[0][0] + q[2][0]) / 2, (q[0][1] + q[2][1]) / 2]
-    for (let i = 0; i < 4; i++) {
-      const a = q[i]
-      const c = q[(i + 1) % 4]
-      if (T.waterAt(a) < WATER_GAP || T.waterAt([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2]) < WATER_GAP) return null
-    }
-    if (T.waterAt(mid) < WATER_GAP) return null
-    let slope = T.slopeAt(mid)
-    for (const a of q) slope += T.slopeAt(a)
-    slope /= 5
-    return slope > MAX_SLOPE ? null : slope * W_SLOPE
+    const g = this.ground(q)
+    return typeof g === 'number' ? g * W_SLOPE : null
   }
 
   /**
-   * 手动摆放的验地（见 manual.ts）：和 check 同样的规矩，但说明不行的原因；空着的地不算压到（摆下时去掉）、不给岔路留路口。
-   * 合格返回 null
+   * 手动摆放的验地（见 manual.ts）：和 check 同样的规矩，但说明不行的原因；空着的地不算压到（摆下时去掉）、不给岔路留路口，
+   * 规划的地块（自然生长的，带 ref）也不挡手动的（压到的那几户之后挪到别处）。合格返回 null
    */
   why(q: Quad): GrowFault | null {
     const b = bboxOf(q)
     if (b[0] < LOT_EDGE || b[1] < LOT_EDGE || b[2] > this.W - LOT_EDGE || b[3] > this.H - LOT_EDGE) return 'edge'
-    if (this.lotBins.some(b, (i) => this.lots[i].state !== 'vacant' && convexOverlap(q, this.lots[i].poly, LOT_OVERLAP_TOL))) return 'lot'
+    if (this.lotBins.some(b, (i) => this.lots[i].state !== 'vacant' && this.lots[i].ref === undefined && convexOverlap(q, this.lots[i].poly, LOT_OVERLAP_TOL))) return 'lot'
     if (this.segBins.some([b[0] - 4, b[1] - 4, b[2] + 4, b[3] + 4], (s) => segPolyDist(s.a, s.b, q) < s.hw + ROAD_CLEAR)) return 'road'
-    const T = this.T
-    const mid: GrowP = [(q[0][0] + q[2][0]) / 2, (q[0][1] + q[2][1]) / 2]
-    let slope = T.slopeAt(mid)
-    for (let i = 0; i < 4; i++) {
-      const a = q[i]
-      const c = q[(i + 1) % 4]
-      if (T.waterAt(a) < WATER_GAP || T.waterAt([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2]) < WATER_GAP) return 'water'
-      slope += T.slopeAt(a)
-    }
-    if (T.waterAt(mid) < WATER_GAP) return 'water'
-    return slope / 5 > MAX_SLOPE ? 'slope' : null
+    const g = this.ground(q)
+    return typeof g === 'number' ? null : g
   }
 
   // —— 候选 ——
@@ -515,6 +512,8 @@ const matesOf = (lots: GrowLot[], owner: string | undefined) => (owner === undef
 
 export function place(state: GrowState, req: PlaceReq, salt: number): PlaceResult | null {
   checkState(state)
+  // 自然生长的聚落：位置由规划定（见 natural.ts）
+  if (state.plan) return naturalHook('place')(state, req)
   const work = new Work(state, terrainOf(state))
   const placed: GrowLot[] = []
   const roads = new Map<number, GrowRoad>()
@@ -579,18 +578,7 @@ function outRoad(T: TerrainResult, c: GrowP, a: number, W: number, H: number) {
 /** 什么都没有的状态：画幅取整到 20 米，center 暂取画幅中间 */
 export function blankState(p: GrowParams): GrowState {
   const size: [number, number] = [Math.max(200, Math.round(p.size[0] / 20) * 20), Math.max(200, Math.round(p.size[1] / 20) * 20)]
-  const terrain: GrowTerrain = {
-    culture: p.culture,
-    river: p.river,
-    coast: p.coast,
-    hills: p.hills,
-    relief: p.relief,
-    coastDir: p.coastDir,
-    riverDir: p.riverDir,
-    hillDir: p.hillDir,
-    ...(p.terrainSeed ? { terrainSeed: p.terrainSeed } : {}),
-  }
-  return { v: GROW_VERSION, seed: p.seed, terrain, size, center: [size[0] / 2, size[1] / 2], roads: [], lots: [], zones: [], nextId: 1, step: 0 }
+  return { v: GROW_VERSION, seed: p.seed, terrain: growTerrain(p), size, center: [size[0] / 2, size[1] / 2], roads: [], lots: [], zones: [], nextId: 1, step: 0 }
 }
 
 export function seedState(p: GrowParams): GrowState {

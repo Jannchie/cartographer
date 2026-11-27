@@ -9,6 +9,10 @@
       "types": "./src/settlement/grow/api.d.ts",
       "default": "./src/settlement/grow/index.ts"
     },
+    "./grow/natural": {
+      "types": "./src/settlement/grow/natural-api.d.ts",
+      "default": "./src/settlement/grow/natural.ts"
+    },
     "./grow/paint": {
       "types": "./src/settlement/grow/paint-api.d.ts",
       "default": "./src/settlement/grow/paint.ts"

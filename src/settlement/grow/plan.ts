@@ -1,7 +1,7 @@
 import * as dmath from '../../gen/dmath'
 import { pointInPoly, polylineLength, segPolyDist, segDist } from '../geom'
 import type { GrowFault, GrowLot, GrowP, GrowRoad, GrowRoadKind, GrowState, GrowZone } from './api'
-import { ROAD_CLEAR, ROAD_EDGE, ROAD_WATER, ROAD_WIDTH, checkState, cm, terrainOf } from './core'
+import { ROAD_CLEAR, ROAD_EDGE, ROAD_WATER, ROAD_WIDTH, WAY_ID, checkState, cm, terrainOf } from './core'
 
 // 手动的规划（玩家、或者游戏里的人「修路 / 划区」）：和自动生长改的是同一份状态，规则一句一条：
 //   - 手动铺路：端点离已有的路不到 SNAP 米就接到那条路上（离路的端头不到 SNAP 米接在端头上，否则落在路身上最近的那一点）；路至少 MIN_LEN 米、都在画幅里；
@@ -84,18 +84,21 @@ export function addRoad(
   }
   const hw = ROAD_WIDTH[kind] / 2
   const hits = (l: GrowLot) => line.some((a, i) => i + 1 < line.length && segPolyDist(a, line[i + 1], l.poly) < hw + ROAD_CLEAR)
-  const blocked = state.lots.find((l) => l.state !== 'vacant' && hits(l))
+  // 规划的地块（自然生长的）不挡手动的路：路压到的那几户之后挪到别处（手动的优先，见 natural.ts）
+  const blocked = state.lots.find((l) => l.state !== 'vacant' && l.ref === undefined && hits(l))
   if (blocked) return { error: `路压到了地块 #${blocked.id}（${blocked.use}${blocked.owner ? `，${blocked.owner} 的` : ''}）`, fault: 'lot' }
   const road: GrowRoad = { id: state.nextId, kind, pts: line, born: state.step }
-  return { state: { ...state, roads: [...state.roads, road], lots: state.lots.filter((l) => !(l.state === 'vacant' && hits(l))), nextId: state.nextId + 1 }, road }
+  return { state: { ...state, roads: [...state.roads, road], lots: state.lots.filter((l) => !(l.state === 'vacant' && l.ref === undefined && hits(l))), nextId: state.nextId + 1 }, road }
 }
 
 export function removeRoad(state: GrowState, roadId: number, opts: { lots?: boolean } = {}): { state: GrowState } | { error: string } {
   checkState(state)
+  if (roadId >= WAY_ID) return { error: '规划的路不能拆' }
   if (!state.roads.some((r) => r.id === roadId)) return { error: `没有这条路 #${roadId}` }
-  const live = state.lots.filter((l) => l.road === roadId && l.state !== 'vacant')
+  // 只管手动的地块：规划的地块（带 ref）记的 road 只是离它最近的路，不随路拆
+  const live = state.lots.filter((l) => l.road === roadId && l.ref === undefined && l.state !== 'vacant')
   if (live.length && !opts.lots) return { error: `路上还有 ${live.length} 块临街的地块（#${live.slice(0, 5).map((l) => l.id).join('、#')}${live.length > 5 ? '……' : ''}）` }
-  return { state: { ...state, roads: state.roads.filter((r) => r.id !== roadId), lots: state.lots.filter((l) => l.road !== roadId) } }
+  return { state: { ...state, roads: state.roads.filter((r) => r.id !== roadId), lots: state.lots.filter((l) => l.road !== roadId || l.ref !== undefined) } }
 }
 
 export function zone(state: GrowState, poly: GrowP[], use: string): { state: GrowState; zone: GrowZone } | { error: string } {

@@ -1,9 +1,9 @@
 import { hashString } from '../../gen/rng'
-import { pointInPoly } from '../geom'
-import { buildTerrain, retouchTerrain, type TerrainResult } from '../terrain'
-import type { SettlementParams } from '../types'
-import type { GrowLot, GrowP, GrowState, GrowStroke, GrowTerrain } from './api'
-import { applyStroke } from './relief'
+import { bboxOf, convexOverlap, pointInPoly, segDist, segPolyDist, type BBox } from '../geom'
+import { buildTerrain, type TerrainResult } from '../terrain'
+import type { Settlement, SettlementParams } from '../types'
+import type { GrowLot, GrowP, GrowParams, GrowRoad, GrowState, GrowStroke, GrowTerrain, PlaceReq, PlaceResult } from './api'
+import { reliefTerrain } from './relief'
 
 // 生长引擎的公共部分：常量、地形缓存、几个不用找地方的操作（退地、改状态）。选址与延路在 place.ts。
 
@@ -54,15 +54,129 @@ export { hashString as growHash }
 /** 坐标取到厘米：存进 JSON 的数短一些，读回来逐位一样 */
 export const cm = (v: number) => Math.round(v * 100) / 100
 
+/** 地块的中心：各个角的平均（沿路摆的地块是四个角；自然生长的地块是房子、田的轮廓，几个角都有） */
 export function lotCenter(lot: GrowLot): GrowP {
-  const q = lot.poly
-  return [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4]
+  let x = 0
+  let y = 0
+  for (const p of lot.poly) {
+    x += p[0]
+    y += p[1]
+  }
+  return [x / lot.poly.length, y / lot.poly.length]
 }
 
-/** 点落在哪块地上（不算空着的；只给点选用，正好落在边上的算不算都行） */
+/** 自然生长的状态里，规划的路的 id 从这里起（比它小的是手动铺的）；规划的地块带 ref */
+export const WAY_ID = 1_000_000
+
+/** 手动的东西压着的地方（见 manualBlocker）。poly：一个多边形压没压到；point：一个点（树）压没压到 */
+export interface Blocker {
+  poly: (q: GrowP[]) => boolean
+  point: (p: GrowP, pad: number) => boolean
+}
+/** 最近一次的手动的东西与它们的 Blocker：逐步生长时手动的东西不变，不必每一步重建（调用方也凭同一个对象认出「没变」） */
+let blockerMemo: { lots: GrowLot[]; roads: GrowRoad[]; block: Blocker | null } | null = null
+const sameItems = <T>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i])
+
+/**
+ * 手动的东西（手动摆的地块、手动铺的路）压着的地方：自然生长的聚落里手动的优先，规划里的房子、田、树落在这些地方就不要了。
+ * 压没压到的规矩和手动摆放时的验地一样（地块相交、离路面不到 ROAD_CLEAR，见 place.ts 的 Work.why）。没有手动的东西时返回 null
+ */
+export function manualBlocker(state: GrowState): Blocker | null {
+  const hand = state.lots.filter((l) => l.ref === undefined && l.state !== 'vacant')
+  const ways = state.roads.filter((r) => r.id < WAY_ID)
+  if (blockerMemo && sameItems(blockerMemo.lots, hand) && sameItems(blockerMemo.roads, ways)) return blockerMemo.block
+  const lots = hand.map((l) => ({ poly: l.poly, b: bboxOf(l.poly) }))
+  const segs: { a: GrowP; b: GrowP; hw: number; box: BBox }[] = []
+  for (const r of ways) {
+    const hw = ROAD_WIDTH[r.kind] / 2 + ROAD_CLEAR
+    for (let i = 0; i + 1 < r.pts.length; i++) {
+      const a = r.pts[i]
+      const b = r.pts[i + 1]
+      segs.push({ a, b, hw, box: [Math.min(a[0], b[0]) - hw, Math.min(a[1], b[1]) - hw, Math.max(a[0], b[0]) + hw, Math.max(a[1], b[1]) + hw] })
+    }
+  }
+  const apart = (a: BBox, b: BBox) => a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]
+  const block: Blocker | null =
+    lots.length || segs.length
+      ? {
+          poly(q) {
+            if (q.length < 3) return false
+            const qb = bboxOf(q)
+            for (const l of lots) if (!apart(qb, l.b) && convexOverlap(q, l.poly, LOT_OVERLAP_TOL)) return true
+            for (const s of segs) if (!apart(qb, s.box) && segPolyDist(s.a, s.b, q) < s.hw) return true
+            return false
+          },
+          point(p, pad) {
+            for (const l of lots) if (p[0] >= l.b[0] - pad && p[0] <= l.b[2] + pad && p[1] >= l.b[1] - pad && p[1] <= l.b[3] + pad && pointInPoly(p, l.poly)) return true
+            for (const s of segs) if (p[0] >= s.box[0] - pad && p[0] <= s.box[2] + pad && p[1] >= s.box[1] - pad && p[1] <= s.box[3] + pad && segDist(p, s.a, s.b).d < s.hw + pad) return true
+            return false
+          },
+        }
+      : null
+  blockerMemo = { lots: hand, roads: ways, block }
+  return block
+}
+
+/**
+ * 自然生长（state.plan，见 natural.ts）要整套一次成形的生成器，不放进这几个不启动插件也能跑的文件里：
+ * natural.ts 载入时把自己登记到这里，place、画图遇到带 plan 的状态就转过去；没载入就用会报错
+ */
+export const naturalHooks: {
+  place?: (state: GrowState, req: PlaceReq) => PlaceResult | null
+  draw?: (state: GrowState) => Settlement
+  /** 地形改了（笔画变了）之后：规划的地块按新的规划重新落一遍 */
+  rebase?: (state: GrowState) => GrowState
+} = {}
+
+/** 开局参数里的地形部分（存进状态的那一份） */
+export function growTerrain(p: GrowParams): GrowTerrain {
+  return {
+    culture: p.culture,
+    river: p.river,
+    coast: p.coast,
+    hills: p.hills,
+    relief: p.relief,
+    coastDir: p.coastDir,
+    riverDir: p.riverDir,
+    hillDir: p.hillDir,
+    ...(p.terrainSeed ? { terrainSeed: p.terrainSeed } : {}),
+  }
+}
+
+/**
+ * 地形参数 → cartographer 聚落参数里定地形的那几个字段。这里验地用的地形（terrainOf）和自然生长交给生成器的规划参数
+ *（natural.ts）都用这一份：两边才是同一片地形
+ */
+export function terrainFields(seed: string, t: GrowTerrain) {
+  const dir = (v: number | null) => (v === null ? NaN : v)
+  return {
+    seed,
+    culture: t.culture,
+    river: t.river,
+    coast: t.coast,
+    hills: t.hills,
+    relief: t.relief,
+    coastDir: dir(t.coastDir),
+    riverDir: dir(t.riverDir),
+    hillDir: dir(t.hillDir),
+    terrainSeed: t.terrainSeed ?? '',
+  }
+}
+export function naturalHook<K extends keyof typeof naturalHooks>(k: K): NonNullable<(typeof naturalHooks)[K]> {
+  const f = naturalHooks[k]
+  if (!f) throw new Error('这是自然生长的状态：要先载入 settlement/grow/natural')
+  return f as NonNullable<(typeof naturalHooks)[K]>
+}
+
+/** 点落在哪块地上（不算空着的；只给点选用，正好落在边上的算不算都行）。手动摆的地块在规划的地块上面 */
 export function lotAtPoint(state: GrowState, p: GrowP): GrowLot | undefined {
-  for (const l of state.lots) if (l.state !== 'vacant' && pointInPoly(p, l.poly)) return l
-  return undefined
+  let under: GrowLot | undefined
+  for (const l of state.lots) {
+    if (l.state === 'vacant' || !pointInPoly(p, l.poly)) continue
+    if (l.ref === undefined) return l
+    under ??= l
+  }
+  return under
 }
 
 /** 退掉一块地：形状留着（以后同样大小的需求可以接着用），变成 vacant、去掉 owner */
@@ -86,12 +200,10 @@ export function setState(state: GrowState, lotId: number, s: 'building' | 'built
 
 /** 地形参数 → cartographer 的聚落参数（只有地形用得到的字段有意义） */
 export function settleParams(seed: string, t: GrowTerrain, population = 100): SettlementParams {
-  const dir = (v: number | null) => (v === null ? NaN : v)
   return {
-    seed,
+    ...terrainFields(seed, t),
     population,
     size: 'hamlet',
-    culture: t.culture,
     magic: 0,
     walls: 'none',
     regularity: 0.2,
@@ -103,17 +215,9 @@ export function settleParams(seed: string, t: GrowTerrain, population = 100): Se
     capital: false,
     function: 'balanced',
     counts: {},
-    river: t.river,
-    coast: t.coast,
-    hills: t.hills,
-    relief: t.relief,
     farms: true,
     farmland: 0.4,
     wallBend: 0.3,
-    coastDir: dir(t.coastDir),
-    riverDir: dir(t.riverDir),
-    hillDir: dir(t.hillDir),
-    terrainSeed: t.terrainSeed ?? '',
   }
 }
 
@@ -125,8 +229,8 @@ interface TerrainMemo {
   key: string
   strokes: readonly GrowStroke[]
   T: TerrainResult
-  /** 叠完笔画的水面（1 为水）；没用到过时是 null */
-  wet: Uint8Array | null
+  /** 一笔没叠过的原地形（海面按它认） */
+  base: TerrainResult
 }
 const terrainMemo: TerrainMemo[] = []
 const TERRAIN_MEMO = 6
@@ -154,21 +258,11 @@ export function terrainOf(s: { seed: string; terrain: GrowTerrain; size: [number
     return m
   }
   if (!from) {
-    from = keep({ key, strokes: [], T: buildTerrain(settleParams(s.seed, s.terrain), s.size), wet: null })
-    if (!strokes.length) return from.T
+    const base = buildTerrain(settleParams(s.seed, s.terrain), s.size)
+    from = keep({ key, strokes: [], T: base, base })
+    if (!strokes.length) return base
   }
-  const { W, H, cell } = from.T.terrain
-  const height = from.T.terrain.height.slice()
-  let wet = from.wet
-  if (wet) wet = wet.slice()
-  else {
-    const water = from.T.terrain.water
-    wet = new Uint8Array(W * H)
-    for (let k = 0; k < W * H; k++) wet[k] = water[k] < 0 ? 1 : 0
-  }
-  let changed = false
-  for (let i = from.strokes.length; i < strokes.length; i++) changed = applyStroke({ W, H, cell, height, wet }, strokes[i]) || changed
-  return keep({ key, strokes, T: retouchTerrain(from.T, height, changed ? wet : null), wet }).T
+  return keep({ key, strokes, T: reliefTerrain(from.base, strokes.slice(from.strokes.length), from.T), base: from.base }).T
 }
 
 export function checkState(s: GrowState) {

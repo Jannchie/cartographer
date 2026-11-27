@@ -1,34 +1,33 @@
 <script setup lang="ts">
 import {
-  IconArrowDown, IconArrowUp, IconCheckSquare, IconCursor, IconDroplet, IconDropletOff, IconEqual, IconEraser, IconHome, IconMountain, IconPentagon, IconRedo, IconRoute, IconSquare, IconUndo,
+  IconArrowDown, IconArrowUp, IconCursor, IconDroplet, IconDropletOff, IconEqual, IconEraser, IconHome, IconMountain, IconPause, IconPlay, IconRedo, IconRoute, IconSkipForward, IconUndo,
   type Icon as IconDef,
 } from '@jannchie/icons'
 import { computed, onMounted, ref } from 'vue'
 import type { GrowBrush, GrowP } from '../../settlement/grow'
 import { t } from '../i18n'
 import Icon from '../kit/Icon.vue'
+import Loading from '../kit/Loading.vue'
 import Notices from '../kit/Notices.vue'
 import * as G from './grow'
-import { BRUSH_COLOR, BRUSH_NAME, BRUSH_R, gs, ROAD_NAME, TOOL_KEYS, USE_COLOR, USE_NAME, type GrowTool } from './grow'
+import { BRUSH_COLOR, BRUSH_NAME, BRUSH_R, gs, picture, ROAD_NAME, TOOL_KEYS, USE_COLOR, USE_NAME, type GrowTool } from './grow'
 
 const host = ref<HTMLElement>()
 onMounted(() => G.mountGrow(host.value!))
 
 // —— 工具栏 ——
 const TOOLS: { id: GrowTool; label: string; icon: IconDef<string>; title: string }[] = [
-  { id: 'look', label: '点选', icon: IconCursor, title: '点选地块、路、分区；拖动平移' },
+  { id: 'look', label: '点选', icon: IconCursor, title: '点选地块、路；拖动平移' },
   { id: 'road', label: '道路', icon: IconRoute, title: '按住拖动随手画一条路，或一下一下点出折线' },
   { id: 'build', label: '建筑', icon: IconHome, title: '沿路摆地块：点一下摆一块，按住拖动摆一排' },
-  { id: 'zone', label: '分区', icon: IconPentagon, title: '划一片地给某种用途：划完沿路盖满，自动生长的同类地块也优先落在里面' },
-  { id: 'terrain', label: '地形', icon: IconMountain, title: '用笔刷改地形：抬高、压低、平整、挖水、填陆' },
-  { id: 'erase', label: '拆除', icon: IconEraser, title: '点一下拆掉地块、路、分区；按住拖动连着拆地块' },
+  { id: 'terrain', label: '地形', icon: IconMountain, title: '用笔刷改地形：抬高、压低、平整、挖水、填陆；聚落按改过的地形重新规划' },
+  { id: 'erase', label: '拆除', icon: IconEraser, title: '点一下拆掉手动的地块、路，退掉规划的地块；按住拖动连着拆' },
 ]
 const BRUSH_ICON: Record<GrowBrush, IconDef<string>> = { raise: IconArrowUp, lower: IconArrowDown, flat: IconEqual, water: IconDroplet, land: IconDropletOff }
 /** 当前工具的子选项（数字键选） */
 const options = computed<{ id: string; label: string; on: boolean; color?: string; icon?: IconDef<string> }[]>(() => {
   if (gs.tool === 'road') return G.ROAD_KINDS.map((k) => ({ id: k, label: ROAD_NAME[k], on: gs.roadKind === k }))
   if (gs.tool === 'build') return G.BUILD_USES.map((u) => ({ id: u, label: USE_NAME[u], on: gs.buildUse === u, color: USE_COLOR[u] }))
-  if (gs.tool === 'zone') return G.ZONE_USES.map((u) => ({ id: u, label: USE_NAME[u], on: gs.zoneUse === u, color: USE_COLOR[u] }))
   if (gs.tool === 'terrain') return G.BRUSHES.map((b) => ({ id: b, label: BRUSH_NAME[b], on: gs.brush === b, icon: BRUSH_ICON[b] }))
   return []
 })
@@ -42,17 +41,18 @@ const at = (p: GrowP) => {
 const pts = (ps: GrowP[]) => ps.map((p) => at(p).map((v) => v.toFixed(1)).join(',')).join(' ')
 /** 米 → 屏幕像素 */
 const px = (m: number) => m * gs.paper.S * gs.paper.k
+/** 叠加层裁到图框里（图框外是纸边） */
+const clip = computed(() => {
+  const f = gs.paper.frame
+  return f.w ? { clipPath: `inset(${f.y}px calc(100% - ${f.x + f.w}px) calc(100% - ${f.y + f.h}px) ${f.x}px)` } : undefined
+})
 
-const zones = computed(() => gs.state.zones.map((z) => ({ id: z.id, pts: pts(z.poly), color: USE_COLOR[z.use] ?? '#555', on: gs.sel?.kind === 'zone' && gs.sel.id === z.id })))
-/** 在建的地块：画虚线框（盖好之前地图上没有房子） */
-const building = computed(() => gs.state.lots.filter((l) => l.state === 'building').map((l) => ({ id: l.id, pts: pts(l.poly), color: USE_COLOR[l.use] ?? '#555' })))
 const outline = (x: ReturnType<typeof G.selected>) => {
   if (x?.kind === 'lot') return { pts: pts(x.lot.poly), closed: true }
   if (x?.kind === 'road') return { pts: pts(x.road.pts), closed: false }
-  if (x?.kind === 'zone') return { pts: pts(x.zone.poly), closed: true }
   return null
 }
-const sel = computed(() => (gs.sel?.kind === 'zone' ? null : outline(G.selected())))
+const sel = computed(() => outline(G.selected()))
 const hot = computed(() => outline(G.hovered()))
 const preview = computed(() => gs.preview && { ...gs.preview, pts: pts(gs.preview.pts) })
 const dots = computed(() => gs.draft.map(at))
@@ -71,25 +71,24 @@ const tip = computed(() => {
   return { ...gs.tip, style: { left: `${x + 16}px`, top: `${y + 18}px` } }
 })
 
+/** 人口走到规划规模的几成 */
+const progress = computed(() => Math.min(1, gs.state.plan!.pop / gs.state.plan!.horizon))
 const hint = computed(() => {
-  if (gs.tool === 'road') return gs.draft.length ? '点下一个点 · 再点一下最后一个点或回车铺好 · 退格删点 · 右键取消' : '按住拖动随手画路，或一下一下点出折线 · 端点靠近已有的路会接上 · 过河自动架桥'
-  if (gs.tool === 'build') return '点一下摆一块，按住沿路拖动摆一排 · 地块自动贴到路边 · 田和料场可以接在同类的背后'
-  if (gs.tool === 'zone') return gs.draft.length ? '点下一个顶点 · 点回第一个点或回车划好 · 退格删点 · 右键取消' : '按住拖一个框，或一下一下点出多边形 · 划完沿路盖满这种用途，路不够时自己往里延'
-  if (gs.tool === 'terrain') return '按住拖动刷地形 · [ ] 调笔刷大小 · 挖出来的水面路可以架桥过去'
-  if (gs.tool === 'erase') return '点一下拆掉地块、路（连同临街的地块）、分区 · 按住拖动连着拆地块'
-  return '点选地块、路、分区 · 拖动平移 · 滚轮缩放 · 空格播放 · N 走一步 · Delete 拆掉选中的'
+  if (gs.tool === 'road') return gs.draft.length ? '点下一个点 · 再点一下最后一个点或回车铺好 · 退格删点 · 右键取消' : '按住拖动随手画路，或一下一下点出折线 · 端点靠近已有的路会接上 · 过河自动架桥 · 路压到的规划的房子会让开'
+  if (gs.tool === 'build') return '点一下摆一块，按住沿路拖动摆一排 · 地块自动贴到路边（规划的路、手动的路都行）'
+  if (gs.tool === 'terrain') return '按住拖动刷地形 · [ ] 调笔刷大小 · 松手后聚落按改过的地形重新规划'
+  if (gs.tool === 'erase') return '点一下拆掉手动的地块、路，退掉规划的地块 · 按住拖动连着拆 · 规划的路不能拆'
+  return '空格播放，聚落按规划一步步长 · 点选地块、路 · 拖动平移 · 滚轮缩放 · N 走一步 · Delete 拆掉选中的'
 })
 const pan = computed(() => (gs.tool === 'look' ? '' : '右键或中键拖动平移 · 右键点一下回到点选'))
-/** 空地上什么都没有时的引导 */
-const empty = computed(() => !gs.state.roads.length && !gs.state.lots.length && gs.tool === 'look')
+/** 刚开局、还没有人也没动过手的时候的引导 */
+const wild = computed(() => !gs.loading && !gs.playing && gs.tool === 'look' && !gs.state.lots.length && gs.state.roads.every((r) => G.planned(r.id)))
 </script>
 
 <template>
-  <main class="stage grow-stage">
+  <main class="stage">
     <div ref="host" class="view paper-view" :class="[`tool-${gs.tool}`]"></div>
-    <svg class="grow-overlay" aria-hidden="true">
-      <polygon v-for="z in zones" :key="`z${z.id}`" :points="z.pts" :fill="z.color" fill-opacity="0.1" :stroke="z.color" :stroke-width="z.on ? 3 : 1.5" stroke-dasharray="6 4" />
-      <polygon v-for="l in building" :key="`b${l.id}`" :points="l.pts" fill="none" :stroke="l.color" stroke-width="1.2" stroke-dasharray="3 2" />
+    <svg class="grow-overlay" aria-hidden="true" :style="clip">
       <template v-if="sel">
         <polygon v-if="sel.closed" :points="sel.pts" class="sel" />
         <polyline v-else :points="sel.pts" class="sel" />
@@ -98,10 +97,7 @@ const empty = computed(() => !gs.state.roads.length && !gs.state.lots.length && 
         <polygon v-if="hot.closed" :points="hot.pts" class="hot" :class="{ erase: gs.tool === 'erase' }" />
         <polyline v-else :points="hot.pts" class="hot" :class="{ erase: gs.tool === 'erase' }" />
       </template>
-      <template v-if="preview">
-        <polygon v-if="preview.closed" :points="preview.pts" class="draft" :class="{ bad: !preview.ok }" :style="gs.tool === 'zone' ? { stroke: USE_COLOR[gs.zoneUse], fill: USE_COLOR[gs.zoneUse] } : undefined" />
-        <polyline v-else :points="preview.pts" class="draft line" :class="{ bad: !preview.ok }" />
-      </template>
+      <polyline v-if="preview" :points="preview.pts" class="draft" :class="{ bad: !preview.ok }" />
       <circle v-for="(d, i) in dots" :key="i" :cx="d[0]" :cy="d[1]" r="3.5" class="dot" />
       <circle v-if="snap" :cx="snap[0]" :cy="snap[1]" r="7" class="snap" />
       <polygon v-if="ghost" :points="ghost.pts" class="ghost" :class="{ bad: !ghost.ok }" :style="ghost.ok ? { fill: ghost.color, stroke: ghost.color } : undefined" />
@@ -114,24 +110,22 @@ const empty = computed(() => !gs.state.roads.length && !gs.state.lots.length && 
     <div v-if="tip" class="grow-tip" :class="{ bad: tip.bad }" :style="tip.style">{{ tip.text }}</div>
     <div class="neatline" aria-hidden="true"></div>
 
-    <div v-if="empty" class="grow-empty">
-      <h3>{{ t('一片空地') }}</h3>
-      <p>{{ t('先画一条路，再沿路摆建筑；也可以先用地形笔刷挖河、堆山。') }}</p>
+    <div v-if="wild" class="grow-empty">
+      <h3>{{ t('一片荒地') }}</h3>
+      <p>{{ t('这片地已经按 {n} 人的规模规划好了。点「播放」，住户一户户搬来，田野、街巷、地标随着人口出现；也可以先自己画路、摆建筑、改地形。', { n: gs.state.plan!.horizon.toLocaleString() }) }}</p>
       <div class="pair">
+        <button type="button" @click="G.play()"><Icon :icon="IconPlay" :size="14" />{{ t('播放') }}</button>
         <button type="button" @click="G.setTool('road')"><Icon :icon="IconRoute" :size="14" />{{ t('开始画路') }}</button>
-        <button type="button" @click="G.setTool('terrain')"><Icon :icon="IconMountain" :size="14" />{{ t('先刷地形') }}</button>
       </div>
     </div>
     <div v-if="gs.msg" class="grow-msg" role="status" @click="gs.msg = ''">{{ gs.msg }}</div>
     <Notices v-model="gs.notices" />
 
     <div class="grow-bar">
+      <!-- 上面一行：当前工具的选项；点选工具下是播放的速度与人口的进度 -->
       <div v-if="options.length" class="grow-opts" role="toolbar" :aria-label="t('选项')">
         <button v-for="(o, i) in options" :key="o.id" type="button" :class="{ on: o.on }" :aria-pressed="o.on" :title="`${t(o.label)}（${i + 1}）`" @click="G.pickOption(i)">
           <i v-if="o.color" :style="{ background: o.color }"></i><Icon v-if="o.icon" :icon="o.icon" :size="14" />{{ t(o.label) }}<kbd>{{ i + 1 }}</kbd>
-        </button>
-        <button v-if="gs.tool === 'zone'" type="button" class="toggle" :class="{ on: gs.zoneFill }" :aria-pressed="gs.zoneFill" :title="t('划完分区马上沿路盖满这种用途；关掉就只是规划，留给自动生长')" @click="G.setZoneFill(!gs.zoneFill)">
-          <Icon :icon="gs.zoneFill ? IconCheckSquare : IconSquare" :size="14" />{{ t('划完就盖满') }}
         </button>
         <label v-if="gs.tool === 'terrain'" class="grow-size" :title="t('笔刷半径（[ ] 调节）')">
           <span>{{ t('大小') }}</span>
@@ -139,22 +133,37 @@ const empty = computed(() => !gs.state.roads.length && !gs.state.lots.length && 
           <output>{{ gs.brushR }} m</output>
         </label>
       </div>
+      <div v-else-if="gs.tool === 'look'" class="grow-opts grow-time">
+        <div class="grow-speed" :title="t('每秒走几步')">
+          <button v-for="v in G.SPEEDS" :key="v" type="button" :class="{ on: gs.speed === v }" :aria-pressed="gs.speed === v" @click="G.setSpeed(v)">{{ v }}</button>
+          <span>{{ t('步/秒') }}</span>
+        </div>
+        <div class="grow-pop" :title="t('人口走到规划规模的几成：住满以后不再长')">
+          <span><b>≈ {{ picture.population.toLocaleString() }}</b> / {{ gs.state.plan!.horizon.toLocaleString() }} {{ t('人') }}</span>
+          <i><i :style="{ width: `${progress * 100}%` }"></i></i>
+        </div>
+      </div>
       <div class="grow-tools" role="toolbar" :aria-label="t('工具')">
         <button v-for="tl in TOOLS" :key="tl.id" type="button" :class="{ on: gs.tool === tl.id }" :aria-pressed="gs.tool === tl.id" :title="`${t(tl.title)}（${TOOL_KEYS[tl.id]}）`" @click="G.setTool(tl.id)">
           <Icon :icon="tl.icon" :size="18" /><span>{{ t(tl.label) }}</span><kbd>{{ TOOL_KEYS[tl.id] }}</kbd>
         </button>
         <i class="sep" aria-hidden="true"></i>
-        <button type="button" class="act" :disabled="!gs.undoCount" :title="t('撤销（Ctrl+Z）')" @click="G.undo()"><Icon :icon="IconUndo" :size="18" /><span>{{ t('撤销') }}</span></button>
-        <button type="button" class="act" :disabled="!gs.redoCount" :title="t('重做（Ctrl+Y）')" @click="G.redo()"><Icon :icon="IconRedo" :size="18" /><span>{{ t('重做') }}</span></button>
+        <button type="button" :class="{ on: gs.playing }" :disabled="gs.loading" :title="t('按需求序列连续生长（空格）')" @click="G.toggle()">
+          <Icon :icon="gs.playing ? IconPause : IconPlay" :size="18" /><span>{{ t(gs.playing ? '暂停' : '播放') }}</span><kbd>␣</kbd>
+        </button>
+        <button type="button" :disabled="gs.loading" :title="t('按需求序列走一步（N）')" @click="G.step()"><Icon :icon="IconSkipForward" :size="18" /><span>{{ t('走一步') }}</span><kbd>N</kbd></button>
+        <i class="sep" aria-hidden="true"></i>
+        <button type="button" :disabled="!gs.undoCount || gs.loading" :title="t('撤销（Ctrl+Z）')" @click="G.undo()"><Icon :icon="IconUndo" :size="18" /><span>{{ t('撤销') }}</span></button>
+        <button type="button" :disabled="!gs.redoCount || gs.loading" :title="t('重做（Ctrl+Y）')" @click="G.redo()"><Icon :icon="IconRedo" :size="18" /><span>{{ t('重做') }}</span></button>
       </div>
       <div class="grow-hint">{{ t(hint) }}<template v-if="pan"> · {{ t(pan) }}</template></div>
     </div>
+    <Loading :show="gs.loading" title="正在规划" stage="这片地按规划的规模推演一遍成长史" />
   </main>
 </template>
 
 <style scoped>
 .paper-view.tool-road,
-.paper-view.tool-zone,
 .paper-view.tool-build {
   cursor: crosshair;
 }
@@ -197,17 +206,11 @@ polyline.hot.erase {
   fill: none;
   stroke-width: 5;
 }
+/* 路的预览：不行的时候是警示色 */
 .draft {
-  fill-opacity: 0.12;
-  fill: var(--accent);
-  stroke: var(--accent);
-  stroke-width: 2;
-  stroke-dasharray: 6 4;
-}
-.draft.line {
   fill: none;
+  stroke: var(--accent);
   stroke-width: 4;
-  stroke-dasharray: none;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-opacity: 0.85;
@@ -299,7 +302,7 @@ polyline.hot.erase {
 .grow-bar {
   position: absolute;
   left: 50%;
-  bottom: 20px;
+  bottom: 16px;
   transform: translateX(-50%);
   z-index: 4;
   display: flex;
@@ -365,6 +368,62 @@ polyline.hot.erase {
   font-size: 9.5px;
   opacity: 0.5;
 }
+/* 点选工具下的选项行：播放速度的几档、人口走到规划规模的进度 */
+.grow-time {
+  padding: 5px 0;
+}
+.grow-speed,
+.grow-pop {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.grow-opts .grow-speed button {
+  min-width: 34px;
+  padding: 5px 6px;
+  border: 1px solid var(--rule-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.grow-opts .grow-speed button + button {
+  border-left: 1px solid var(--rule-2);
+  margin-left: -1px;
+}
+.grow-opts .grow-speed button.on {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+.grow-speed span {
+  margin-left: 8px;
+}
+.grow-pop {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 5px;
+  min-width: 150px;
+  border-left: 1px solid var(--rule);
+  font-variant-numeric: tabular-nums;
+}
+.grow-pop b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.grow-pop > i {
+  display: block;
+  height: 4px;
+  background: var(--paper-3);
+}
+.grow-pop > i > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
 .grow-opts button {
   display: flex;
   align-items: center;
@@ -384,13 +443,6 @@ polyline.hot.erase {
 .grow-opts button.on {
   background: var(--ink);
   color: var(--paper);
-}
-.grow-opts button.toggle {
-  border-left: 1px solid var(--ink);
-}
-.grow-opts button.toggle.on {
-  background: none;
-  color: var(--ink);
 }
 .grow-opts button i {
   width: 9px;

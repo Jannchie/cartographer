@@ -2,8 +2,8 @@ import * as dmath from '../../gen/dmath'
 import { hash3, hashString } from '../../gen/rng'
 import { at, box, type Frame, type P, type Poly } from '../geom'
 import type { Building, BuildingKind, Crossing, Field, Road, Settlement } from '../types'
-import type { GrowLot, GrowState } from './api'
-import { ROAD_WIDTH, USES, settleParams, terrainOf, useOf } from './core'
+import type { GrowLot, GrowP, GrowState } from './api'
+import { ROAD_WIDTH, USES, WAY_ID, manualBlocker, naturalHook, settleParams, terrainOf, useOf, type Blocker } from './core'
 
 // 生长状态 → cartographer 的 Settlement，交给 buildSettlementVector 画（纯函数，不碰 DOM）。
 // 盖好的住处、铺子、公家、村心 → buildings（对不上的用途用 shed / hall / large 加 role 文字代画：料场、工棚、作坊……），
@@ -41,6 +41,47 @@ const inset = (l: GrowLot, d: number) => {
 }
 
 export function toSettlement(state: GrowState, o: DrawOpts = {}): Settlement {
+  return state.plan ? composed(state, o) : fromLots(state, o)
+}
+
+/**
+ * 自然生长的聚落：规划的成长史在这一刻的样子（见 natural.ts），上面叠手动铺的路、手动摆的地块。
+ * 手动的优先：规划里的房子、田、院墙、绿地、树落在手动的地块、路上的不画
+ */
+function composed(state: GrowState, o: DrawOpts): Settlement {
+  const plan = naturalHook('draw')(state)
+  const block = manualBlocker(state)
+  if (!block) return plan
+  // 规划的那一刻、手动的东西、田的画法都没变：还是上次那张（调用方凭同一个对象知道不用重画）
+  if (last && last.plan === plan && last.block === block && last.field === o.fieldKind) return last.out
+  const hand = fromLots({ ...state, lots: state.lots.filter((l) => l.ref === undefined), roads: state.roads.filter((r) => r.id < WAY_ID) }, o)
+  const clear = <T>(xs: T[], poly: (x: T) => P[]) => xs.filter((x) => !block.poly(poly(x) as GrowP[]))
+  const out: Settlement = {
+    ...plan,
+    buildings: [...clear(plan.buildings, (b) => b.poly), ...hand.buildings],
+    fields: [...clear(plan.fields, (f) => f.poly), ...hand.fields],
+    greens: [...clear(plan.greens, (g) => g.poly), ...hand.greens],
+    enclosures: [...clear(plan.enclosures, (q) => q), ...hand.enclosures],
+    plazas: [...plan.plazas, ...hand.plazas],
+    trees: [...plan.trees.filter((t) => !block.point(t.p as GrowP, t.r)), ...hand.trees],
+    roads: [...plan.roads, ...hand.roads],
+    crossings: [...plan.crossings, ...hand.crossings],
+    stats: {
+      ...plan.stats,
+      buildings: plan.stats.buildings + hand.stats.buildings,
+      houses: plan.stats.houses + hand.stats.houses,
+      households: plan.stats.households + hand.stats.households,
+      population: plan.stats.population + hand.stats.population,
+    },
+  }
+  last = { plan, block, field: o.fieldKind, out }
+  return out
+}
+/** 最近合成的一张（见 composed） */
+let last: { plan: Settlement; block: Blocker; field: DrawOpts['fieldKind']; out: Settlement } | null = null
+
+/** 沿路摆的地块、手动铺的路 → 聚落（没有规划的状态整个是它；有规划的状态里只是手动的那一层） */
+function fromLots(state: GrowState, o: DrawOpts): Settlement {
   const T = terrainOf(state)
   const buildings: Building[] = []
   const fields: Field[] = []
@@ -202,9 +243,10 @@ export function toSettlement(state: GrowState, o: DrawOpts = {}): Settlement {
   const population = Math.round(households * PER_HOUSEHOLD)
   return {
     params: settleParams(state.seed, state.terrain, population),
-    name: '',
-    nameZh: '',
-    nameJa: '',
+    // 没有地名：图题写种子
+    name: state.seed,
+    nameZh: state.seed,
+    nameJa: state.seed,
     width: state.size[0],
     height: state.size[1],
     terrain: T.terrain,

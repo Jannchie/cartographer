@@ -1,5 +1,6 @@
 import { hash3 } from '../../gen/rng'
 import { smoothstep } from '../../gen/util'
+import { retouchTerrain, type TerrainResult } from '../terrain'
 import type { GrowP, GrowStroke } from './api'
 
 // 手动改地形的笔画落到网格上（规则一句一条；只用加减乘除、开方与哈希，同样的笔画逐位同样的结果）：
@@ -65,6 +66,21 @@ function distTo(pts: GrowP[], x: number, y: number) {
     if (d < best) best = d
   }
   return Math.sqrt(best)
+}
+
+/**
+ * 在 from（原地形 base 已经叠过前几笔的样子；一笔没叠过就是 base 自己）上接着叠几笔，不改传入的地形。
+ * 接着上一份叠和从 base 起一次叠完逐位相同：水面就是水距为负的格子，海面只按 base 认（见 retouchTerrain）
+ */
+export function reliefTerrain(base: TerrainResult, strokes: readonly GrowStroke[], from: TerrainResult = base): TerrainResult {
+  if (!strokes.length) return from
+  const { W, H, cell, water } = from.terrain
+  const height = from.terrain.height.slice()
+  const wet = new Uint8Array(W * H)
+  for (let k = 0; k < W * H; k++) wet[k] = water[k] < 0 ? 1 : 0
+  let changed = false
+  for (const st of strokes) changed = applyStroke({ W, H, cell, height, wet }, st) || changed
+  return retouchTerrain(from, height, changed ? wet : null, base)
 }
 
 /** 把一笔落到网格上（原地改 height、wet）；返回水面有没有变 */
