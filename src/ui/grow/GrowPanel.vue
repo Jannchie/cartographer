@@ -86,7 +86,10 @@ const stats = computed(() => {
           <dl class="grow-rows">
             <div><dt>{{ t('分区') }}</dt><dd>{{ t(USE_NAME[sel.zone.use] ?? sel.zone.use) }}</dd></div>
           </dl>
-          <button type="button" class="wide" :title="t('已经盖在里面的不动（Delete）')" @click="G.removeSel()"><Icon :icon="IconTrash" :size="14" />{{ t('取消分区') }}</button>
+          <div class="pair">
+            <button type="button" :title="t('沿路把这片分区盖满这种用途')" @click="G.fillSel()"><Icon :icon="IconCheck" :size="14" />{{ t('盖满') }}</button>
+            <button type="button" :title="t('已经盖在里面的不动（Delete）')" @click="G.removeSel()"><Icon :icon="IconTrash" :size="14" />{{ t('取消分区') }}</button>
+          </div>
         </template>
       </div>
       <p v-else class="counter-note">{{ t('用舞台下方的工具栏自己建：画路、摆建筑、划分区、刷地形、拆除。也可以让它按需求自己长。') }}</p>

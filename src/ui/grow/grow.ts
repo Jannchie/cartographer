@@ -2,13 +2,13 @@ import { computed, markRaw, reactive, watch } from 'vue'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { cultures } from '../../settlement/culture'
-import { chaikin, segDist, type P } from '../../settlement/geom'
+import { chaikin, pointInPoly, segDist, type P } from '../../settlement/geom'
 import {
-  addRoad, blankState, GROW_VERSION, lotAtPoint, paintTerrain, placeAt, probeLot, removeLot, removeRoad, seedState, setState, unzone, zone, zoneAtPoint,
-  type GrowBrush, type GrowFault, type GrowLot, type GrowP, type GrowParams, type GrowRoadKind, type GrowState,
+  addRoad, blankState, GROW_VERSION, lotAtPoint, lotCenter, paintTerrain, place, placeAt, probeLot, removeLot, removeRoad, seedState, setState, unzone, zone, zoneAtPoint,
+  type GrowBrush, type GrowFault, type GrowLot, type GrowP, type GrowParams, type GrowRoadKind, type GrowState, type GrowZone,
 } from '../../settlement/grow'
 import { ROAD_WIDTH } from '../../settlement/grow/core'
-import { advance, finishAll, newDriver, runOp, type GrowDriver, type GrowOp } from '../../settlement/grow/demands'
+import { advance, finishAll, newDriver, placeSalt, runOp, type GrowDriver, type GrowOp } from '../../settlement/grow/demands'
 import { toSettlement } from '../../settlement/grow/draw'
 import { buildSettlementVector } from '../../settlement/render'
 import { settleThemes } from '../../settlement/themes'
@@ -169,6 +169,8 @@ export const gs = reactive({
   roadKind: 'street' as GrowRoadKind,
   buildUse: 'home',
   zoneUse: 'home',
+  /** 划完分区马上沿路盖满（关掉就只是规划：留给自动生长） */
+  zoneFill: storeGet('growZoneFill') !== '0',
   brush: 'raise' as GrowBrush,
   /** 笔刷半径（米） */
   brushR: Number(storeGet('growBrushR')) || 40,
@@ -560,6 +562,44 @@ function commitRoad(pts: GrowP[]) {
   commit(r.state)
 }
 // —— 分区 ——
+/** 一片分区一次最多盖多少块 */
+const FILL_MAX = 200
+/** 分区往外放多少米再盖：随手划的框差一点没盖住临街那排地块的中心时，那一排也算在分区里（半块地多一点） */
+const FILL_MARGIN = 12
+/** 多边形每条边往外推 d 米（顶点沿相邻两边外法线的合方向挪；很尖的角不无限伸出去） */
+function inflate(poly: GrowP[], d: number): GrowP[] {
+  const n = poly.length
+  let area = 0
+  for (let i = 0; i < n; i++) area += poly[i][0] * poly[(i + 1) % n][1] - poly[(i + 1) % n][0] * poly[i][1]
+  const sign = area >= 0 ? 1 : -1
+  const normal = (a: GrowP, b: GrowP): GrowP => {
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    return [((b[1] - a[1]) / L) * sign, (-(b[0] - a[0]) / L) * sign]
+  }
+  return poly.map((q, i) => {
+    const n1 = normal(poly[(i + n - 1) % n], q)
+    const n2 = normal(q, poly[(i + 1) % n])
+    const k = d / Math.max(0.35, 1 + n1[0] * n2[0] + n1[1] * n2[1])
+    return [q[0] + (n1[0] + n2[0]) * k, q[1] + (n1[1] + n2[1]) * k]
+  })
+}
+/**
+ * 把一片分区盖满：一块一块地交给引擎摆这种用途（引擎优先摆进相符的分区，路不够时自己往里延），
+ * 摆到分区外面去了、或者摆不下了为止。盖的时候分区按往外放 FILL_MARGIN 米算，盖完还是原来的范围。返回新的状态和盖了几块
+ */
+function fillZone(s: GrowState, z: GrowZone): { state: GrowState; n: number } {
+  const wide: GrowZone = { ...z, poly: inflate(z.poly, FILL_MARGIN) }
+  const swap = (st: GrowState, to: GrowZone): GrowState => ({ ...st, zones: st.zones.map((q) => (q.id === z.id ? to : q)) })
+  let cur = swap(s, wide)
+  let n = 0
+  for (; n < FILL_MAX; n++) {
+    const got = place(cur, { use: z.use, area: 1 }, placeSalt(cur))
+    if (!got || !pointInPoly(lotCenter(got.lots[0]), wide.poly)) break
+    cur = got.state
+  }
+  return { state: swap(cur, z), n }
+}
+const fillMsg = (n: number) => (n ? '' : t(gs.state.roads.length ? '这片分区里摆不下：把路通到分区边上再试' : '还没有路：先用「道路」画一条'))
 function commitZone(poly: GrowP[]) {
   cancelDraft()
   if (poly.length < 3) return
@@ -569,8 +609,23 @@ function commitZone(poly: GrowP[]) {
     return
   }
   checkpoint()
-  gs.msg = ''
+  const filled = gs.zoneFill ? fillZone(r.state, r.zone) : null
+  gs.msg = filled ? fillMsg(filled.n) : ''
+  commit(filled?.state ?? r.state)
+}
+/** 把选中的分区盖满 */
+export function fillSel() {
+  const x = selected()
+  if (x?.kind !== 'zone') return
+  const r = fillZone(gs.state, x.zone)
+  gs.msg = fillMsg(r.n)
+  if (!r.n) return
+  checkpoint()
   commit(r.state)
+}
+export function setZoneFill(on: boolean) {
+  gs.zoneFill = on
+  storeSet('growZoneFill', on ? '1' : '0')
 }
 /** 画完一下一下点出来的路或分区（回车、再点一下最后一个点） */
 export function finishDraft() {

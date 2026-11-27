@@ -67,7 +67,7 @@ defineStrings([
   ['点选地块、路、分区；拖动平移', 'Select lots, roads and zones; drag to pan', '区画・道・区域を選択。ドラッグで移動'],
   ['按住拖动随手画一条路，或一下一下点出折线', 'Drag to draw a road freehand, or click point by point', 'ドラッグで道を自由に描く。または一点ずつクリック'],
   ['沿路摆地块：点一下摆一块，按住拖动摆一排', 'Place lots along roads: click for one, drag for a row', '道沿いに区画を置く：クリックで一つ、ドラッグで一列'],
-  ['划一片地给某种用途：自动生长的同类地块优先落在里面', 'Reserve an area for one use: auto-grown lots of that use prefer it', '用途ごとに区域を決める：自動成長の同じ用途の区画が優先して入る'],
+  ['划一片地给某种用途：划完沿路盖满，自动生长的同类地块也优先落在里面', 'Reserve an area for one use: it is filled along the roads at once, and auto-grown lots of that use prefer it', '用途ごとに区域を決める：すぐ道沿いに埋められ、自動成長の同じ用途の区画も優先して入る'],
   ['用笔刷改地形：抬高、压低、平整、挖水、填陆', 'Reshape the land with brushes: raise, lower, level, water, fill', 'ブラシで地形を変える：盛り上げ・掘り下げ・整地・水面・埋め立て'],
   ['点一下拆掉地块、路、分区；按住拖动连着拆地块', 'Click to remove a lot, road or zone; drag to remove lots in a sweep', 'クリックで区画・道・区域を取り壊す。ドラッグで区画を続けて取り壊す'],
   [
@@ -91,9 +91,9 @@ defineStrings([
     'クリックで一区画、道沿いにドラッグで一列 · 区画は道端に吸着する · 田畑と資材置き場は同じ種類の裏にも続けられる',
   ],
   [
-    '按住拖一个框，或一下一下点出多边形 · 自动生长的同类地块优先落在里面',
-    'Drag a box, or click out a polygon · auto-grown lots of that use prefer it',
-    'ドラッグで枠を描く。または多角形を一点ずつクリック · 自動成長の同じ用途の区画が優先して入る',
+    '按住拖一个框，或一下一下点出多边形 · 划完沿路盖满这种用途，路不够时自己往里延',
+    'Drag a box, or click out a polygon · it is filled along the roads at once, extending lanes into it when needed',
+    'ドラッグで枠を描く。または多角形を一点ずつクリック · すぐ道沿いに埋められ、足りなければ小路が中へ延びる',
   ],
   [
     '点下一个顶点 · 点回第一个点或回车划好 · 退格删点 · 右键取消',
@@ -129,6 +129,11 @@ defineStrings([
   ['拆掉这条路', 'Remove this road', 'この道を取り壊す'],
   ['连同临街的地块一起拆（Delete）', 'Removes the lots along it too (Delete)', '沿道の区画ごと取り壊す（Delete）'],
   ['取消分区', 'Remove zone', '区域を取り消す'],
+  ['盖满', 'Fill', '埋める'],
+  ['沿路把这片分区盖满这种用途', 'Fill this zone with its use along the roads', 'この区域を道沿いにその用途で埋める'],
+  ['划完就盖满', 'Fill at once', 'すぐ埋める'],
+  ['划完分区马上沿路盖满这种用途；关掉就只是规划，留给自动生长', 'Fill a new zone with its use along the roads at once; when off, the zone is only a plan for auto growth', '区域を決めたらすぐ道沿いにその用途で埋める。オフなら自動成長のための計画だけになる'],
+  ['这片分区里摆不下：把路通到分区边上再试', 'Nothing fits in this zone: bring a road to its edge and try again', 'この区域には置けない：道を区域の縁まで通してからもう一度'],
   ['已经盖在里面的不动（Delete）', 'Lots already inside stay as they are (Delete)', 'すでに中にある区画はそのまま（Delete）'],
   [
     '用舞台下方的工具栏自己建：画路、摆建筑、划分区、刷地形、拆除。也可以让它按需求自己长。',
