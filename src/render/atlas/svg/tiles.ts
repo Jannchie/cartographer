@@ -16,6 +16,11 @@ export function cpuContext(c: HTMLCanvasElement) {
 
 const key = (z: number, i: number, j: number) => `${z}:${i}:${j}`
 
+/** 页面坐标里的矩形：[x0, y0, x1, y1] */
+export type Rect = readonly [number, number, number, number]
+/** 矩形 x0…x1 × y0…y1 有没有压到 dirty 里的哪一个 */
+export const hitsAny = (dirty: readonly Rect[], x0: number, y0: number, x1: number, y1: number) => dirty.some((d) => d[0] < x1 && d[2] > x0 && d[1] < y1 && d[3] > y0)
+
 /**
  * 细节层的瓦片缓存：放大到超出底图精度时，按缩放级别把显示列表切成 T 见方的瓦片逐块绘制、缓存。
  * 级别 z 的瓦片以 baseScale · 2^z 的倍率绘制（不低于屏幕精度，合成时只缩小不放大）。
@@ -115,14 +120,16 @@ export class TileCache {
     return missing
   }
 
-  /** 换成只有 dirty（页面坐标的矩形）这几处不同的列表：压到它们的瓦片作废，其余的照旧用 */
-  swap(list: DisplayList, dirty: readonly (readonly [number, number, number, number])[]) {
+  /** 换成只有 dirty 这几处不同的列表：压到它们的瓦片作废，其余的照旧用。返回有没有瓦片作废 */
+  swap(list: DisplayList, dirty: readonly Rect[]) {
     this.list = list
-    for (const k of [...this.tiles.keys()]) {
+    let dropped = false
+    for (const k of this.tiles.keys()) {
       const [z, i, j] = k.split(':').map(Number)
       const P = T / this.scaleOf(z)
-      if (dirty.some((d) => d[0] < (i + 1) * P && d[2] > i * P && d[1] < (j + 1) * P && d[3] > j * P)) this.tiles.delete(k)
+      if (hitsAny(dirty, i * P, j * P, (i + 1) * P, (j + 1) * P)) dropped = this.tiles.delete(k)
     }
+    return dropped
   }
 
   /** 画级别 z 的一块瓦片并缓存 */

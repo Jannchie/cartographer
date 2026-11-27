@@ -1,7 +1,7 @@
 import type { DisplayList } from './displayList'
 import { LABEL_SHRINK, MIN_LABEL_PX } from '../labelSize'
 import { clamp } from '../../../gen/util'
-import { cpuContext, TileCache } from './tiles'
+import { cpuContext, hitsAny, TileCache, type Rect } from './tiles'
 import type { InsetOf } from './inset'
 
 export interface Box {
@@ -52,7 +52,7 @@ export class AtlasViewer {
   /** 等着重画的格子（见 patchList）与排好的那一帧 */
   private stale = new Set<Cell>()
   private cellRaf = 0
-  /** 排着队的是整张重画（每帧多画几格） */
+  /** 排着队的是整张、大半张重画（每帧多画几格） */
   private bulk = false
   private detail = document.createElement('canvas')
   private labels = document.createElement('canvas')
@@ -201,24 +201,22 @@ export class AtlasViewer {
    * 底图只重画压到它们的格子、细节层只作废压到它们的瓦片——整张重画一次要把成千上万条指令栅格化到几千像素见方的画布上（几百毫秒，
    * 期间拖动、缩放都卡住），局部重画只和改动的面积成正比（底图要切成格子才有用，见构造时的 cell）。图廓不重画（要换图题另调 setChrome）。
    * labels：地图注记有没有变（没变就不重画注记层）。
-   * 没有底图、尺寸不同时退回 setList
+   * 还没有列表、尺寸不同时退回 setList
    */
-  patchList(list: DisplayList, dirty: readonly (readonly [number, number, number, number])[], labels = true) {
+  patchList(list: DisplayList, dirty: readonly Rect[], labels = true) {
     const old = this.list
     if (list === old) return
-    if (!old || !this.cells.length || old.width !== list.width || old.height !== list.height || old.M !== list.M) return this.setList(list)
+    if (!old || old.width !== list.width || old.height !== list.height || old.M !== list.M) return this.setList(list)
     this.list = list
-    // 压到改动处的格子整格重画（按格子重画不必裁剪，格子之间没有接缝）。不当场画：排进队里每帧画几格（见 flushCells），
-    // 一步改得再多也不会把一帧占满；排着队的格子画的时候用的是那时最新的列表
+    // 压到改动处的格子整格重画。不当场画：排进队里每帧画几格（见 flushCells），一步改得再多也不会把一帧占满；
+    // 排着队的格子画的时候用的是那时最新的列表
     const s = this.baseScale
-    for (const cell of this.cells) {
-      const x1 = (cell.x + cell.c.width) / s
-      const y1 = (cell.y + cell.c.height) / s
-      if (dirty.some((d) => d[0] < x1 && d[2] > cell.x / s && d[1] < y1 && d[3] > cell.y / s)) this.stale.add(cell)
-    }
-    if (this.stale.size && !this.cellRaf) this.cellRaf = requestAnimationFrame(() => this.flushCells())
-    this.tiles?.swap(list, dirty)
-    this.scheduleDetail()
+    for (const cell of this.cells) if (hitsAny(dirty, cell.x / s, cell.y / s, (cell.x + cell.c.width) / s, (cell.y + cell.c.height) / s)) this.stale.add(cell)
+    // 大半张都变了（换了一份规划）：和整张重画一样快点铺满
+    if (this.stale.size > this.cells.length / 2) this.bulk = true
+    this.scheduleCells()
+    // 细节层只在有瓦片作废时重新合成
+    if (this.tiles?.swap(list, dirty)) this.scheduleDetail()
     // 注记层是视口那么大的一张画布，每重画一次整个页面都要重新合成：注记没变就不动它
     if (labels) this.drawLabels()
   }
@@ -235,7 +233,7 @@ export class AtlasViewer {
     this.drawLabels()
   }
 
-  /** 底图：整张栅格化一次（图框模式下只画地图层，图廓另画） */
+  /** 底图整张重画：整张一块时当场画完，切成格子时排队画（图框模式下只画地图层，图廓另画） */
   private rasterBase() {
     const list = this.list
     if (!list) return
@@ -269,8 +267,12 @@ export class AtlasViewer {
     if (this.o.cell) {
       for (const cell of this.cells) this.stale.add(cell)
       this.bulk = true
-      if (!this.cellRaf) this.cellRaf = requestAnimationFrame(() => this.flushCells())
+      this.scheduleCells()
     } else for (const cell of this.cells) this.paintCell(cell)
+  }
+
+  private scheduleCells() {
+    if (this.stale.size && !this.cellRaf) this.cellRaf = requestAnimationFrame(() => this.flushCells())
   }
 
   /** 每帧重画几格排着队的（一格的指令真正栅格化要几毫秒，发生在浏览器的绘制阶段），画不完的下一帧接着画 */
@@ -284,8 +286,8 @@ export class AtlasViewer {
       this.paintCell(cell)
       if (++n >= max) break
     }
-    if (this.stale.size) this.cellRaf = requestAnimationFrame(() => this.flushCells())
-    else this.bulk = false
+    if (!this.stale.size) this.bulk = false
+    this.scheduleCells()
   }
 
   /** 画底图的一格（图框模式下只画地图层，图廓另画） */
