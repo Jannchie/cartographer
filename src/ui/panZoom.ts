@@ -15,8 +15,16 @@ export function fitInto(view: PanView, r: { x: number; y: number; w: number; h: 
   view.y = r.y + (r.h - page.MH * k) / 2 - page.M * k
 }
 
+export interface PanZoomOpts {
+  min: number
+  max: number
+  fit?: () => void
+  /** 返回 true 时主键（左键、单指）归调用方的工具用：不平移、双击不适配；别的键拖动与双指照旧平移缩放 */
+  tool?: () => boolean
+}
+
 /** 在 el 上接好拖动与滚轮；view 原地修改，改完调用 apply。fit 给出时双击适配 */
-export function bindPanZoom(el: HTMLElement, view: PanView, apply: () => void, o: { min: number; max: number; fit?: () => void }) {
+export function bindPanZoom(el: HTMLElement, view: PanView, apply: () => void, o: PanZoomOpts) {
   let drag: { x: number; y: number; vx: number; vy: number } | null = null
   // 触屏双指：按下的手指位置；两指时以两指中点为中心缩放，同时跟着中点平移
   const touches = new Map<number, { x: number; y: number }>()
@@ -29,7 +37,7 @@ export function bindPanZoom(el: HTMLElement, view: PanView, apply: () => void, o
   /** 剩一根手指（或松开第二指）时，从它当前位置接着单指拖动，免得地图跳一下 */
   const restartDrag = () => {
     const p = [...touches.values()][0]
-    drag = p ? { x: p.x, y: p.y, vx: view.x, vy: view.y } : null
+    drag = p && !o.tool?.() ? { x: p.x, y: p.y, vx: view.x, vy: view.y } : null
   }
   el.addEventListener('pointerdown', (e) => {
     el.setPointerCapture(e.pointerId)
@@ -42,6 +50,7 @@ export function bindPanZoom(el: HTMLElement, view: PanView, apply: () => void, o
       }
       if (touches.size > 2) return
     }
+    if (e.button === 0 && o.tool?.()) return
     drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }
     el.classList.add('dragging')
   })
@@ -92,7 +101,7 @@ export function bindPanZoom(el: HTMLElement, view: PanView, apply: () => void, o
     },
     { passive: false },
   )
-  if (o.fit) el.addEventListener('dblclick', o.fit)
+  if (o.fit) el.addEventListener('dblclick', () => !o.tool?.() && o.fit!())
   bindKeys(el, view, apply, o)
 }
 
@@ -106,7 +115,7 @@ const ZOOM_KEYS: Record<string, number> = { '+': 1, '=': 1, '-': -1, _: -1 }
  * 键盘导航：方向键平移、+ / − 以视口中心缩放（按住连续平滑移动，Shift 加速），0 适配整图。
  * 只对看得见的那张图起作用；焦点在输入框、滑块这类自己处理按键的控件上时让位（isTypingTarget）
  */
-function bindKeys(el: HTMLElement, view: PanView, apply: () => void, o: { min: number; max: number; fit?: () => void }) {
+function bindKeys(el: HTMLElement, view: PanView, apply: () => void, o: PanZoomOpts) {
   const held = new Set<string>()
   let shift = false
   let raf = 0
