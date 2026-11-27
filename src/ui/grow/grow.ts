@@ -182,6 +182,8 @@ export const gs = reactive({
   preview: null as { pts: GrowP[]; ok: boolean; closed: boolean } | null,
   /** 建筑工具下指针处会摆出来的地块 */
   ghost: null as { poly: GrowP[]; ok: boolean } | null,
+  /** 画路时指针吸到的已有的路上的点（画一个圈） */
+  snap: null as GrowP | null,
   /** 指针旁的一行字：长度、不行的原因 */
   tip: null as { text: string; bad: boolean } | null,
   /** 指针下的东西（点选、拆除时描出来） */
@@ -434,6 +436,7 @@ export function pickOption(i: number) {
 export function cancelDraft() {
   gs.draft = []
   gs.free = null
+  gs.snap = null
   gs.preview = null
   gs.ghost = null
   gs.tip = null
@@ -488,6 +491,46 @@ const roadLine = (pts: GrowP[]): GrowP[] => {
 const rectOf = (a: GrowP, b: GrowP): GrowP[] => [a, [b[0], a[1]], b, [a[0], b[1]]]
 
 // —— 道路 ——
+/** 吸附的范围（屏幕像素）：路的端头、路身；折成米以后不小于引擎自己的 8 米 */
+const SNAP_END_PX = 14
+const SNAP_BODY_PX = 10
+const SNAP_M = 8
+/**
+ * 画路时把点吸到已有的路上：先找端头（首尾相接，连成一条线），再找路身上最近的一点（落点离端头很近时也算端头）。
+ * 范围按屏幕像素算：缩得再小也接得上。没有可吸的返回 null
+ */
+function snapToRoad(p: GrowP): GrowP | null {
+  const endR = Math.max(SNAP_M, pxToM(SNAP_END_PX))
+  let best: GrowP | null = null
+  let bd = endR
+  for (const r of gs.state.roads)
+    for (const e of [r.pts[0], r.pts[r.pts.length - 1]]) {
+      const d = Math.hypot(p[0] - e[0], p[1] - e[1])
+      if (d < bd) {
+        bd = d
+        best = [e[0], e[1]]
+      }
+    }
+  if (best) return best
+  bd = Math.max(SNAP_M, pxToM(SNAP_BODY_PX))
+  for (const r of gs.state.roads)
+    for (let i = 0; i + 1 < r.pts.length; i++) {
+      const a = r.pts[i]
+      const b = r.pts[i + 1]
+      const { d, t } = segDist(p, a, b)
+      if (d >= bd) continue
+      bd = d
+      const q: GrowP = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+      const end = [r.pts[0], r.pts[r.pts.length - 1]].find((e) => Math.hypot(q[0] - e[0], q[1] - e[1]) < SNAP_M)
+      best = end ? [end[0], end[1]] : cm(q)
+    }
+  return best
+}
+/** 吸附后的点，并记下吸到了哪儿（没吸到就是原来的点） */
+function snapped(p: GrowP): GrowP {
+  gs.snap = snapToRoad(p)
+  return gs.snap ?? p
+}
 /** 试铺一条路（不改状态）：给出预览与指针旁的字 */
 function previewRoad(pts: GrowP[]) {
   if (pts.length < 2) {
@@ -594,7 +637,7 @@ function toolDown(p: GrowP, g: Gesture) {
   else if (gs.tool === 'erase') {
     const h = hitAt(p)
     if (h && remove(h, !g.marked)) g.marked = true
-  } else if (!gs.draft.length) gs.free = [p]
+  } else if (!gs.draft.length) gs.free = [gs.tool === 'road' ? snapped(p) : p]
 }
 function toolDrag(p: GrowP, g: Gesture) {
   if (gs.tool === 'build') build(p, true, g)
@@ -606,7 +649,10 @@ function toolDrag(p: GrowP, g: Gesture) {
     if (!near(p, gs.free[gs.free.length - 1], 3)) gs.free = [...gs.free, p]
   } else if (gs.tool === 'road' && gs.free) {
     if (!near(p, gs.free[gs.free.length - 1], 4)) gs.free = [...gs.free, p]
-    previewRoad(roadLine(gs.free))
+    // 走线的末端吸到已有的路上（松手时接上去）
+    const end = snapToRoad(p)
+    gs.snap = end
+    previewRoad(roadLine(end ? [...gs.free, end] : gs.free))
   } else if (gs.tool === 'zone' && gs.free) {
     gs.free = [gs.free[0], p]
     gs.preview = { pts: rectOf(gs.free[0], p), ok: true, closed: true }
@@ -622,7 +668,7 @@ function toolUp(p: GrowP, g: Gesture) {
   if (gs.tool !== 'road' && gs.tool !== 'zone') return
   // 拖出来的一笔：路的走线、分区的框
   if (g.moved && free && !gs.draft.length) {
-    if (gs.tool === 'road') commitRoad(roadLine([...free, p]).map(cm))
+    if (gs.tool === 'road') commitRoad(roadLine([...free, snapToRoad(p) ?? p]).map(cm))
     else if (Math.abs(p[0] - free[0][0]) > 8 && Math.abs(p[1] - free[0][1]) > 8) commitZone(rectOf(cm(free[0]), cm(p)))
     else cancelDraft()
     return
@@ -631,7 +677,7 @@ function toolUp(p: GrowP, g: Gesture) {
   const d = gs.draft
   if (gs.tool === 'road' && d.length >= 2 && near(p, d[d.length - 1])) return finishDraft()
   if (gs.tool === 'zone' && d.length >= 3 && near(p, d[0])) return finishDraft()
-  gs.draft = [...d, cm(p)]
+  gs.draft = [...d, cm(gs.tool === 'road' ? snapped(p) : p)]
   toolHover(p)
 }
 /** 没按着的时候指针挪动：各工具的预览 */
@@ -643,7 +689,8 @@ function toolHover(p: GrowP) {
   gs.hot = null
   if (gs.tool === 'build') probe(p)
   else if (gs.tool === 'road') {
-    if (gs.draft.length) previewRoad([...gs.draft, p])
+    const q = snapped(p)
+    if (gs.draft.length) previewRoad([...gs.draft, q])
   } else if (gs.tool === 'zone') {
     gs.preview = gs.draft.length ? { pts: [...gs.draft, p], ok: true, closed: true } : null
   }
@@ -779,6 +826,7 @@ export function mountGrow(el: HTMLElement) {
     if (g) return
     gs.cursor = null
     gs.hot = null
+    gs.snap = null
     gs.ghost = null
     gs.tip = null
     if (!gs.draft.length) gs.preview = null

@@ -56,6 +56,7 @@ const sel = computed(() => (gs.sel?.kind === 'zone' ? null : outline(G.selected(
 const hot = computed(() => outline(G.hovered()))
 const preview = computed(() => gs.preview && { ...gs.preview, pts: pts(gs.preview.pts) })
 const dots = computed(() => gs.draft.map(at))
+const snap = computed(() => gs.snap && at(gs.snap))
 const ghost = computed(() => gs.ghost && { pts: pts(gs.ghost.poly), ok: gs.ghost.ok, color: USE_COLOR[gs.buildUse] })
 /** 地形笔刷：指针处的圈、画到一半的一笔 */
 const brush = computed(() => {
@@ -102,6 +103,7 @@ const empty = computed(() => !gs.state.roads.length && !gs.state.lots.length && 
         <polyline v-else :points="preview.pts" class="draft line" :class="{ bad: !preview.ok }" />
       </template>
       <circle v-for="(d, i) in dots" :key="i" :cx="d[0]" :cy="d[1]" r="3.5" class="dot" />
+      <circle v-if="snap" :cx="snap[0]" :cy="snap[1]" r="7" class="snap" />
       <polygon v-if="ghost" :points="ghost.pts" class="ghost" :class="{ bad: !ghost.ok }" :style="ghost.ok ? { fill: ghost.color, stroke: ghost.color } : undefined" />
       <template v-if="stroke">
         <circle v-if="stroke.dot" :cx="stroke.dot[0]" :cy="stroke.dot[1]" :r="stroke.w / 2" :fill="stroke.color" fill-opacity="0.35" />
@@ -214,6 +216,11 @@ polyline.hot.erase {
   fill: var(--paper);
   stroke: var(--ink);
   stroke-width: 1.5;
+}
+.snap {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
 }
 .ghost {
   fill-opacity: 0.35;

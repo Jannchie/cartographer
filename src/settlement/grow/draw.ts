@@ -93,7 +93,8 @@ export function toSettlement(state: GrowState, o: DrawOpts = {}): Settlement {
     }
   }
 
-  const roads: Road[] = state.roads.map((r) => ({ line: r.pts, width: ROAD_WIDTH[r.kind], kind: r.kind }))
+  // 圆头：一段一段铺的路首尾相接、几条交在一点时接头是圆滑的
+  const roads: Road[] = state.roads.map((r) => ({ line: r.pts, width: ROAD_WIDTH[r.kind], kind: r.kind, roundEnds: true }))
   // 路过水的地方架桥：沿路每 2 米看一下，下水的那一段两头各多出 2 米
   const crossings: Crossing[] = []
   for (const r of state.roads) {

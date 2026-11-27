@@ -1,5 +1,6 @@
 // 手动编辑（manual.ts、relief.ts、plan.ts 的架桥与连地块拆路）的自检：pnpm tsx scripts/grow-edit.ts [种子]
 // 从什么都没有的空地起：没有路时 place、probeLot 都找不到地方；铺一条路之后沿路摆地块（吸附、挨着摆、压到别的地被拒绝、离路太远没有位置），
+// 路的端点接到已有的路的端头或路身上，
 // 拆地块、连地块拆路；改地形：抬高、平整、挖水（漫到的地块去掉）、填陆；挖出来的水面不架桥过不去、架桥过得去；
 // 地形的缓存：接着上一份画出来的，和从头叠一遍的逐位相同；状态过一遍 JSON 也相同。有一项不成立，退出码是 1。
 const { addRoad, blankState, lotAtPoint, lotCenter, paintTerrain, place, placeAt, probeLot, removeLot, removeRoad } = await import('../src/settlement/grow')
@@ -62,6 +63,12 @@ s = f2.state
 const c = must(placeAt(s, { use: 'center' }, [500, 380]))
 ok(Math.hypot(c.state.center[0] - lotCenter(c.lot)[0], c.state.center[1] - lotCenter(c.lot)[1]) < 0.02, '摆村心：state.center 挪到它上面')
 s = c.state
+
+// 路的端点：离已有的路的端头不到 8 米接在端头上（首尾相接），否则落在路身上
+const tip = must(addRoad(s, [[605, 404], [700, 300]], 'street')).road
+ok(tip.pts[0][0] === 600 && tip.pts[0][1] === 400, `端点离路的端头 6 米：接在端头上（${tip.pts[0]}）`)
+const tee = must(addRoad(s, [[420, 395], [420, 300]], 'street')).road
+ok(tee.pts[0][0] === 420 && tee.pts[0][1] === 400, `端点离路身 5 米、离端头远：落在路身上（${tee.pts[0]}）`)
 
 // —— 拆 ——
 const n0 = s.lots.length

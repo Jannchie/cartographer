@@ -703,21 +703,23 @@ function treeChunk(R: Painter, trees: Settlement['trees'], withShadow: boolean) 
  */
 function roads(R: Painter, st: Settlement, th: SettleTheme) {
   const S = R.S
+  /** 同样宽、同样端头的路一起画，宽的先画 */
   const byWidth = (kinds: Road['kind'][]) => {
-    const g = new Map<number, P[][]>()
+    const g = new Map<string, { w: number; round: boolean; lines: P[][] }>()
     for (const r of st.roads) {
       if (!kinds.includes(r.kind)) continue
-      let l = g.get(r.width)
-      if (!l) g.set(r.width, (l = []))
-      l.push(r.line)
+      const k = `${r.width}|${r.roundEnds ? 1 : 0}`
+      let l = g.get(k)
+      if (!l) g.set(k, (l = { w: r.width, round: !!r.roundEnds, lines: [] }))
+      l.lines.push(r.line)
     }
-    return [...g].sort((a, b) => b[0] - a[0])
+    return [...g.values()].sort((a, b) => b.w - a.w)
   }
-  // 端头是方的（平头，多出半个路宽，接到别的路上不露缝）；拐角是圆的
-  const round = { cap: 'square', join: 'round' } as const
-  for (const [w, lines] of byWidth(['highway'])) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, ...round })
-  for (const [w, lines] of byWidth(['lane', 'main', 'street'])) R.lines(lines, { color: th.street, alpha: 1, width: w * S, ...round })
-  for (const [w, lines] of byWidth(['path'])) R.lines(lines, { color: th.plaza, alpha: 1, width: Math.max(1, w * S), ...round })
+  // 端头是方的（平头，多出半个路宽，接到别的路上不露缝；roundEnds 的路是圆头）；拐角是圆的
+  const ends = (round: boolean) => ({ cap: round ? 'round' : 'square', join: 'round' }) as const
+  for (const { w, round, lines } of byWidth(['highway'])) R.lines(lines, { color: th.road.fill, alpha: 1, width: w * S, ...ends(round) })
+  for (const { w, round, lines } of byWidth(['lane', 'main', 'street'])) R.lines(lines, { color: th.street, alpha: 1, width: w * S, ...ends(round) })
+  for (const { w, round, lines } of byWidth(['path'])) R.lines(lines, { color: th.plaza, alpha: 1, width: Math.max(1, w * S), ...ends(round) })
   for (const r of st.roads.filter((r) => r.kind === 'stair')) {
     R.lines([r.line], { color: th.road.casing ?? th.ink, alpha: 0.8, width: (r.width + 1) * S, cap: 'round', join: 'round' })
     R.lines([r.line], { color: th.road.fill, alpha: 1, width: r.width * S, cap: 'round', join: 'round' })

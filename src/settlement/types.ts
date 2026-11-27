@@ -236,6 +236,8 @@ export interface Road {
   width: number
   kind: 'highway' | 'main' | 'street' | 'lane' | 'path' | 'stair'
   name?: Tri
+  /** 端头画成圆的（不给是方头）：一段一段手铺的路首尾相接、几条交在一点时，接头不露棱角 */
+  roundEnds?: boolean
 }
 
 export interface Crossing {

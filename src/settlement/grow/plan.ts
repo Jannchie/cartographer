@@ -4,7 +4,7 @@ import type { GrowFault, GrowLot, GrowP, GrowRoad, GrowRoadKind, GrowState, Grow
 import { ROAD_CLEAR, ROAD_EDGE, ROAD_WATER, ROAD_WIDTH, checkState, cm, terrainOf } from './core'
 
 // 手动的规划（玩家、或者游戏里的人「修路 / 划区」）：和自动生长改的是同一份状态，规则一句一条：
-//   - 手动铺路：端点离已有的路不到 SNAP 米就接到那条路上（落在最近的那一点）；路至少 MIN_LEN 米、都在画幅里；
+//   - 手动铺路：端点离已有的路不到 SNAP 米就接到那条路上（离路的端头不到 SNAP 米接在端头上，否则落在路身上最近的那一点）；路至少 MIN_LEN 米、都在画幅里；
 //     跨水（离水不到 2 米）、压到在用的地块的拒绝，说明原因；压到空着的地，那块空地去掉。
 //     调用方说可以架桥（opts.bridge）时路可以过河、湖：两头在岸上、一座桥不超过 BRIDGE_MAX 米，海不跨；画图时水上那一段是桥。
 //   - 拆路：路上还有临街的在用地块就拒绝（opts.lots 时连同它们一起拆）；临着它的空地一并去掉。别的路接在它上面的不管（会断开，以后细化）。
@@ -18,10 +18,19 @@ const MIN_LEN = 10
 /** 一座桥（路连续在水上的一段）最长多少米 */
 const BRIDGE_MAX = 120
 
-/** 点落到最近的一条路上（不到 SNAP 米才算） */
+/** 点落到最近的一条路上（不到 SNAP 米才算）：先找路的端头（首尾相接，连成一条线），没有再落到路身上最近的一点 */
 function snap(state: GrowState, p: GrowP): GrowP {
   let best: GrowP = p
   let bd = SNAP
+  for (const r of state.roads)
+    for (const e of [r.pts[0], r.pts[r.pts.length - 1]]) {
+      const d = dmath.hypot(p[0] - e[0], p[1] - e[1])
+      if (d < bd) {
+        bd = d
+        best = [e[0], e[1]]
+      }
+    }
+  if (bd < SNAP) return best
   for (const r of state.roads)
     for (let i = 0; i + 1 < r.pts.length; i++) {
       const a = r.pts[i]
