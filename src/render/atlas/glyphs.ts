@@ -233,7 +233,8 @@ export function drawGlyphs(ctx: CanvasRenderingContext2D, f: Fields, o: GlyphCol
 
 // ———————————————————————— 平铺笔触 ————————————————————————
 
-function flatMarks(ctx: CanvasRenderingContext2D, f: Fields, o: GlyphColors, k: number, wet: (i: number) => boolean) {
+/** 草丛、沙丘、点彩、沼泽这些平铺笔触（符号套原型 ./symbols 也用它） */
+export function flatMarks(ctx: CanvasRenderingContext2D, f: Fields, o: GlyphColors, k: number, wet: (i: number) => boolean) {
   const { world, S, W, H } = f
   const e = world.elevation
   const bio = world.biome
@@ -337,6 +338,16 @@ function flatMarks(ctx: CanvasRenderingContext2D, f: Fields, o: GlyphColors, k: 
 }
 
 // ———————————————————————— 遮挡符号 ————————————————————————
+
+/** 单棵树的现有画法（符号套原型 ./symbols 里"现有的树"用它，与 drawGlyphs 画的相同） */
+export function drawTreeGlyph(ctx: Pen, kind: 'tree' | 'jungle' | 'conifer' | 'acacia' | 'bush', x: number, y: number, s: number, seed: number, o: GlyphColors, k: number) {
+  const g: G = { x, y, kind, s, seed }
+  if (kind === 'conifer') conifer(ctx, g, o, k)
+  else if (kind === 'acacia') acacia(ctx, g, o, k)
+  else if (kind === 'bush') bush(ctx, g, o, k)
+  else tree(ctx, g, o, k)
+}
+
 
 function poly(ctx: Pen, pts: P[], close = true) {
   ctx.beginPath()

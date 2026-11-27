@@ -120,6 +120,8 @@ export interface Theme {
   graticule: string | null
   /** 手绘的山形、树林符号：给了配色就画 */
   glyphs?: GlyphColors
+  /** 【实验】符号的画法：不给就用现有的 drawGlyphs。符号套原型（./symbols）的比较图用它换画法，内置风格都不设 */
+  glyphDraw?: (ctx: CanvasRenderingContext2D, f: Fields, colors: GlyphColors) => void
   rhumb?: boolean
   soundings?: boolean
   realms?: boolean

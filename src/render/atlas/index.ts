@@ -152,7 +152,7 @@ export function drawMapOverlays(ctx: CanvasRenderingContext2D, f: Fields, theme:
   if (theme.soundings) drawSoundings(ctx, f)
   const rv = theme.river
   drawRivers(ctx, rv.fitCoast ? fitRiversToCoast(rivers, f) : rivers, W, S, rv.color, rv.width, rv.minFlow)
-  if (theme.glyphs) drawGlyphs(ctx, f, theme.glyphs)
+  if (theme.glyphs) (theme.glyphDraw ?? drawGlyphs)(ctx, f, theme.glyphs)
   if (opts.political) drawPolitical(ctx, world, S, theme, opts.political)
   // 道路画在山形、树林符号之上：翻山的路段也看得见
   drawRoads(ctx, world.roads, S, theme.roads)
