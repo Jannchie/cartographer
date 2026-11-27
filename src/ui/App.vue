@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconCastle, IconChartBar, IconDatabase, IconDiorama, IconFlag, IconImage, IconLeaf, IconLibrary, IconMountain, IconPalette, IconRegion, IconSave, IconShapes, IconSliders } from '@jannchie/icons'
+import { IconCastle, IconChartBar, IconDatabase, IconDiorama, IconFlag, IconImage, IconLeaf, IconLibrary, IconMountain, IconPalette, IconRegion, IconSave, IconShapes, IconSliders, IconSprout } from '@jannchie/icons'
 import { computed, ref, watchEffect } from 'vue'
 import { app, storeGet, storeSet } from './app'
 import { langRef, t } from './i18n'
@@ -12,6 +12,9 @@ import Plugins from './Plugins.vue'
 import SettlementPanel from './settlement/SettlementPanel.vue'
 import SettlementStage from './settlement/SettlementStage.vue'
 import * as S from './settlement/settlement'
+import GrowPanel from './grow/GrowPanel.vue'
+import GrowStage from './grow/GrowStage.vue'
+import * as G from './grow/grow'
 import WorldPanel from './world/WorldPanel.vue'
 import WorldStage from './world/WorldStage.vue'
 import Library from './world/Library.vue'
@@ -50,6 +53,17 @@ const settleTabs = computed(() => [
   ...(S.ss.mode === 'areas' ? [{ id: 'areas' as const, label: '区域', icon: IconRegion }] : []),
   { id: 'stats' as const, label: '统计', icon: IconChartBar },
 ])
+
+const growExports = [
+  { label: 'PNG', title: '按 2 倍分辨率导出', icon: IconImage, run: G.exportPng },
+  { label: 'SVG', title: '矢量版本，可无损放大', icon: IconShapes, run: G.exportSvg },
+  { label: '生长状态', title: '这一局的生长状态（.json）：路、地块、分区、地形笔画', icon: IconDatabase, run: G.exportState },
+]
+const growTabs = [
+  { id: 'grow' as const, label: '建造', icon: IconSprout, title: '手动建造与自动生长' },
+  { id: 'land' as const, label: '开局', icon: IconMountain, title: '开局的地形参数、起始方式与绘图风格' },
+  { id: 'stats' as const, label: '统计', icon: IconChartBar },
+]
 
 const file = ref<HTMLInputElement>()
 function openFile() {
@@ -112,6 +126,10 @@ function pickSettleTab(tab: S.SettleTab) {
   S.setTab(tab)
   if (narrow.value) sheet.reveal()
 }
+function pickGrowTab(tab: G.GrowTab) {
+  G.setTab(tab)
+  if (narrow.value) sheet.reveal()
+}
 watchEffect(() => {
   document.documentElement.lang = langRef.value === 'zh' ? 'zh-CN' : langRef.value
   document.title = t('Cartographer · 世界地图生成器')
@@ -149,11 +167,13 @@ watchEffect(() => {
           </div>
         </div>
         <PanelTabs v-if="app.module === 'world'" :tabs="worldTabs" :model-value="ws.tab" @update:model-value="pickWorldTab" />
+        <PanelTabs v-else-if="app.module === 'grow'" :tabs="growTabs" :model-value="G.gs.tab" @update:model-value="pickGrowTab" />
         <PanelTabs v-else :tabs="settleTabs" :model-value="S.ss.tab" @update:model-value="pickSettleTab" />
       </header>
       <div class="panel-scroll">
         <WorldPanel v-show="app.module === 'world'" />
         <SettlementPanel v-show="app.module === 'settlement'" />
+        <GrowPanel v-show="app.module === 'grow'" />
       </div>
       <!-- 生成常驻在底部：改完参数点它才重新生成；导出是旁边的图标按钮，点开选格式 -->
       <footer class="panel-foot">
@@ -162,6 +182,12 @@ watchEffect(() => {
             {{ t(ws.dirty ? '按新参数生成' : '生成世界') }}
           </button>
           <ExportMenu :items="worldExports" />
+        </template>
+        <template v-else-if="app.module === 'grow'">
+          <button type="button" class="primary" :class="{ dirty: G.dirty.value }" :title="t('按开局的参数重新开始，当前这一局会清空（可撤销）')" @click="G.restart()">
+            {{ t(G.dirty.value ? '按新参数重新开局' : '重新开局') }}
+          </button>
+          <ExportMenu :items="growExports" />
         </template>
         <template v-else>
           <button type="button" class="primary" :class="{ dirty: S.dirty.value }" @click="S.run()">
@@ -187,6 +213,7 @@ watchEffect(() => {
     <div v-if="narrow && sheet.snap.value === 'full'" class="sheet-scrim" @click="sheet.setSnap('half')"></div>
     <WorldStage v-show="app.module === 'world'" />
     <SettlementStage v-show="app.module === 'settlement'" />
+    <GrowStage v-show="app.module === 'grow'" />
   </div>
   <input ref="file" type="file" accept=".json,application/json" hidden @change="onFile" />
 </template>

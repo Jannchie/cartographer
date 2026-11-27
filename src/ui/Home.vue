@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { IconArrowRight, IconLibrary, IconPuzzle } from '@jannchie/icons'
+import { IconArrowRight, IconLibrary, IconPuzzle, IconSprout } from '@jannchie/icons'
 import { app } from './app'
 import { langRef, t } from './i18n'
 import Icon from './kit/Icon.vue'
@@ -46,6 +46,7 @@ const plates = [
       </div>
       <footer class="home-foot">
         <button type="button" class="link" @click="emit('open')"><Icon :icon="IconLibrary" :size="14" />{{ t('世界库…') }}</button>
+        <button type="button" class="link" :title="t('从一片空地起一块一块地长出村子：生长引擎的试验场')" @click="app.module = 'grow'"><Icon :icon="IconSprout" :size="14" />{{ t('村落生长…') }}</button>
         <button type="button" class="link" data-open="plugins" @click="openPlugins()"><Icon :icon="IconPuzzle" :size="14" />{{ t('插件…') }}</button>
         <LangSelect />
       </footer>

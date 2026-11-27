@@ -3,7 +3,7 @@ import type { Label, Registry } from '../kernel'
 // 先定下界面语言：它要读地址里的 lang= 参数，而下面启动时会把地址规整掉
 import '../i18n'
 
-export type Module = 'home' | 'world' | 'settlement'
+export type Module = 'home' | 'world' | 'settlement' | 'grow'
 
 export function storeGet(k: string) {
   try {
@@ -87,8 +87,9 @@ export function storedJson<T extends object>(key: string, refs: { [K in keyof T]
 // #/            首页
 // #/world?...   世界地图（查询串是与默认值不同的世界参数）
 // #/settlement?... 聚落地图（查询串见 settlement.ts 的 encodeSettlement）
+// #/grow?...   村落生长（查询串是地形参数，见 grow/grow.ts）
 // 旧版的世界分享链接 #seed=...&landRatio=... 没有路径，按世界地图处理
-const MODULES: Module[] = ['home', 'world', 'settlement']
+const MODULES: Module[] = ['home', 'world', 'settlement', 'grow']
 
 export function parseRoute(hash: string): { module: Module; query: URLSearchParams } | null {
   const h = hash.replace(/^#/, '')
