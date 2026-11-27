@@ -1,5 +1,5 @@
 import * as dmath from '../../gen/dmath'
-import { hash3 } from '../../gen/rng'
+import { hash3, hashString } from '../../gen/rng'
 import { at, box, type Frame, type P, type Poly } from '../geom'
 import type { Building, BuildingKind, Crossing, Field, Road, Settlement } from '../types'
 import type { GrowLot, GrowState } from './api'
@@ -8,6 +8,8 @@ import { ROAD_WIDTH, USES, settleParams, terrainOf, useOf } from './core'
 // 生长状态 → cartographer 的 Settlement，交给 buildSettlementVector 画（纯函数，不碰 DOM）。
 // 盖好的住处、铺子、公家、村心 → buildings（对不上的用途用 shed / hall / large 加 role 文字代画：料场、工棚、作坊……），
 // 田 → fields，路 → roads（路过水的地方架一座桥）。在建的不进 buildings，由调用方另外叠；空着的地不画。
+// 每块地上的样子（屋子的大小、朝向、退让、靠哪一侧，棚子、院墙、菜园、树）按地块 id 的哈希各不相同：同一块地每次画出来都一样。
+// 住处照一次成形的生成器里疏档街坊的一户（wards.ts 的 detached）的样子摆：屋子贴着街、靠宅地的一侧，屋后是院子。
 // 没有：片区、街区底色、院墙、注记（wards / blocks / labels 都是空的）。
 
 export interface DrawOpts {
@@ -61,32 +63,110 @@ export function toSettlement(state: GrowState, o: DrawOpts = {}): Settlement {
     else (homes.get(l.owner) ?? homes.set(l.owner, []).get(l.owner)!).push(l)
   }
   let households = 0
+  /** 一块地上的后院：屋后到地块尽头，给菜园、树、棚子用（a0 ~ a1 沿街、b0 ~ b1 进深） */
+  const backyard = (l: GrowLot, f: ReturnType<typeof frame>, b0: number, withShed: boolean) => {
+    const r = (k: number) => tone(l, k)
+    let a0 = 1.5
+    let a1 = f.fw - 1.5
+    // 柴棚：后院尽头的一角
+    if (withShed) {
+      const sw = 3 + 1.5 * r(12)
+      const sd = 3.5 + 2 * r(13)
+      const left = r(17) < 0.5
+      house(l, 'shed', left ? f.box(1.2, 1.2 + sw, f.fd - 1.2 - sd, f.fd - 1.2) : f.box(f.fw - 1.2 - sw, f.fw - 1.2, f.fd - 1.2 - sd, f.fd - 1.2), { role: '柴棚' })
+      if (left) a0 = sw + 2.5
+      else a1 = f.fw - sw - 2.5
+    }
+    const b1 = f.fd - 1.5
+    if (b1 - b0 < 4) return
+    if (r(15) < 0.6) greens.push({ poly: f.box(a0, a1, b0, b1), kind: 'garden' })
+    const count = Math.floor(r(16) * 3.2)
+    for (let k = 0; k < count; k++) trees.push({ p: f.at(a0 + 1 + (a1 - a0 - 2) * r(20 + k), b0 + 1 + (b1 - b0 - 2) * r(24 + k)), r: 1.8 + 1.4 * r(28 + k) })
+  }
   const homeOf = (group: GrowLot[]) => {
     households++
     const [main, ...rest] = [...group].sort((a, b) => a.id - b.id)
     const f = frame(main)
     const n = group.length
-    // 一块地：平房；两三块：大一点的两层；四块以上：大宅，院子围起来
-    const [w, d, kind, floors] = n >= 4 ? [15, 12, 'large', 2] : n >= 2 ? [12, 9, 'house', 2] : [9, 7, 'house', 1]
-    house(main, kind as BuildingKind, f.box((f.fw - w) / 2, (f.fw + w) / 2, 2, 2 + d), { floors: floors as number, units: 1 })
-    if (n >= 4) enclosures.push(inset(main, 0.8))
-    for (const g of rest) greens.push({ poly: inset(g, 1), kind: 'garden' })
-    trees.push({ p: f.at(f.fw * (0.2 + 0.6 * tone(main, 1)), f.fd - 3), r: 2.2 + tone(main, 2) })
+    const r = (k: number) => tone(main, k)
+    if (n >= 4) {
+      // 四块以上：大宅，院子围起来，屋后一间厢房
+      const w = 13 + 3 * r(4)
+      const d = 10 + 2.5 * r(5)
+      house(main, 'large', f.box((f.fw - w) / 2, (f.fw + w) / 2, 2, 2 + d), { floors: 2, units: 1 })
+      enclosures.push(inset(main, 0.8))
+      backyard(main, f, 2 + d + 1.5, false)
+    } else {
+      // 一块地：平房；两三块：大一点的两层。屋子贴着街、靠宅地的一侧（另一侧留一条进后院的过道），少数退后留出前院、少数山墙朝街
+      const big = n >= 2
+      const gable = !big && r(3) < 0.22
+      const w = gable ? 5.5 + 1.5 * r(4) : (big ? 10 : 6.5) + 4 * r(4)
+      const d = gable ? 8 + 3 * r(5) : (big ? 8 : 6) + 2.5 * r(5)
+      const set = r(6) < 0.18 ? 2.5 + 2.5 * r(7) : 0.5 + 0.9 * r(7)
+      const side = r(8) < 0.5 ? -1 : 1
+      const cx = f.fw / 2 + side * Math.max(0, (f.fw - w) / 2 - 1.2) * (0.35 + 0.65 * r(9))
+      house(main, 'house', f.box(cx - w / 2, cx + w / 2, set, set + d), { floors: big || r(10) < 0.2 ? 2 : 1, units: 1, ...(gable ? { ridge: f.angle + Math.PI / 2 } : {}) })
+      if (r(14) < 0.55) enclosures.push(inset(main, 0.8))
+      backyard(main, f, set + d + 1.5, r(11) < 0.45)
+    }
+    // 一户多出来的地：菜园，有的种几棵果树、有的盖一间仓房
+    for (const g of rest) {
+      const gf = frame(g)
+      const q = (k: number) => tone(g, k)
+      if (q(3) < 0.3) {
+        house(g, 'shed', gf.box(2, 2 + 6 + 3 * q(4), 2, 2 + 4.5 + 1.5 * q(5)), { role: '仓房' })
+        greens.push({ poly: gf.box(1, gf.fw - 1, 9.5, gf.fd - 1), kind: 'garden' })
+      } else greens.push({ poly: inset(g, 1), kind: 'garden' })
+      if (q(6) < 0.5) for (let k = 0; k < 4; k++) trees.push({ p: gf.at(4 + (gf.fw - 8) * q(10 + k), 11 + (gf.fd - 14) * q(14 + k)), r: 2 + 1.2 * q(18 + k) })
+    }
   }
   for (const g of homes.values()) homeOf(g)
   for (const l of solo) homeOf([l])
 
+  /** 田的种类：一片田（同一个主人）种一样的；大多是这种文明的主粮（水田 / 旱地），少数是菜地、牧场、果园、草场 */
+  const base = o.fieldKind ?? 'crop'
+  const fieldKind = (l: GrowLot): Field['kind'] => {
+    const v = l.owner === undefined ? hash3(l.id, 3, 91) * 0.8 : hash3(hashString(l.owner), 3, 91)
+    return v < 0.7 ? base : v < 0.82 ? (base === 'crop' ? 'pasture' : 'crop') : v < 0.92 ? 'orchard' : 'meadow'
+  }
   for (const l of state.lots) {
     if (l.state !== 'built') continue
     const f = frame(l)
-    if (l.use === 'field') fields.push({ poly: inset(l, 0.5), angle: f.angle, kind: o.fieldKind ?? 'crop', tone: tone(l) })
-    else if (l.use === 'shop') house(l, 'large', f.box(f.fw / 2 - 6, f.fw / 2 + 6, 2, 12), { floors: 1 })
-    else if (l.use === 'public') house(l, 'hall', f.box(f.fw / 2 - 7, f.fw / 2 + 7, 2.5, 12.5))
-    else if (l.use === 'yard') {
-      // 料场、工棚：一块围起来的堆场，靠里两间棚子
+    const r = (k: number) => tone(l, k)
+    if (l.use === 'field') fields.push({ poly: inset(l, 0.5), angle: f.angle, kind: fieldKind(l), tone: tone(l) })
+    else if (l.use === 'shop') {
+      // 铺子、作坊：屋子贴着街，有的两层；屋后一间库房，有的院墙围起来
+      const w = 9 + 6 * r(3)
+      const d = 8 + 3 * r(4)
+      const set = 0.6 + 0.8 * r(5)
+      const cx = f.fw / 2 + (r(6) - 0.5) * Math.max(0, f.fw - w - 2)
+      house(l, 'large', f.box(cx - w / 2, cx + w / 2, set, set + d), { floors: r(7) < 0.4 ? 2 : 1 })
+      if (r(8) < 0.5) {
+        const sw = 5 + 3 * r(9)
+        const left = r(10) < 0.5
+        house(l, 'shed', left ? f.box(1.2, 1.2 + sw, f.fd - 5.5, f.fd - 1.2) : f.box(f.fw - 1.2 - sw, f.fw - 1.2, f.fd - 5.5, f.fd - 1.2), { role: '库房' })
+      }
+      if (r(11) < 0.35) enclosures.push(inset(l, 0.8))
+    } else if (l.use === 'public') {
+      // 公所：退后留出门前的一块空场，屋后两棵树
+      const w = 12 + 4 * r(3)
+      const d = 9 + 3 * r(4)
+      const set = 4 + 2 * r(5)
+      house(l, 'hall', f.box((f.fw - w) / 2, (f.fw + w) / 2, set, set + d))
+      if (r(6) < 0.6) plazas.push(f.box(1, f.fw - 1, 0.5, set - 0.5))
+      if (r(7) < 0.7) for (const a of [3, f.fw - 3]) trees.push({ p: f.at(a, f.fd - 2.5), r: 2.2 + r(8) })
+    } else if (l.use === 'yard') {
+      // 料场、工棚：一块围起来的堆场，靠里一到三间棚子，大小、位置各不一样
       enclosures.push(inset(l, 0.8))
-      house(l, 'shed', f.box(2, 8, f.fd - 8, f.fd - 2))
-      house(l, 'shed', f.box(f.fw - 9, f.fw - 2, f.fd - 7, f.fd - 2))
+      const count = 1 + Math.floor(r(3) * 3)
+      const slot = (f.fw - 3) / count
+      for (let k = 0; k < count; k++) {
+        const sw = Math.min(slot - 1, 4 + 3.5 * r(4 + k))
+        const sd = 4 + 3 * r(8 + k)
+        const a0 = 1.5 + slot * k + (slot - sw) * r(12 + k)
+        const back = r(16 + k) < 0.75
+        house(l, 'shed', back ? f.box(a0, a0 + sw, f.fd - 1.5 - sd, f.fd - 1.5) : f.box(a0, a0 + sw, 2, 2 + sd))
+      }
     } else if (l.use === 'center') {
       plazas.push(inset(l, 1))
       house(l, 'civic', f.box(f.fw / 2 - 5, f.fw / 2 + 5, f.fd - 9, f.fd - 2))
