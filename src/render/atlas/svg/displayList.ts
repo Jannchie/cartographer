@@ -482,16 +482,14 @@ export class DisplayList {
           const parts = it.d.length > SPLIT_LEN && (x1 - x0) * (y1 - y0) < (b[2] - b[0]) * (b[3] - b[1]) * 0.5 ? partsOf(it) : null
           if (!parts) this.drawPath(ctx, it)
           else {
-            // 可见的格子合成一条路径画一次：与整条路径的填充、描边完全相同（相邻子路径之间没有接缝，半透明的不会重叠加深）
-            const p2d = new Path2D()
-            let n = 0
-            for (const q of parts) {
+            // 可见的格子合成一条路径画一次：与整条路径的填充、描边完全相同（相邻子路径之间没有接缝，半透明的不会重叠加深）。
+            // 拼的是 d 字符串（每个格子都从 M 起头），不用 Path2D.addPath：@napi-rs/canvas 的 addPath 会从上一条的终点连线到下一条的起点
+            const vis: number[] = []
+            parts.forEach((q, k) => {
               const c = q.bbox
-              if (c[2] < x0 || c[0] > x1 || c[3] < y0 || c[1] > y1) continue
-              p2d.addPath((q.p2d ??= new Path2D(q.d)))
-              n++
-            }
-            if (n) this.drawPath(ctx, { ...it, p2d })
+              if (!(c[2] < x0 || c[0] > x1 || c[3] < y0 || c[1] > y1)) vis.push(k)
+            })
+            if (vis.length) this.drawPath(ctx, { ...it, p2d: joinedOf(it, parts, vis) })
           }
         }
       }
@@ -869,6 +867,16 @@ function partsOf(it: PathItem): PathItem[] | null {
   const parts = splitPath(it)
   partCache.set(it, { len: it.d.length, parts })
   return parts
+}
+/** 可见格子拼成的路径：可见的格子没变（拖动平移的大多数帧）就用上次拼好的，不重新解析 */
+const joinCache = new WeakMap<PathItem, { parts: PathItem[]; key: string; p2d: Path2D }>()
+function joinedOf(it: PathItem, parts: PathItem[], vis: number[]): Path2D {
+  const key = vis.join(',')
+  const hit = joinCache.get(it)
+  if (hit && hit.parts === parts && hit.key === key) return hit.p2d
+  const p2d = new Path2D(vis.map((k) => parts[k].d).join(''))
+  joinCache.set(it, { parts, key, p2d })
+  return p2d
 }
 function splitPath(it: PathItem): PathItem[] | null {
   const d = it.d
