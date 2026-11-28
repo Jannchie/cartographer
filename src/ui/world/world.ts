@@ -744,6 +744,21 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
   void fillPendingThumb()
 }
 
+// 线程载入失败或崩溃：进行中的生成与定稿请求都以失败结束，不让加载层一直挂着
+worker.onerror = (e: ErrorEvent) => {
+  const message = e.message || 'Worker error'
+  console.error(e)
+  for (const req of stageReqs.values()) req.reject(new Error(message))
+  stageReqs.clear()
+  if (!running) return
+  running = false
+  queued = null
+  ws.loading.stage = t('生成失败：') + message
+  ws.editStatus = quietJob ? ws.loading.stage : null
+  ws.busy = false
+  flushWaiters()
+}
+
 /** 伯爵领实行的制度：随所在国家（无主之地随自己的文化） */
 const polityAt = (s: SettingDef, w: World, pl: PoliticalLayer, c: County): Polity => realmPolity(s, pl.cultures, w.realms[c.realm], c.culture)
 /** 世界里多数伯爵领实行的制度：概览、图例的称呼按它（并列时取登记在前的）。s 是这个世界的世界观 */

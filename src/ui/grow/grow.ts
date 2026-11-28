@@ -23,7 +23,7 @@ import { t } from '../i18n'
 import { isTypingTarget } from '../../render/keys'
 import { bindPanZoom, fitInto } from '../panZoom'
 import { syllableSeed } from '../seed'
-import { planInWorker } from './planWorker'
+import { historyClient } from '../settlement/historyWorker'
 import './strings'
 
 /**
@@ -798,6 +798,10 @@ let waiting: { s: GrowState; then: () => void } | null = null
 /** 后台线程没算成的状态（线程起不来、出错）：用到规划时由引擎在主线程当场算 */
 const failed = new WeakSet<GrowState>()
 const ready = (s: GrowState) => naturalReady(s) || failed.has(s)
+// 规划（一份成长史，大规模要几秒）放在后台线程推演：与聚落模块用同一个线程脚本，另起一个线程
+//（聚落模块自己的线程里留着它最近的成长史给沙盘用，不去动它）。一次只等一份（见 withPlan），上一份没算完时直接失败、改在主线程算
+const planner = historyClient('reject')
+
 /** 后台线程空着就让它算眼下要的那一份：先顾挡着的那件事要的，没有就顾眼下这个状态的。算完再看一遍（期间状态可能又变了） */
 function pump() {
   if (computing) return
@@ -819,7 +823,7 @@ function pump() {
     pump()
     draw()
   }
-  planInWorker(naturalParams(s)).then(
+  planner.computeHistory(naturalParams(s)).then(
     (hist) => {
       primeNatural(s, hist)
       done()

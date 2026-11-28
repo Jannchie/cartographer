@@ -3,7 +3,7 @@ import { isSettlement, type World } from '../../gen/types'
 import type { DisplayList } from '../../render/atlas/svg/displayList'
 import { AtlasViewer } from '../../render/atlas/svg/viewer'
 import { fromWorld } from '../../settlement/fromWorld'
-import { computeHistory, computeTown, Superseded } from './historyWorker'
+import { historyClient, Superseded } from './historyWorker'
 import { snapshot, type SettlementHistory } from '../../settlement/history'
 import { pointInPoly, type P } from '../../settlement/geom'
 import { SETTLE_FRAME_INSET, buildSettlementChrome, buildSettlementVector, clearVectorChunks, ensureSettleFonts, settleBackdrop } from '../../render/settlementMap'
@@ -301,13 +301,16 @@ export function randomSeed() {
 let job = 0
 /** 推演成长史的序号：参数变了（新的请求）就作废还没用上的旧结果（与重绘的 job 分开，推演时切风格不会丢掉结果） */
 let gen = 0
+/** 成长史推演线程：拖动参数时新的请求终止还没算完的旧请求（旧请求以 Superseded 失败），只算最后那个值 */
+const historyThread = historyClient('supersede')
+
 /** 在后台推演（见 historyWorker.ts），期间显示加载提示 stage；被更新的请求取代时返回 null（提示留给新的请求收） */
 async function historyFor(population: number, stage = '推演城市的成长史'): Promise<SettlementHistory | null> {
   const g = ++gen
   ss.loading.show = true
   ss.loading.stage = stage
   try {
-    const h = await computeHistory({ ...toRaw(ss.params), population, counts: { ...toRaw(ss.params.counts) } })
+    const h = await historyThread.computeHistory({ ...toRaw(ss.params), population, counts: { ...toRaw(ss.params.counts) } })
     if (g !== gen) return null
     ss.loading.show = false
     return markRaw(h)
@@ -818,9 +821,9 @@ async function showTown() {
   const id = ++townJob
   ss.loading.show = true
   ss.loading.stage = '搭建沙盘'
-  let build: Awaited<ReturnType<typeof computeTown>> = null
+  let build: Awaited<ReturnType<typeof historyThread.computeTown>> = null
   try {
-    build = await computeTown(h, ss.town.ground)
+    build = await historyThread.computeTown(h, ss.town.ground)
   } catch (err) {
     if (!(err instanceof Superseded)) console.error(err)
   }
