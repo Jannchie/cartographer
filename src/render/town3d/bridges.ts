@@ -10,7 +10,7 @@ import type { P } from '../../settlement/geom'
 import type { Settlement, Wall } from '../../settlement/types'
 import { MAT, shade, type RGB } from './mesh'
 import { TIMBER, TIMBER_DARK, VERMILION, hex } from './shared'
-import { archFace, archOutline, axUV, beam, box, lp, placeArch, pyramid, sweep, tube, vault, type ArchShape, type Opening, type Station } from './worksMesh'
+import { archFace, archOutline, axUV, beam, box, lp, placeArch, pyramid, sweep, wallTube, vault, type ArchShape, type Opening, type Station } from './worksMesh'
 import { boat, jetty } from './harbor'
 import type { WCtx } from './works'
 
@@ -251,7 +251,7 @@ function timberBridge(c: WCtx, sp: Span, sacred: boolean) {
     const y = deck(x)
     const ctr: P = [sp.a[0] + e[0] * x, sp.a[1] + e[1] * x]
     w.c = wood
-    for (const t of half > 2.2 ? [-half + 0.35, 0, half - 0.35] : [-half + 0.3, half - 0.3]) tube(w, [ctr[0] + n[0] * t, ctr[1] + n[1] * t], 0.17, 0.15, BED, y - 0.6, 6)
+    for (const t of half > 2.2 ? [-half + 0.35, 0, half - 0.35] : [-half + 0.3, half - 0.3]) wallTube(w, [ctr[0] + n[0] * t, ctr[1] + n[1] * t], 0.17, 0.15, BED, y - 0.6, 6)
     w.c = dark
     beam(w, [ctr[0] - n[0] * (half + 0.25), y - 0.52, ctr[1] - n[1] * (half + 0.25)], [ctr[0] + n[0] * (half + 0.25), y - 0.52, ctr[1] + n[1] * (half + 0.25)], 0.14, 0.11)
     // 桩间的横撑
@@ -300,7 +300,7 @@ export function crossing(c: WCtx, x: Settlement['crossings'][number]) {
       const o = ((((s * 7) % 3) - 1.5) * 0.4) as number
       const p: P = [x.a[0] + e[0] * s + n[0] * o, x.a[1] + e[1] * s + n[1] * o]
       const top = Math.max(0.12, H(p[0], p[1]) + 0.18)
-      tube(w, p, 0.95, 0.75, -1.4, top, 7, { cap: true })
+      wallTube(w, p, 0.95, 0.75, -1.4, top, 7, { cap: true })
     }
     return
   }

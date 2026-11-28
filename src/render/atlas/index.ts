@@ -14,6 +14,7 @@ import {
   drawSoundings,
 } from './furniture'
 import { fitRiversToCoast } from './riverMouth'
+import { rgb } from '../palette'
 import { drawRoads } from './roads'
 import { drawAdmin } from './admin'
 import { drawPolitical } from './political'
@@ -24,7 +25,6 @@ import { atlasStyles, currentFontPreset, themeById, themeCjk, type AtlasOpts, ty
 export { atlasStyles, type StyleId }
 export { Fields }
 
-const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
 
 const extraCss = new Map<string, Promise<void>>()
 /** 字体方案额外要的 Google Fonts 族：选中时才插入样式表，等它加载完（失败也放行，按回退字体排版） */

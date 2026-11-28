@@ -5,7 +5,7 @@ import { irimoya, MAT, mixRGB, shade } from '../../../../render/town3d/mesh'
 import { hex, LACQUER, STONE_EAST, TILE_DARK } from '../../../../render/town3d/shared'
 import { archBlock, leaves } from '../../../../render/town3d/gates'
 import { battlement, outRing, salient, type WCtx, type WallLook } from '../../../../render/town3d/works'
-import { archRing, box, hash, l3, lp, roofFrame, sweep, tube, type Station } from '../../../../render/town3d/worksMesh'
+import { archRing, box, hash, l3, lp, roofFrame, sweep, wallTube, type Station } from '../../../../render/town3d/worksMesh'
 import type { WallKit } from '../../../../render/town3d/kits'
 
 const BRICK_GREY = hex('#8f8f8a')
@@ -82,8 +82,8 @@ export const wall: WallKit = {
     w.face = MAT.plain
     const nc = Math.max(4, Math.round((a1 * 2) / 3.2))
     for (let i = 0; i <= nc; i++)
-      for (const sg of [-1, 1]) tube(w, lp(f, sg * (b1 + 1.5), -a1 - 1.5 + ((a1 * 2 + 3) * i) / nc), 0.2, 0.18, y1, y1 + colH, 6)
-    for (const sg of [-1, 1]) tube(w, lp(f, 0, sg * (a1 + 1.5)), 0.2, 0.18, y1, y1 + colH, 6)
+      for (const sg of [-1, 1]) wallTube(w, lp(f, sg * (b1 + 1.5), -a1 - 1.5 + ((a1 * 2 + 3) * i) / nc), 0.2, 0.18, y1, y1 + colH, 6)
+    for (const sg of [-1, 1]) wallTube(w, lp(f, 0, sg * (a1 + 1.5)), 0.2, 0.18, y1, y1 + colH, 6)
     // 额枋：柱头一圈横木
     w.c = hex('#2e4a5a')
     for (const sg of [-1, 1]) {

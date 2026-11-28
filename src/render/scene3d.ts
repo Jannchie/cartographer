@@ -142,7 +142,6 @@ export class Scene3D {
   private opts: View3DOptions
   private labelLayer: HTMLDivElement
   private labelEls: { el: HTMLDivElement; pos: THREE.Vector3; kind: string; w: number; h: number; src: Label }[] = []
-  private raf = 0
   private SZ = 62.5
   active = true
 
@@ -239,7 +238,7 @@ export class Scene3D {
       if (scale > 0) this.adaptScale(ms, scale)
     }
     const loop = (now: number) => {
-      this.raf = requestAnimationFrame(loop)
+      requestAnimationFrame(loop)
       this.trackRefresh(now)
       if (!this.active) return
       const dt = this.lastRaf2 ? (now - this.lastRaf2) / 1000 : 0
@@ -285,7 +284,7 @@ export class Scene3D {
       }
       this.updateLabels()
     }
-    this.raf = requestAnimationFrame(loop)
+    requestAnimationFrame(loop)
     window.addEventListener('keydown', (e) => {
       this.navFast = e.shiftKey
       if (!this.active || e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e)) return
@@ -799,7 +798,7 @@ export class Scene3D {
     // 道路遮罩与垂直夸张无关，每个世界画一次
     this.roadMask?.dispose()
     this.roadMask = new RoadMask(W, H, new THREE.Vector2(SX, this.SZ))
-    this.roadMask.render(this.renderer, world, new THREE.Vector2(SX, this.SZ))
+    this.roadMask.renderRoads(this.renderer, world, new THREE.Vector2(SX, this.SZ))
     uniforms.uRoads.value = this.roadMask.rt.texture
     this.waterMat.uniforms.uRoads.value = this.roadMask.rt.texture
     this.water = new THREE.Mesh(new THREE.BufferGeometry(), this.waterMat)
@@ -1307,10 +1306,6 @@ export class Scene3D {
     return this.renderer.domElement.toDataURL('image/png')
   }
 
-  dispose() {
-    cancelAnimationFrame(this.raf)
-    this.renderer.dispose()
-  }
 }
 
 /** 高清块网格分辨率 */

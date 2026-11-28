@@ -9,7 +9,7 @@ import { pointInPoly, signedArea, type P } from '../../settlement/geom'
 import type { Settlement, Wall } from '../../settlement/types'
 import { MAT, hip, mixRGB, shade, type Frame, type RGB } from './mesh'
 import { STONE, TILE_DARK, TIMBER, TIMBER_DARK, hex, type Ctx, type Height } from './shared'
-import { LO, archFace, archOutline, axUV, beam, box, cbox, crenels, hash, l3, lp, placeArch, pyramid, ringUnder, stationsOf, sweep, tube, vault, type Ax, type Station } from './worksMesh'
+import { LO, archFace, archOutline, axUV, beam, box, cbox, crenels, hash, l3, lp, placeArch, pyramid, ringUnder, stationsOf, sweep, wallTube, vault, type Ax, type Station } from './worksMesh'
 import { gate } from './gates'
 import type { TownKit } from './kits'
 
@@ -337,9 +337,9 @@ function palisadeRun(c: WCtx, pts: P[], closed: boolean, pitch: number) {
     w.base = s.g - 0.6
     w.c = shade(TIMBER, 0.82 + hash(x, z, 2) * 0.4)
     const top = s.g + 3.9 + hsh * 0.5
-    tube(w, s.p, r, r * 0.92, s.lo, top, 4, { arc: [hsh * 6.28, hsh * 6.28 + Math.PI * 2] })
+    wallTube(w, s.p, r, r * 0.92, s.lo, top, 4, { arc: [hsh * 6.28, hsh * 6.28 + Math.PI * 2] })
     w.c = shade(TIMBER, 1.25)
-    tube(w, s.p, r * 0.92, 0, top, top + 0.5, 4, { arc: [hsh * 6.28, hsh * 6.28 + Math.PI * 2] })
+    wallTube(w, s.p, r * 0.92, 0, top, top + 0.5, 4, { arc: [hsh * 6.28, hsh * 6.28 + Math.PI * 2] })
   }
   // 内侧的横木
   w.c = TIMBER_DARK
@@ -427,7 +427,7 @@ export function roundCrown(c: Ctx, ctr: P, R: number, y: number, look: WallLook,
   const { w } = c
   const pH = look.parapet
   const rin = R - look.pT
-  tube(w, ctr, R, R, y, y + pH, n)
+  wallTube(w, ctr, R, R, y, y + pH, n)
   // 内壁（朝塔心）与女墙顶
   for (let i = 0; i < n; i++) {
     const a0 = (i / n) * Math.PI * 2
@@ -454,23 +454,23 @@ export function drum(c: Ctx, ctr: P, R: number, lo: number, g: number, top: numb
   w.c = look.col
   w.face = look.face
   // 塔脚收分、塔身
-  tube(w, ctr, R + 0.55, R, lo, g + 2.6, n)
-  tube(w, ctr, R, R, g + 2.6, top - 0.7, n)
+  wallTube(w, ctr, R + 0.55, R, lo, g + 2.6, n)
+  wallTube(w, ctr, R, R, g + 2.6, top - 0.7, n)
   // 挑出的一圈（托着垛台）
   const Rc = R + 0.4
   w.c = shade(look.col, 0.9)
-  tube(w, ctr, R, Rc, top - 0.7, top, n)
+  wallTube(w, ctr, R, Rc, top - 0.7, top, n)
   w.c = look.col
   if (roofed) {
     // 短短的一段墙身托着圆锥顶，檐口挑出
-    tube(w, ctr, Rc, Rc, top, top + 1.5, n)
+    wallTube(w, ctr, Rc, Rc, top, top + 1.5, n)
     const Re = Rc + 0.55
     w.c = shade(roofCol, 0.55)
     w.face = MAT.plain
     ringUnder(w, ctr, Rc - 0.05, Re, top + 1.5, n)
     w.c = roofCol
     w.face = MAT.slate
-    tube(w, ctr, Re, 0, top + 1.5, top + 1.5 + Re * 1.75, n)
+    wallTube(w, ctr, Re, 0, top + 1.5, top + 1.5 + Re * 1.75, n)
     // 塔尖的小球
     w.c = hex('#3a3936')
     w.face = MAT.plain

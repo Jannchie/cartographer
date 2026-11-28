@@ -10,7 +10,7 @@ import { area, bboxOf, centroid, obb, pointInPoly, type P } from '../../settleme
 import type { Building, Field, Landmark, ParkPart, Settlement } from '../../settlement/types'
 import { MAT, mixRGB, shade, type RGB, type V3 } from './mesh'
 import { COPPER, STONE, TIMBER, TIMBER_DARK, hex } from './shared'
-import { archFace, archOutline, axOf, axUV, ball, beam, box, cbox, hash, l3, loft, lp, placeArch, ringUnder, tube, vault, type Ax } from './worksMesh'
+import { archFace, archOutline, axOf, axUV, ball, beam, box, cbox, hash, l3, loft, lp, placeArch, ringUnder, wallTube, vault, type Ax } from './worksMesh'
 import type { WCtx } from './works'
 
 const MARBLE = hex('#d8d4c8')
@@ -149,7 +149,7 @@ function windmill(c: WCtx, p: P, g: number, r: number) {
   const top = g + 9.5
   w.c = hex('#cfc8b6')
   w.face = MAT.plaster
-  tube(w, p, R, R * 0.72, g - 1.2, top, 14)
+  wallTube(w, p, R, R * 0.72, g - 1.2, top, 14)
   // 门
   const ang = hash(p[0], p[1], 1) * Math.PI * 2
   const f = axOf(p, ang)
@@ -160,12 +160,12 @@ function windmill(c: WCtx, p: P, g: number, r: number) {
   w.c = hex('#6a5846')
   w.face = MAT.plank
   w.uvOf = (q) => [q[1], 0, 0]
-  tube(w, p, R * 0.8, R * 0.76, top, top + 0.5, 12)
+  wallTube(w, p, R * 0.8, R * 0.76, top, top + 0.5, 12)
   w.uvOf = null
   w.c = hex('#5c4a3a')
   w.face = MAT.straw
   ringUnder(w, p, R * 0.7, R * 0.92, top + 0.5, 12)
-  tube(w, p, R * 0.92, 0, top + 0.5, top + 0.5 + R * 0.85, 12)
+  wallTube(w, p, R * 0.92, 0, top + 0.5, top + 0.5 + R * 0.85, 12)
   // 帆翼：轴略上扬，朝门的方向；四片帆翼在垂直于轴的平面里
   const hub: V3 = l3(f, R * 0.72 + 1.0, 0, top - 0.2)
   w.c = TIMBER_DARK
@@ -204,15 +204,15 @@ function lighthouse(c: WCtx, p: P, g: number, r: number) {
   const top = g + 21
   w.c = look.col
   w.face = look.face
-  tube(w, p, R * 1.05, R * 0.95, g - 1.5, g + 3, 16)
-  tube(w, p, R * 0.95, R * 0.62, g + 3, top, 16)
+  wallTube(w, p, R * 1.05, R * 0.95, g - 1.5, g + 3, 16)
+  wallTube(w, p, R * 0.95, R * 0.62, g + 3, top, 16)
   // 回廊：挑出的平台与栏杆
   w.c = STONE
   w.face = MAT.plain
   ringUnder(w, p, R * 0.6, R * 0.95, top, 16)
-  tube(w, p, R * 0.95, R * 0.95, top, top + 0.25, 16, { cap: true, capFace: MAT.paving })
+  wallTube(w, p, R * 0.95, R * 0.95, top, top + 0.25, 16, { cap: true, capFace: MAT.paving })
   w.c = IRON
-  tube(w, p, R * 0.92, R * 0.92, top + 0.95, top + 1.05, 16)
+  wallTube(w, p, R * 0.92, R * 0.92, top + 0.95, top + 1.05, 16)
   for (let k = 0; k < 12; k++) {
     const a = (k / 12) * Math.PI * 2
     const q: P = [p[0] + Math.cos(a) * R * 0.92, p[1] + Math.sin(a) * R * 0.92]
@@ -221,7 +221,7 @@ function lighthouse(c: WCtx, p: P, g: number, r: number) {
   // 灯室：几根窗棂之间是发光的灯
   w.c = hex('#f1e2a8')
   w.face = MAT.lamp
-  tube(w, p, R * 0.42, R * 0.42, top + 0.25, top + 2.5, 10)
+  wallTube(w, p, R * 0.42, R * 0.42, top + 0.25, top + 2.5, 10)
   w.c = IRON
   w.face = MAT.plain
   for (let k = 0; k < 6; k++) {
@@ -242,13 +242,13 @@ function kiln(c: WCtx, p: P, g: number, r: number) {
   const col = shade(hex('#8f5e46'), 0.9 + hash(p[0], p[1], 1) * 0.2)
   w.c = col
   w.face = MAT.brick
-  tube(w, p, r * 1.02, r, g - 1, g + 1.5, 12)
+  wallTube(w, p, r * 1.02, r, g - 1, g + 1.5, 12)
   w.face = MAT.plain
   ball(w, [p[0], g + 1.5, p[1]], r, 12, 4, 0, Math.PI / 2, 0.82)
   // 烟囱口
   w.c = shade(col, 0.75)
   w.face = MAT.brick
-  tube(w, p, 0.55, 0.5, g + 1.5 + r * 0.74, g + 1.5 + r * 0.82 + 0.9, 8)
+  wallTube(w, p, 0.55, 0.5, g + 1.5 + r * 0.74, g + 1.5 + r * 0.82 + 0.9, 8)
   w.c = hex('#1c1a18')
   w.face = MAT.plain
   const yy = g + 1.5 + r * 0.82 + 0.86
@@ -363,7 +363,7 @@ function well(c: WCtx, f: Ax, g: number) {
   } else {
     w.c = look.col
     w.face = look.face
-    tube(w, p, 0.95, 0.9, g - 0.4, g + 0.8, 10)
+    wallTube(w, p, 0.95, 0.9, g - 0.4, g + 0.8, 10)
     // 井栏顶与内壁
     w.face = MAT.plain
     for (let k = 0; k < 10; k++) {
@@ -410,7 +410,7 @@ function fountain(c: WCtx, p: P, g: number) {
   const stone = look.stone
   w.c = stone
   w.face = MAT.plain
-  tube(w, p, R, R, g - 0.4, g + kerb, n)
+  wallTube(w, p, R, R, g - 0.4, g + kerb, n)
   const P3 = (a: number, r: number, y: number): V3 => [p[0] + Math.cos(a) * r, y, p[1] + Math.sin(a) * r]
   for (let k = 0; k < n; k++) {
     const a0 = (k / n) * Math.PI * 2
@@ -427,9 +427,9 @@ function fountain(c: WCtx, p: P, g: number) {
   // 中柱与水盘
   w.c = stone
   w.face = MAT.plain
-  tube(w, p, 0.42, 0.3, g, g + 1.5, 8)
-  tube(w, p, 0.3, 1.15, g + 1.5, g + 1.8, 10)
-  tube(w, p, 1.15, 1.15, g + 1.8, g + 1.9, 10)
+  wallTube(w, p, 0.42, 0.3, g, g + 1.5, 8)
+  wallTube(w, p, 0.3, 1.15, g + 1.5, g + 1.8, 10)
+  wallTube(w, p, 1.15, 1.15, g + 1.8, g + 1.9, 10)
   w.c = hex('#3f6f7c')
   w.face = MAT.pool
   for (let k = 0; k < 10; k++) w.triOut([p[0], g + 1.86, p[1]], P3((k / 10) * 6.2832, 1.05, g + 1.86), P3(((k + 1) / 10) * 6.2832, 1.05, g + 1.86), [0, 1, 0])
@@ -437,7 +437,7 @@ function fountain(c: WCtx, p: P, g: number) {
   w.face = MAT.plain
   for (let k = 0; k < 10; k++) w.quadOut(P3((k / 10) * 6.2832, 1.05, g + 1.9), P3(((k + 1) / 10) * 6.2832, 1.05, g + 1.9), P3(((k + 1) / 10) * 6.2832, 1.15, g + 1.9), P3((k / 10) * 6.2832, 1.15, g + 1.9), [0, 1, 0])
   if (!look.jet) return
-  tube(w, p, 0.16, 0.12, g + 1.8, g + 2.6, 6)
+  wallTube(w, p, 0.16, 0.12, g + 1.8, g + 2.6, 6)
   ball(w, [p[0], g + 2.7, p[1]], 0.2, 6, 3, -Math.PI / 2, Math.PI / 2)
 }
 
@@ -454,9 +454,9 @@ function statue(c: WCtx, f: Ax, g: number) {
   // 铜像：袍身、躯干、头，一臂前伸
   const y = g + 1.93
   w.c = shade(COPPER, 0.8)
-  tube(w, p, 0.3, 0.2, y, y + 1.0, 7)
-  tube(w, p, 0.2, 0.27, y + 1.0, y + 1.62, 7)
-  tube(w, p, 0.27, 0.1, y + 1.62, y + 1.74, 7)
+  wallTube(w, p, 0.3, 0.2, y, y + 1.0, 7)
+  wallTube(w, p, 0.2, 0.27, y + 1.0, y + 1.62, 7)
+  wallTube(w, p, 0.27, 0.1, y + 1.62, y + 1.74, 7)
   ball(w, [p[0], y + 1.92, p[1]], 0.17, 7, 4, -Math.PI / 2, Math.PI / 2)
   beam(w, l3(f, 0, 0.26, y + 1.55), l3(f, 0.5, 0.36, y + 1.75), 0.055, 0.055)
   beam(w, l3(f, 0, -0.26, y + 1.55), l3(f, 0.08, -0.3, y + 0.95), 0.055, 0.055)
@@ -705,11 +705,11 @@ export function wonder(c: WCtx, x: Settlement['wonders'][number], magic: RGB) {
     w.c = hex('#cfc7e6')
     w.face = MAT.plaster
     const tr = R * 0.15
-    tube(w, [px, pz], tr * 1.1, tr * 0.85, y, y + tr * 6, 10)
+    wallTube(w, [px, pz], tr * 1.1, tr * 0.85, y, y + tr * 6, 10)
     w.c = hex('#5a4a8a')
     w.face = MAT.slate
     ringUnder(w, [px, pz], tr * 0.8, tr * 1.3, y + tr * 6, 10)
-    tube(w, [px, pz], tr * 1.3, 0, y + tr * 6, y + tr * 8.6, 10)
+    wallTube(w, [px, pz], tr * 1.3, 0, y + tr * 6, y + tr * 8.6, 10)
     w.c = glow
     w.face = MAT.glow
     w.at(px, pz)
@@ -764,7 +764,7 @@ export function fieldProps(c: WCtx, fd: Field) {
     w.c = shade(STRAW, 0.85 + hash(q[0], q[1], 2) * 0.25)
     w.face = MAT.straw
     // 垛身与收尖的垛顶：高矮随文明（稻架、草堆矮而圆）
-    tube(w, q, r * stack.foot, r, g - 0.3, g + r * stack.body, 8)
-    tube(w, q, r, 0, g + r * stack.body, g + r * stack.top, 8)
+    wallTube(w, q, r * stack.foot, r, g - 0.3, g + r * stack.body, 8)
+    wallTube(w, q, r, 0, g + r * stack.body, g + r * stack.top, 8)
   }
 }

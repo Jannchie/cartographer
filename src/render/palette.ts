@@ -4,6 +4,9 @@ export type RGB = [number, number, number]
 
 export const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]
 
+/** CSS 的 rgb() 颜色串：各分量取整并限制在 0–255 */
+export const rgb = (c: readonly number[]) => `rgb(${c.map((v) => Math.round(Math.min(255, Math.max(0, v)))).join(',')})`
+
 /** 写实地表色（3D 贴图用），偏自然的卫星影像色调 */
 export const PHYSICAL: Record<number, RGB> = {
   [Biome.Ocean]: hex('#1d3b52'),

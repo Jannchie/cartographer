@@ -1,12 +1,11 @@
 import { isGlobe, type World } from '../../gen/types'
 import { regionProjection } from '../../gen/earth/region'
 import { lang, placeName, t, worldTitle } from '../../i18n'
-import { ramp } from '../palette'
+import { ramp, rgb } from '../palette'
 import { hash, type Fields } from './fields'
 import { themeCjk, type Theme } from './styles'
 import { labelCtx } from './svg/recorder'
 
-const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(',')})`
 
 /** 经度：以地图中央为 0°，按中纬度换算每格经度（全球图横向正好 360°） */
 export function lonScale(world: World) {

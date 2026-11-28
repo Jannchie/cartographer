@@ -1,10 +1,15 @@
-/** 着色器共用的噪声函数 */
-export const NOISE_GLSL = /* glsl */ `
+/** 二维 → [0, 1) 的哈希（Dave Hoskins 的 hash without sine） */
+export const HASH12_GLSL = /* glsl */ `
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
   return fract((p3.x + p3.y) * p3.z);
 }
+`
+
+/** 着色器共用的噪声函数 */
+export const NOISE_GLSL = /* glsl */ `
+${HASH12_GLSL}
 float vnoise(vec2 p) {
   vec2 i = floor(p), f = fract(p);
   vec2 u = f * f * (3.0 - 2.0 * f);

@@ -1,7 +1,8 @@
 import { Biome, type World } from '../../../gen/types'
 import { ATLAS, atlasSea, hex, ramp, type RGB } from '../../../render/palette'
 import type { AtlasOpts } from '../../../render/atlas/styles'
-import { biomeField, biomeLayers, FOREST, hillshade, ripples, rgb, type Layers, type VectorFields } from '../../../render/atlas/svg/layers'
+import { biomeField, biomeLayers, FOREST, hillshade, ripples, type Layers, type VectorFields } from '../../../render/atlas/svg/layers'
+import { rgb } from '../../../render/palette'
 import { FANTASY_COLORS, FANTASY_TINT, HYPSO, POLITICAL_LAND, POLITICAL_SEA, STRATEGY_SEA, STRATEGY_SHALLOW, TEYVAT, TEYVAT_STEP, TEYVAT_TINT, teyvatReach } from './pixel'
 
 /**

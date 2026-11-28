@@ -5,7 +5,7 @@ import type { Site } from '../../../../render/town3d/kit'
 import { MAT, prism, rectOf, shade } from '../../../../render/town3d/mesh'
 import { GRANITE, hex, STONE, TIMBER, type Ctx } from '../../../../render/town3d/shared'
 import type { WCtx } from '../../../../render/town3d/works'
-import { ball, beam, box, cbox, hash, lp, ringUnder, tube, type Ax } from '../../../../render/town3d/worksMesh'
+import { ball, beam, box, cbox, hash, lp, ringUnder, wallTube, type Ax } from '../../../../render/town3d/worksMesh'
 import { hull, mast, rope, squareSail, type ShipEnv } from '../../../../render/town3d/harbor'
 
 /** 墓地里按"小棚"给出的墓：台座上一根方柱的墓石 */
@@ -37,9 +37,9 @@ export function lantern(c: WCtx, f: Ax, g: number) {
   const { w } = c
   const p = f.o
   w.c = shade(GRANITE, 0.9)
-  tube(w, p, 0.42, 0.34, g - 0.3, g + 0.22, 6)
-  tube(w, p, 0.15, 0.13, g + 0.22, g + 1.15, 6)
-  tube(w, p, 0.14, 0.36, g + 1.15, g + 1.3, 6, { cap: true })
+  wallTube(w, p, 0.42, 0.34, g - 0.3, g + 0.22, 6)
+  wallTube(w, p, 0.15, 0.13, g + 0.22, g + 1.15, 6)
+  wallTube(w, p, 0.14, 0.36, g + 1.15, g + 1.3, 6, { cap: true })
   w.c = hex('#e8d9a0')
   w.face = MAT.lamp
   cbox(w, f, 0.2, 0.2, g + 1.3, g + 1.68, { top: false })
@@ -50,7 +50,7 @@ export function lantern(c: WCtx, f: Ax, g: number) {
     beam(w, [q[0], g + 1.3, q[1]], [q[0], g + 1.68, q[1]], 0.035, 0.035, false)
   }
   ringUnder(w, p, 0.1, 0.5, g + 1.68, 6)
-  tube(w, p, 0.5, 0.1, g + 1.68, g + 1.95, 6)
+  wallTube(w, p, 0.5, 0.1, g + 1.68, g + 1.95, 6)
   ball(w, [p[0], g + 2.02, p[1]], 0.09, 6, 2, -Math.PI / 2, Math.PI / 2)
 }
 

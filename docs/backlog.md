@@ -14,6 +14,7 @@
 | 运行时环 | `riverThreshold` 移入 `gen/hydrology.ts`，`signedCoastDist`、`slopeField` 移入 `gen/util.ts`；承载组合地标的片区移入 `settlement/landmarkWards.ts`；`roofFrame` 移入 `render/town3d/worksMesh.ts`。源码中不再有运行时导入环 |
 | 成长史线程客户端 | `ui/grow/planWorker.ts` 删除；聚落与生长模块共用 `ui/settlement/historyWorker.ts` 的 `historyClient`，只在"上一份没算完"的策略上不同（`supersede`、`reject`）。世界生成线程补上 `onerror` |
 | 撤销栈 | 世界编辑、世界区域、聚落区域、生长四处改用 `ui/undo.ts` 的 `UndoStack`。区域撤销记录在换世界、换城时清空（此前会把上一座城的区域写进当前城的存储） |
+| 渲染层小项 | `RoadMask`、`RiverCarve` 共用 `render/aerial/maxMask.ts` 的 `MaxMask`；GLSL `hash12` 只留 `HASH12_GLSL` 一份；`rgb()` 颜色串只留 `render/palette.ts` 一份；`worksMesh` 的 `tube` 改名 `wallTube`，与 `mesh.ts` 的 `tube` 区分；删除从未调用、且释放不全的 `Scene3D.dispose` |
 
 ## 待办
 
@@ -27,10 +28,8 @@
 
 ### 渲染层
 
-- **三维场景骨架**：`render/scene3d.ts` 与 `render/town3d/townScene.ts` 的渲染器创建、尺寸调整、性能浮层、画质切换基本相同；`scene3d.dispose` 不移除窗口上的键盘监听、不断开 ResizeObserver。
-- **遮罩渲染**：`render/aerial/roads3d.ts` 的 `RoadMask` 与 `rivers3d.ts` 的 `RiverCarve` 结构相同。
-- **同名异义**：`render/town3d/mesh.ts` 与 `worksMesh.ts` 各导出一个签名不同的 `tube`。
-- **小工具重复**：`rgb()` 字符串函数三份；GLSL 的 `hash12` 在 `aerial/glsl.ts` 与 `aerial/volumetric.ts` 各一份。哈希与值噪声的本地实现公式不同，影响画面，只能换调用位置、不能改公式。
+- **三维场景骨架**：`render/scene3d.ts` 与 `render/town3d/townScene.ts` 的渲染器创建、尺寸调整、性能浮层、画质切换基本相同，可抽出共用的舞台宿主；两者的帧率自适应目标不同（显示器刷新间隔、固定 60 帧），合并时须保留。
+- **哈希与值噪声**：渲染层有约 8 处本地实现，公式各不相同、决定画面纹理，只能换调用位置、不能改公式。
 
 ### 引擎层
 

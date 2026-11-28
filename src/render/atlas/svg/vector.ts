@@ -8,7 +8,8 @@ import { currentFontPreset, themeById, type AtlasOpts, type PoliticalLook, type 
 import { contours } from '../../../gen/contour'
 import { pathData } from './path'
 import { DisplayList, type Segment } from './displayList'
-import { fieldsOf, Layers, rgb, type VectorFields } from './layers'
+import { fieldsOf, Layers, type VectorFields } from './layers'
+import { rgb } from '../../palette'
 import { Recorder } from './recorder'
 
 const FONT_CSS =

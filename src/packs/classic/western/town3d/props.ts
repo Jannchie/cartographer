@@ -4,7 +4,7 @@
 import { MAT, mixRGB, shade, type V3 } from '../../../../render/town3d/mesh'
 import { GRANITE, GRAVE_EARTH, hex } from '../../../../render/town3d/shared'
 import type { WCtx } from '../../../../render/town3d/works'
-import { beam, box, hash, l3, lp, tube, type Ax } from '../../../../render/town3d/worksMesh'
+import { beam, box, hash, l3, lp, wallTube, type Ax } from '../../../../render/town3d/worksMesh'
 import { CANVAS, hull, mast, rope, squareSail, type ShipEnv } from '../../../../render/town3d/harbor'
 
 /** 墓：立碑（多数）或石十字，碑前一方略高的墓床 */
@@ -68,7 +68,7 @@ export function ship(c: WCtx, e: ShipEnv) {
     // 桅顶的瞭望斗
     w.c = shade(col, 1.2)
     w.face = MAT.board
-    tube(w, [foot[0], foot[2]], 0.38, 0.5, foot[1] + mh * 0.9, foot[1] + mh * 0.9 + 0.55, 8, { cap: true })
+    wallTube(w, [foot[0], foot[2]], 0.38, 0.5, foot[1] + mh * 0.9, foot[1] + mh * 0.9 + 0.55, 8, { cap: true })
   }
   rope(c, top, h.at(0.99, 0, h.sheer(0.99)))
   rope(c, top, h.at(0.02, 0, h.sheer(0.02)))

@@ -3,6 +3,7 @@ import type { World } from '../../gen/types'
 import { sampleField, smoothstep } from '../../gen/util'
 import { riverThreshold } from '../../gen/hydrology'
 import type { SmoothRiver } from '../rivers'
+import { MaxMask } from './maxMask'
 
 /**
  * 河流几何，两张网格：
@@ -94,75 +95,33 @@ export function createRiverMesh(world: World, rivers: SmoothRiver[], SX: number,
  * 河谷下切深度图：把下切网格正交投影到整张地图，横断面是抛物线（中间最深），
  * 多条河重叠处取最大值。烘焙地形时减去这张图。
  */
-export class RiverCarve {
-  readonly rt: THREE.WebGLRenderTarget
-  private scene = new THREE.Scene()
-  private cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-  private mat: THREE.ShaderMaterial
-
+export class RiverCarve extends MaxMask {
   constructor(W: number, H: number, mapSize: THREE.Vector2) {
-    const cw = Math.min(4096, W * 4)
-    const ch = Math.round((cw * H) / W)
-    this.rt = new THREE.WebGLRenderTarget(cw, ch, {
-      type: THREE.HalfFloatType,
-      format: THREE.RGBAFormat,
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      depthBuffer: false,
-    })
-    this.mat = new THREE.ShaderMaterial({
-      depthTest: false,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      blending: THREE.CustomBlending,
-      blendEquation: THREE.MaxEquation,
-      blendSrc: THREE.OneFactor,
-      blendDst: THREE.OneFactor,
-      uniforms: { uMap: { value: mapSize } },
-      vertexShader: /* glsl */ `
-        uniform vec2 uMap;
-        attribute float side;
-        attribute float aDepth;
-        varying float vSide;
-        varying float vDepth;
-        void main() {
-          vSide = side;
-          vDepth = aDepth;
-          gl_Position = vec4(position.x / uMap.x * 2.0, position.z / uMap.y * 2.0, 0.0, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        varying float vSide;
-        varying float vDepth;
-        void main() {
-          float s = clamp(abs(vSide), 0.0, 1.0);
-          gl_FragColor = vec4(vDepth * (1.0 - s * s), 0.0, 0.0, 1.0);
-        }
-      `,
-    })
-  }
-
-  render(renderer: THREE.WebGLRenderer, geo: THREE.BufferGeometry) {
-    const mesh = new THREE.Mesh(geo, this.mat)
-    mesh.frustumCulled = false
-    this.scene.clear()
-    this.scene.add(mesh)
-    const prev = renderer.getRenderTarget()
-    const cc = renderer.getClearColor(new THREE.Color())
-    const ca = renderer.getClearAlpha()
-    renderer.setRenderTarget(this.rt)
-    renderer.setClearColor(0x000000, 0)
-    renderer.clear(true, false, false)
-    renderer.render(this.scene, this.cam)
-    renderer.setRenderTarget(prev)
-    renderer.setClearColor(cc, ca)
-  }
-
-  dispose() {
-    this.rt.dispose()
-    this.mat.dispose()
+    super(W, H, mapSize, { vertexShader: CARVE_VS, fragmentShader: CARVE_FS }, { type: THREE.HalfFloatType, format: THREE.RGBAFormat })
   }
 }
+
+const CARVE_VS = /* glsl */ `
+  uniform vec2 uMap;
+  attribute float side;
+  attribute float aDepth;
+  varying float vSide;
+  varying float vDepth;
+  void main() {
+    vSide = side;
+    vDepth = aDepth;
+    gl_Position = vec4(position.x / uMap.x * 2.0, position.z / uMap.y * 2.0, 0.0, 1.0);
+  }
+`
+
+const CARVE_FS = /* glsl */ `
+  varying float vSide;
+  varying float vDepth;
+  void main() {
+    float s = clamp(abs(vSide), 0.0, 1.0);
+    gl_FragColor = vec4(vDepth * (1.0 - s * s), 0.0, 0.0, 1.0);
+  }
+`
 
 /** 着色器里读取下切深度（km），世界坐标 → 下切图 */
 export const CARVE_GLSL = /* glsl */ `

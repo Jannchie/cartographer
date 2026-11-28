@@ -6,7 +6,7 @@
 import type { P } from '../../settlement/geom'
 import { MAT, hip, shade, type RGB } from './mesh'
 import { TIMBER, TIMBER_DARK, hex } from './shared'
-import { archFace, archOutline, axUV, beam, box, l3, lp, placeArch, roofFrame, tube, vault, type ArchShape, type Ax, type Opening } from './worksMesh'
+import { archFace, archOutline, axUV, beam, box, l3, lp, placeArch, roofFrame, wallTube, vault, type ArchShape, type Ax, type Opening } from './worksMesh'
 import type { WCtx, WallLook } from './works'
 
 const IRON = hex('#2f2c2a')
@@ -140,8 +140,8 @@ function timberGate(c: WCtx, f: Ax, g: number, yb: number) {
       const q = lp(f, 0, sg * (phw + 0.25 + 0.38 * (k + 0.2)))
       w.c = shade(TIMBER, 0.9 + k * 0.15)
       w.face = MAT.plain
-      tube(w, q, 0.21, 0.19, yb, g + 4.1, 4)
-      tube(w, q, 0.19, 0, g + 4.1, g + 4.6, 4)
+      wallTube(w, q, 0.21, 0.19, yb, g + 4.1, 4)
+      wallTube(w, q, 0.19, 0, g + 4.1, g + 4.6, 4)
     }
   }
 }

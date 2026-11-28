@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { FS_VERT, FullscreenPass } from './fullscreen'
+import { HASH12_GLSL } from './glsl'
 import type { CloudLayer } from './post'
 
 /**
@@ -168,11 +169,7 @@ const MARCH_FRAG = /* glsl */ `
   uniform vec4 uSub;
   varying vec2 vUv;
 
-  float hash12(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-  }
+  ${HASH12_GLSL}
   float HG(float c, float g) {
     float g2 = g * g;
     return (1.0 - g2) / (4.0 * 3.14159 * pow(1.0 + g2 - 2.0 * g * c, 1.5));

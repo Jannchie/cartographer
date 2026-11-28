@@ -101,7 +101,7 @@ export function beam(w: Writer, a: V3, b: V3, hx: number, hy = hx, caps = true) 
  * 平滑着色的圆台侧面：底半径 r0（高 y0）、顶半径 r1（高 y1），n 棱；cap 为真时封顶面（朝上的平面）。
  * 立面坐标沿周长展开（砌体的缝绕着塔身连续）
  */
-export function tube(w: Writer, c: P, r0: number, r1: number, y0: number, y1: number, n = 12, o: { cap?: boolean; arc?: [number, number]; capFace?: number; capCol?: RGB } = {}) {
+export function wallTube(w: Writer, c: P, r0: number, r1: number, y0: number, y1: number, n = 12, o: { cap?: boolean; arc?: [number, number]; capFace?: number; capCol?: RGB } = {}) {
   const a0 = o.arc ? o.arc[0] : 0
   const a1 = o.arc ? o.arc[1] : Math.PI * 2
   const slope = (r0 - r1) / (y1 - y0 || 1)

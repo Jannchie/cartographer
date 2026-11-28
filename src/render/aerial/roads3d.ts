@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { Road, World } from '../../gen/types'
+import { MaxMask } from './maxMask'
 
 /**
  * 道路遮罩：把道路条带在 GPU 上栅格化成一张俯视的全图纹理（与河谷下切图同一套映射），
@@ -7,82 +8,50 @@ import type { Road, World } from '../../gen/types'
  * 不会有贴片浮空或 z 冲突。
  *   R 陆路覆盖度（中心 1，边缘渐隐）  G 航线（虚线）  B 干道标记
  */
-export class RoadMask {
-  readonly rt: THREE.WebGLRenderTarget
-  private scene = new THREE.Scene()
-  private cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-  private mat: THREE.ShaderMaterial
-
+export class RoadMask extends MaxMask {
   constructor(W: number, H: number, mapSize: THREE.Vector2) {
-    const cw = Math.min(4096, W * 4)
-    const ch = Math.round((cw * H) / W)
-    this.rt = new THREE.WebGLRenderTarget(cw, ch, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false })
-    this.mat = new THREE.ShaderMaterial({
-      depthTest: false,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      // 交叉、重叠处取最大，不叠加变浓
-      blending: THREE.CustomBlending,
-      blendEquation: THREE.MaxEquation,
-      blendSrc: THREE.OneFactor,
-      blendDst: THREE.OneFactor,
-      uniforms: { uMap: { value: mapSize } },
-      vertexShader: /* glsl */ `
-        uniform vec2 uMap;
-        attribute float aSide;
-        attribute float aAlong;
-        attribute vec2 aKind;
-        varying float vSide;
-        varying float vAlong;
-        varying vec2 vKind;
-        void main() {
-          vSide = aSide;
-          vAlong = aAlong;
-          vKind = aKind;
-          gl_Position = vec4(position.x / uMap.x * 2.0, position.z / uMap.y * 2.0, 0.0, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        varying float vSide;
-        varying float vAlong;
-        varying vec2 vKind;
-        void main() {
-          float cover = 1.0 - smoothstep(0.35, 1.0, abs(vSide));
-          if (vKind.x > 1.5) {
-            // 航线：虚线
-            float dash = step(fract(vAlong / 0.9), 0.55);
-            gl_FragColor = vec4(0.0, cover * dash, 0.0, 1.0);
-          } else {
-            gl_FragColor = vec4(cover, 0.0, vKind.x * cover, 1.0);
-          }
-        }
-      `,
-    })
+    super(W, H, mapSize, { vertexShader: ROAD_VS, fragmentShader: ROAD_FS })
   }
 
-  render(renderer: THREE.WebGLRenderer, world: World, mapSize: THREE.Vector2) {
+  /** 把世界的道路画进遮罩 */
+  renderRoads(renderer: THREE.WebGLRenderer, world: World, mapSize: THREE.Vector2) {
     const geo = ribbons(world, mapSize)
-    const mesh = new THREE.Mesh(geo, this.mat)
-    mesh.frustumCulled = false
-    this.scene.clear()
-    this.scene.add(mesh)
-    const prev = renderer.getRenderTarget()
-    const cc = renderer.getClearColor(new THREE.Color())
-    const ca = renderer.getClearAlpha()
-    renderer.setRenderTarget(this.rt)
-    renderer.setClearColor(0x000000, 0)
-    renderer.clear(true, false, false)
-    renderer.render(this.scene, this.cam)
-    renderer.setRenderTarget(prev)
-    renderer.setClearColor(cc, ca)
+    this.render(renderer, geo)
     geo.dispose()
   }
-
-  dispose() {
-    this.rt.dispose()
-    this.mat.dispose()
-  }
 }
+
+const ROAD_VS = /* glsl */ `
+  uniform vec2 uMap;
+  attribute float aSide;
+  attribute float aAlong;
+  attribute vec2 aKind;
+  varying float vSide;
+  varying float vAlong;
+  varying vec2 vKind;
+  void main() {
+    vSide = aSide;
+    vAlong = aAlong;
+    vKind = aKind;
+    gl_Position = vec4(position.x / uMap.x * 2.0, position.z / uMap.y * 2.0, 0.0, 1.0);
+  }
+`
+
+const ROAD_FS = /* glsl */ `
+  varying float vSide;
+  varying float vAlong;
+  varying vec2 vKind;
+  void main() {
+    float cover = 1.0 - smoothstep(0.35, 1.0, abs(vSide));
+    if (vKind.x > 1.5) {
+      // 航线：虚线
+      float dash = step(fract(vAlong / 0.9), 0.55);
+      gl_FragColor = vec4(0.0, cover * dash, 0.0, 1.0);
+    } else {
+      gl_FragColor = vec4(cover, 0.0, vKind.x * cover, 1.0);
+    }
+  }
+`
 
 /** 半宽（世界单位；沙盘宽 100）：路比真实比例粗得多，拉近时才看得见 */
 const HALF: Record<Road['kind'], number> = { major: 0.034, minor: 0.024, sea: 0.03 }

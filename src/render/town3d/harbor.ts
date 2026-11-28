@@ -9,7 +9,7 @@
 import { obb, signedArea, type P } from '../../settlement/geom'
 import { MAT, shade, type RGB, type V3 } from './mesh'
 import { TIMBER, TIMBER_DARK, hex } from './shared'
-import { axUV, axOf, beam, box, hash, l3, loft, lp, stationsOf, sweep, tube, type Ax } from './worksMesh'
+import { axUV, axOf, beam, box, hash, l3, loft, lp, stationsOf, sweep, wallTube, type Ax } from './worksMesh'
 import type { WCtx } from './works'
 
 /** 码头面的高度（水面在 0 附近） */
@@ -42,7 +42,7 @@ export function jetty(c: WCtx, poly: P[], top = DECK) {
       const q = lp(f, s, sg * (ht - 0.02))
       const moor = (i + (sg > 0 ? 0 : 1)) % 2 === 0 && c.water(q[0], q[1]) < 1
       w.c = shade(TIMBER_DARK, 0.9 + hash(q[0], q[1], 1) * 0.3)
-      tube(w, q, 0.15, 0.13, -3, top + (moor ? 0.6 : -0.1), 6, { cap: true })
+      wallTube(w, q, 0.15, 0.13, -3, top + (moor ? 0.6 : -0.1), 6, { cap: true })
     }
     // 桩间的横梁
     if (i % 2 === 0) {
@@ -83,7 +83,7 @@ function platform(c: WCtx, poly: P[], top: number) {
       const ix = o.center[0] - q[0]
       const iz = o.center[1] - q[1]
       const il = Math.hypot(ix, iz) || 1
-      tube(w, [q[0] + (ix / il) * 0.25, q[1] + (iz / il) * 0.25], 0.16, 0.14, -3, top - 0.05, 6)
+      wallTube(w, [q[0] + (ix / il) * 0.25, q[1] + (iz / il) * 0.25], 0.16, 0.14, -3, top - 0.05, 6)
     }
   }
 }
@@ -123,8 +123,8 @@ function quay(c: WCtx, poly: P[], top: number, col: RGB) {
       const q: P = [a[0] + (b[0] - a[0]) * t - ox * 0.75, a[1] + (b[1] - a[1]) * t - oz * 0.75]
       if (c.water(q[0] + ox * 2.5, q[1] + oz * 2.5) > 0) continue
       w.c = hex('#3b3a38')
-      tube(w, q, 0.2, 0.16, top, top + 0.5, 7)
-      tube(w, q, 0.24, 0.24, top + 0.5, top + 0.62, 7, { cap: true })
+      wallTube(w, q, 0.2, 0.16, top, top + 0.5, 7)
+      wallTube(w, q, 0.24, 0.24, top + 0.5, top + 0.62, 7, { cap: true })
     }
   }
 }
@@ -271,7 +271,7 @@ export function mast(c: WCtx, foot: V3, top: V3, r: number) {
   w.c = hex('#6b5238')
   w.face = MAT.plain
   // 倾斜的桅用方梁近似圆杆（竖直时用圆台）
-  if (Math.hypot(top[0] - foot[0], top[2] - foot[2]) < 0.05) tube(w, [foot[0], foot[2]], r, r * 0.6, foot[1], top[1], 6, { cap: true })
+  if (Math.hypot(top[0] - foot[0], top[2] - foot[2]) < 0.05) wallTube(w, [foot[0], foot[2]], r, r * 0.6, foot[1], top[1], 6, { cap: true })
   else beam(w, foot, top, r * 0.85, r * 0.85)
 }
 
