@@ -62,17 +62,19 @@
 
 ### 2.3 聚落生成（settlement）
 
-入口为 `generateSettlement` 与 `generateHistory`（`settlement/generate.ts`），参数类型在 `settlement/types.ts`（`SettlementParams`、`DEFAULT_SETTLEMENT`）。生长引擎（`settlement/grow/`）对外的接口以声明文件为准：`api.d.ts`、`natural-api.d.ts`、`paint-api.d.ts`，实现与声明由 `check-api.ts` 在编译期核对。
+入口为 `generateSettlement` 与 `generateHistory`（`settlement/generate.ts`），参数类型在 `settlement/types.ts`（`SettlementParams`、`DEFAULT_SETTLEMENT`）。片区的放置原语与普通片区在 `settlement/wards.ts`，承载组合地标的片区在 `settlement/landmarkWards.ts`，地标本身按构图语法拼（`settlement/compose/`、`settlement/palaces.ts`）。生长引擎（`settlement/grow/`）对外的接口以声明文件为准：`api.d.ts`、`natural-api.d.ts`、`paint-api.d.ts`，实现与声明由 `check-api.ts` 在编译期核对。
 
 ### 2.4 渲染（render）
 
 - 世界纸图：`render/atlas/`，矢量显示列表（`svg/displayList.ts`）同时用于画布与 SVG 导出；纸图风格经扩展点登记。
 - 聚落图：`render/settlementMap.ts` 的 `buildSettlementVector`，同样输出显示列表。
-- 三维：`render/scene3d.ts`（世界鸟瞰）、`render/town3d/townScene.ts`（聚落沙盘）、`render/holo/`（全息）。
+- 三维：`render/scene3d.ts`（世界鸟瞰）、`render/town3d/townScene.ts`（聚落沙盘）、`render/holo/`（全息）。前两者共用 `render/aerial/stage.ts`（渲染器配置、画布随容器调整、移动中渲染缩放的自适应、性能读数浮层、键盘导航的一步）与 `render/aerial/post.ts` 的后期管线。
 
 ### 2.5 界面（ui）
 
 每个模块一个目录（`ui/world/`、`ui/settlement/`、`ui/grow/`），模块的状态是该目录主文件导出的 `reactive` 单例（`ws`、`ss`、`gs`），外壳状态是 `ui/app.ts` 的 `app`。组件库在 `ui/kit/`。
+
+界面层的共用部件：`ui/app.ts`（本机存储、路由、插件引用的核对、下载）、`ui/undo.ts`（有上限的撤销栈）、`ui/panZoom.ts`（纸图的平移缩放）、`ui/settlement/historyWorker.ts`（成长史推演线程的客户端，聚落与生长模块各建一个实例）、`ui/world/genWorker.ts`（世界生成线程）。
 
 ## 3. 状态与数据的归属
 
