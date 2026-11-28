@@ -140,7 +140,7 @@ function keep(key: string, hist: SettlementHistory): Plan {
 }
 
 const alive = (x: { born: number; died: number }, pop: number) => x.born <= pop && pop < x.died
-const d2 = (a: P, b: P) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+const d2 = (a: P, b: P) => (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])
 
 /** 一条规划的路修剪剩下的各段：状态里的点列、画图用的路（同一段每次都是同一个对象，调用方凭它知道没变） */
 interface Cut {

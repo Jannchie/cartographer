@@ -3,6 +3,8 @@
  * - 栅格 {15m,5m}/grid.bin：高程、年均温、年降水、生物群系、海陆湖覆盖，等经纬度覆盖全球
  * - 矢量 features.bin：河流折线与自然地物（名称 + 轮廓）
  */
+import * as dmath from '../dmath'
+
 export type EarthRes = '15m' | '5m'
 
 /** 覆盖层的位 */
@@ -88,7 +90,7 @@ export async function loadEarthGrid(res: EarthRes): Promise<EarthGrid> {
   const rain = new Float32Array(N)
   for (let i = 0; i < N; i++) {
     temp[i] = t8[i] === -128 ? NaN : t8[i] / 2
-    rain[i] = p8[i] === 255 ? NaN : 10 * Math.expm1(p8[i] / LOG_RAIN)
+    rain[i] = p8[i] === 255 ? NaN : 10 * (dmath.exp(p8[i] / LOG_RAIN) - 1)
   }
   const g = { W, H, elev, temp, rain, biome, cover }
   grids.set(res, g)

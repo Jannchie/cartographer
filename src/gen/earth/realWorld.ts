@@ -348,7 +348,7 @@ function projectRivers(p: WorldParams, W: number, H: number, elev: Float32Array,
     for (const run of riverRuns(r.c, p, W, H)) {
       const n = run.length / 2
       const len = [0]
-      for (let k = 1; k < n; k++) len.push(len[k - 1] + Math.hypot(run[2 * k] - run[2 * k - 2], run[2 * k + 1] - run[2 * k - 1]))
+      for (let k = 1; k < n; k++) len.push(len[k - 1] + dmath.hypot(run[2 * k] - run[2 * k - 2], run[2 * k + 1] - run[2 * k - 1]))
       const total = len[n - 1]
       if (total < 1.5) continue
       const fl = new Float32Array(n)
@@ -442,7 +442,7 @@ function pca(cells: number[], W: number) {
     syy += y * y
     sxy += x * y
   }
-  const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy)
+  const ang = 0.5 * dmath.atan2(2 * sxy, sxx - syy)
   const tr = (sxx + syy) / cells.length
   const det = (sxx * syy - sxy * sxy) / (cells.length * cells.length)
   const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - det))
@@ -523,7 +523,7 @@ function riverLabels(p: WorldParams, W: number, H: number): Label[] {
   for (const g of groups.values()) {
     for (const run of chainRuns(g.runs)) {
       let len = 0
-      for (let k = 2; k < run.length; k += 2) len += Math.hypot(run[k] - run[k - 2], run[k + 1] - run[k - 1])
+      for (let k = 2; k < run.length; k += 2) len += dmath.hypot(run[k] - run[k - 2], run[k + 1] - run[k - 1])
       const have = best.get(g.n)
       if (!have || len > have.len) best.set(g.n, { run, len, r: g.r, zh: g.zh, ja: g.ja })
     }
@@ -543,7 +543,7 @@ function riverLabels(p: WorldParams, W: number, H: number): Label[] {
       ja: b.ja || name,
       x: b.run[2 * m],
       y: b.run[2 * m + 1],
-      angle: clampAngle(Math.atan2(b.run[2 * z + 1] - b.run[2 * a + 1], b.run[2 * z] - b.run[2 * a])),
+      angle: clampAngle(dmath.atan2(b.run[2 * z + 1] - b.run[2 * a + 1], b.run[2 * z] - b.run[2 * a])),
       weight: b.len * 20 * dmath.pow(1.6, 6 - Math.min(9, b.r)),
       span: b.len,
       path: smoothPath(b.run),
@@ -556,7 +556,7 @@ function riverLabels(p: WorldParams, W: number, H: number): Label[] {
 function chainRuns(runs: number[][]): number[][] {
   const left = runs.map((r) => r.slice())
   const out: number[][] = []
-  const near = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by) < 1.5
+  const near = (ax: number, ay: number, bx: number, by: number) => dmath.hypot(ax - bx, ay - by) < 1.5
   const rev = (r: number[]) => {
     const o: number[] = []
     for (let k = r.length - 2; k >= 0; k -= 2) o.push(r[k], r[k + 1])
@@ -596,7 +596,7 @@ function smoothPath(run: number[]): number[] {
   for (let k = 2; k < run.length; k += 2) {
     const ax = run[k - 2]
     const ay = run[k - 1]
-    const d = Math.hypot(run[k] - ax, run[k + 1] - ay)
+    const d = dmath.hypot(run[k] - ax, run[k + 1] - ay)
     let s = 1 - carry
     while (s <= d) {
       pts.push(ax + ((run[k] - ax) * s) / d, ay + ((run[k + 1] - ay) * s) / d)
@@ -628,7 +628,7 @@ function smoothPath(run: number[]): number[] {
   for (let k = 2; k < cur.length; k += 2) {
     const x = Math.round(cur[k] * 10) / 10
     const y = Math.round(cur[k + 1] * 10) / 10
-    if (Math.hypot(x - out[out.length - 2], y - out[out.length - 1]) >= 0.5) out.push(x, y)
+    if (dmath.hypot(x - out[out.length - 2], y - out[out.length - 1]) >= 0.5) out.push(x, y)
   }
   return out
 }

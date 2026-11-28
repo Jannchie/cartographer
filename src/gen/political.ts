@@ -637,7 +637,9 @@ function buildProvinces(counties: CountyBase[], realmRule: PolityRule[], capital
     for (let k = 0; k < nC; k++) {
       const id = lab[k]
       if (id < 0 || size[id] === 0) continue
-      const d = (counties[k].x - sx[id] / size[id]) ** 2 + (counties[k].y - sy[id] / size[id]) ** 2
+      const dx = counties[k].x - sx[id] / size[id]
+      const dy = counties[k].y - sy[id] / size[id]
+      const d = dx * dx + dy * dy
       if (d < bestD[id]) {
         bestD[id] = d
         best[id] = k
@@ -652,7 +654,7 @@ function buildProvinces(counties: CountyBase[], realmRule: PolityRule[], capital
         moved = true
       }
       if (ru.balance > 0) {
-        vigor[id] *= Math.pow(realmArea[r] / Math.max(1, count[r]) / Math.max(1, size[id]), 0.5 * ru.balance)
+        vigor[id] *= dmath.pow(realmArea[r] / Math.max(1, count[r]) / Math.max(1, size[id]), 0.5 * ru.balance)
         moved = true
       }
     }

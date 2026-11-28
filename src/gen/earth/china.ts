@@ -6,6 +6,7 @@ import type { AdminBorder, AdminLayer, Label, Peak, Realm } from '../types'
 import { fillRings, simplifyLine, type LonLatGrid } from './raster'
 import { readPublicGz } from './real'
 import type { MapProjection } from './region'
+import * as dmath from '../dmath'
 
 interface AdminUnit {
   code: number
@@ -155,7 +156,7 @@ export function chinaAdminLayer(proj: MapProjection, W: number, H: number, elev:
     const [x, y] = proj.toCell(u.seat[0] / 1e5, u.seat[1] / 1e5)
     if (x < 0 || y < 0 || x >= W || y >= H) return
     const pv = a.provinces[u.province]
-    const isCap = Math.hypot(u.seat[0] - pv.seat[0], u.seat[1] - pv.seat[1]) < 5000
+    const isCap = dmath.hypot(u.seat[0] - pv.seat[0], u.seat[1] - pv.seat[1]) < 5000
     const county = /县$/.test(u.full) || (/市$/.test(u.full) && Math.floor(u.code / 100) % 100 === 90)
     if (isCap) capitalOf.set(u.province, labels.length)
     // 首都与直辖市排在省会之前；全息沙盘上只给它们带引线标注

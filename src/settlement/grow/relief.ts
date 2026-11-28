@@ -52,7 +52,7 @@ function wobble(x: number, y: number) {
 /** 点到折线的距离（一个点的折线就是到那个点） */
 function distTo(pts: GrowP[], x: number, y: number) {
   let best = Infinity
-  if (pts.length === 1) return Math.sqrt((x - pts[0][0]) ** 2 + (y - pts[0][1]) ** 2)
+  if (pts.length === 1) return Math.sqrt((x - pts[0][0]) * (x - pts[0][0]) + (y - pts[0][1]) * (y - pts[0][1]))
   for (let i = 0; i + 1 < pts.length; i++) {
     const ax = pts[i][0]
     const ay = pts[i][1]
