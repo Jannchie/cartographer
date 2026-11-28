@@ -1,11 +1,11 @@
-# 推送到 master：检查更新日志、构建并部署到 GitHub Pages。
-# 打 v* 标签（发版）：检查更新日志、构建，再按 src/changelog.ts 创建 GitHub Release（部署仍由 master 的推送完成：
+# 推送到 main：检查更新日志、构建并部署到 GitHub Pages。
+# 打 v* 标签（发版）：检查更新日志、构建，再按 src/changelog.ts 创建 GitHub Release（部署仍由 main 的推送完成：
 # Pages 的部署环境只放行默认分支）。
 name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
@@ -34,12 +34,12 @@ jobs:
       - run: pnpm check:dmath
       - run: pnpm build
       - uses: actions/upload-pages-artifact@v3
-        if: github.ref == 'refs/heads/master'
+        if: github.ref == 'refs/heads/main'
         with:
           path: dist
 
   deploy:
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
