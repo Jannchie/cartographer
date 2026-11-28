@@ -3,7 +3,8 @@
 // 2. 插件之间：插件只能导入自己与清单里 requires 列出的插件；
 // 3. 插件的 world 层只能导入 world 层、生成器与内核（世界缓存的版本号只按这些文件计算，见 vite.config.ts 的 gen-hash）；
 // 4. 运行时的导入不成环（只有类型导入的环不算）；
-// 5. src 下的每个文件都能从某个入口（应用、Worker、对外接口、离线脚本）沿导入走到。
+// 5. src 下的每个文件都能从某个入口（应用、Worker、对外接口、离线脚本）沿导入走到；
+// 6. 浏览器存储与后台线程只在各自的所属模块里直接使用（OWNED_APIS）。
 // 有一项不成立，退出码是 1。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
@@ -53,6 +54,14 @@ const EXCEPTIONS: Record<string, string> = {
 const UNREACHABLE_OK: Record<string, string> = {
   'src/render/atlas/symbols/': '实验中的符号套，尚未接入纸图风格（待产品决定：接入或删除）',
 }
+
+/** 只能在所属模块里直接使用的浏览器接口：其他地方经由所属模块提供的函数 */
+const OWNED_APIS: { name: string; api: RegExp; owners: string[]; via: string }[] = [
+  // 语言设置在 base 层，界面层的函数用不了，单独读写
+  { name: 'localStorage / sessionStorage', api: /\b(localStorage|sessionStorage)\b/, owners: ['src/ui/app.ts', 'src/i18n.ts'], via: 'ui/app.ts 的 storeGet、storeSet、stored、storedJson' },
+  { name: 'indexedDB', api: /\bindexedDB\b/, owners: ['src/app/library.ts', 'src/gen/cache.ts'], via: '世界库（app/library.ts）或世界缓存（gen/cache.ts）' },
+  { name: 'new Worker', api: /\bnew\s+Worker\s*\(/, owners: ['src/ui/settlement/historyWorker.ts'], via: '各线程的客户端模块（世界生成线程见 ui/world/genWorker.ts）' },
+]
 
 // ———————————————————————— 收集文件与导入 ————————————————————————
 
@@ -222,6 +231,15 @@ for (const p of pluginIds) if (!existsSync(join(ROOT, 'src/packs', p))) problems
     if (ok) usedExceptions.add(ok)
     else problems.push(`不可达：${f}（没有入口导入它；不再需要就删掉）`)
   }
+}
+
+// ———————————————————————— 所属模块 ————————————————————————
+
+for (const f of files) {
+  const r = rel(f)
+  if (!r.startsWith('src/')) continue
+  const code = stripComments(readFileSync(f, 'utf8'))
+  for (const o of OWNED_APIS) if (!o.owners.includes(r) && o.api.test(code)) problems.push(`所属模块：${r} 直接使用了 ${o.name}（改用 ${o.via}）`)
 }
 
 for (const u of unresolved) problems.push(`导入的文件不存在：${u}`)

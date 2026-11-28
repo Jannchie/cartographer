@@ -35,6 +35,7 @@
 - **world 层的封闭性**：插件的 world 层只能导入 world 层、生成器与内核。世界缓存的版本号（`vite.config.ts` 的 `gen-hash`）只按这些文件计算；world 层若导入其他代码，那些代码改动后浏览器里缓存的旧世界不会失效。
 - **运行时无环**：运行时的导入不成环；只含类型导入的环（含 `import('…').Name` 形式的内联类型）不计。
 - **可达**：`src/` 下每个文件都须能从某个入口（组合根、`package.json` 的 `exports`、`scripts/`、`video/`）沿导入走到。尚未接入的实验代码登记在 `UNREACHABLE_OK`。
+- **所属模块**：本机存储（localStorage、sessionStorage）只在 `ui/app.ts` 与 `i18n.ts` 中直接读写，其他模块经 `storeGet`、`storeSet`、`stored`、`storedJson`；IndexedDB 只在世界库（`app/library.ts`）与世界缓存（`gen/cache.ts`）中使用；后台线程只由各自的客户端模块创建（`ui/settlement/historyWorker.ts`、`ui/world/genWorker.ts`）。
 - **确定性**：`src/gen`、`src/settlement` 与插件中参与生成的部分（world 层与 settlement 层）不使用随引擎实现而变的数学函数与写法（`Math.sin`、`Math.pow`、`**`、随机比较函数的 `sort` 等，改用 `src/gen/dmath.ts`），也不使用 `Math.random`（改用 `src/gen/rng.ts`）；由 `pnpm check:dmath` 检查。
 
 两项检查都在 CI（`.github/workflows/pages.yml`）中运行。
