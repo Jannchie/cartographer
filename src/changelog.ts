@@ -11,6 +11,36 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '0.3.0',
+    date: '2026-11-28',
+    notes: {
+      zh: [
+        '新增「村落生长」模块：从一片空地起步，按生成器规划的成长史一步步长成聚落，可以设定目标人口；随时可以手动铺路（端点自动相接）、划分用地（划好即按用途填满）、摆放地块、修桥和改地形，聚落会围绕手动铺的路规划',
+        '新增插件面板：世界观、纸图风格与聚落图主题都以插件提供，可以分别启用或停用；一个世界观包含命名风格、制度与城市规则',
+        '新增世界观：「古典」之外另有「西洋」（西幻、史诗命名，分封制，西式城市，炎热干旱处建伊斯兰式城市）与「东亚」（东方、和风命名，郡县与令制）；新增「异世界」插件，包含片假名地名的人类王国，按地理分布的精灵、矮人、兽人，以及唯一的魔王领',
+        '纸图上相邻生物群系的交界改为更宽、带扰动的过渡，不再是生硬的分界线',
+        '地图查看器只重绘有变化的格子与细节层，平移和缩放时更流畅',
+        '修正：同一个种子在不同浏览器里生成的世界不一致的几处计算；在聚落模块选取世界地点后进入世界地图，纸图显示为空白',
+      ],
+      ja: [
+        '「村づくり」モジュールを追加しました：空き地から始まり、生成器が計画した成長の歴史に沿って一歩ずつ集落へと育ちます。目標人口を設定できます。いつでも道を敷く（端点は自動で接続）、用地を区切る（区切るとすぐ用途に応じて埋まる）、区画を置く、橋を架ける、地形を変えることができ、集落は手で敷いた道を軸に計画されます',
+        'プラグインパネルを追加しました：世界観・紙地図のスタイル・集落図のテーマはプラグインとして提供され、個別に有効・無効を切り替えられます。一つの世界観は命名スタイル・制度・都市の規則をまとめたものです',
+        '世界観を追加しました：「古典」に加えて「西洋」（ファンタジー・叙事詩の命名、封建制、西洋式の町、暑く乾いた土地ではイスラム式の町）と「東アジア」（中華風・和風の命名、郡県と令制）を選べます。「異世界」プラグインも追加しました。カタカナ地名の人間の王国、地理に応じて配されるエルフ・ドワーフ・獣人、ただ一つの魔王領を含みます',
+        '紙地図で隣り合うバイオームの境界が、硬い境界線ではなく幅と揺らぎのある移行帯になりました',
+        '地図ビューアは変化したセルと詳細レイヤーだけを再描画するようになり、パンとズームが滑らかになりました',
+        '修正：同じシードでもブラウザによって生成される世界が異なっていた計算を直しました。集落モジュールで世界の地点を選んだあと世界地図に入ると紙地図が空白になる問題を直しました',
+      ],
+      en: [
+        'New Village builder module: start from empty land and grow a settlement step by step along the history the generator plans, with a target population; at any time lay roads (endpoints join automatically), zone land (a zone fills with its use as soon as it is drawn), place lots, build bridges and reshape terrain, and the settlement plans around the roads laid by hand',
+        'New plugin panel: settings, map styles and town-map themes are provided as plugins that can be switched on and off individually; a setting bundles naming styles, polities and town rules',
+        'New settings: besides Classical there is Western (Fantasy and Epic naming, feudal rule, Western towns, Islamic towns where the land is hot and dry) and East Asian (Eastern and Japanese naming, commandery and ritsuryō polities); a new Isekai plugin adds human kingdoms with katakana place names, elves, dwarves and beastfolk placed by geography, and a single Demon Realm',
+        'Borders between neighbouring biomes on paper maps are now wider, irregular transitions instead of hard lines',
+        'The map viewer repaints only the cells and detail layer that changed, so panning and zooming are smoother',
+        'Fixes: several calculations that made the same seed produce different worlds in different browsers; the paper map showing blank after picking a world place in the settlement module and then opening the world map',
+      ],
+    },
+  },
+  {
     version: '0.2.0',
     date: '2026-11-24',
     notes: {
