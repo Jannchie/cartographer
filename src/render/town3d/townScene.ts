@@ -5,7 +5,8 @@ import type { SettleStyleId } from '../../settlement/themes'
 import type { MapLabel, Settlement } from '../../settlement/types'
 import { isTypingTarget } from '../keys'
 import { PostPipeline } from '../aerial/post'
-import { GpuTimer } from '../aerial/gpuTimer'
+import type { GpuTimer } from '../aerial/gpuTimer'
+import { adaptMotionScale, createCanvasRenderer, fitCanvas, PerfOverlay } from '../aerial/stage'
 import { QUALITIES, type Look, type QualityId } from '../aerial/looks'
 import { Diorama } from '../aerial/diorama'
 import { daylight, type Daylight } from '../aerial/daylight'
@@ -148,7 +149,7 @@ export class TownScene {
   private tour: CameraTour
   private tourFade: HTMLDivElement
   private pois: TourPoi[] = []
-  private perf: { el: HTMLDivElement; frames: number; t0: number } | null = null
+  private perf: PerfOverlay
   private lastFrame = 0
   private lastMove = 0
   private detailTimer = 0
@@ -172,15 +173,10 @@ export class TownScene {
   ) {
     this.opts = { ...opts, look: { ...opts.look } }
     this.dl = daylight(opts.timeOfDay, opts.sunAzimuth, opts.sunElevation)
-    // 抗锯齿在后期管线里做；保留绘制缓冲：按需渲染停下后画面留在画布上，导出图片直接读
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: true })
-    this.renderer.toneMapping = THREE.NoToneMapping
-    this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.autoUpdate = false
-    this.renderer.shadowMap.type = THREE.PCFShadowMap
-    this.renderer.setClearColor(0x000000, 0)
-    this.timer = new GpuTimer(this.renderer.getContext() as WebGL2RenderingContext)
-    container.appendChild(this.renderer.domElement)
+    const { renderer, timer } = createCanvasRenderer(container)
+    this.renderer = renderer
+    this.timer = timer
+    this.perf = new PerfOverlay(container, timer)
 
     this.camera.position.set(0, 58, 84)
     this.rig = new CameraRig(this.camera, this.renderer.domElement, () => this.invalidate(false))
@@ -711,7 +707,14 @@ export class TownScene {
     if (!moved && !busy && !this.held && performance.now() - this.lastMove > DETAIL_IDLE) this.updateDetail()
     const focusing = this.renderFrame(moved, dt)
     this.labels.update(this.camera, this.rig.distance, this.field, this.K)
-    if (this.perf) this.perfTick()
+    this.perf.tick(
+      this.renderer.domElement,
+      () => ` · 移动缩放 ${this.motionScale.toFixed(2)}`,
+      () => {
+        const info = this.renderer.info.render
+        return [`绘制 ${info.calls} 次 · ${(info.triangles / 1000).toFixed(0)}k 三角形 · 地面重画 ${this.paint.cost.toFixed(0)} ms`]
+      },
+    )
     // 累积收敛后停下（静止时不占用 GPU）
     const settling = this.post.samples < this.quality.accumulate
     // 这一帧里可能已经有人 invalidate 过（测距回来、高清块）：只排一个，否则每帧多一条循环，越积越多
@@ -779,9 +782,7 @@ export class TownScene {
 
   /** 按一帧移动中的实测耗时调节缩放（同世界沙盘，目标 60 fps） */
   private adaptScale(ms: number, scale: number) {
-    const want = scale * Math.sqrt((1000 / 60) * 0.88 / Math.max(ms, 0.1))
-    const k = want < this.motionScale ? 0.5 : 0.15
-    this.motionScale = Math.min(1, Math.max(this.quality.minScale, this.motionScale + (want - this.motionScale) * k))
+    this.motionScale = adaptMotionScale(this.motionScale, ms, scale, 1000 / 60, this.quality.minScale)
   }
 
   /** 地面高清块跟着视点（镜头停稳后）：一次画一级，还有没画的再醒一帧接着画 */
@@ -895,53 +896,15 @@ export class TownScene {
 
   // —— 其他 ——
   private togglePerf() {
-    if (this.perf) {
-      this.perf.el.remove()
-      this.perf = null
-      this.timer.detail = false
-      return
-    }
-    const el = document.createElement('div')
-    el.className = 'perf'
-    el.textContent = '…'
-    this.container.appendChild(el)
-    this.timer.detail = true
-    this.timer.ms.clear()
-    this.perf = { el, frames: 0, t0: performance.now() }
+    this.perf.toggle()
     this.invalidate(false)
   }
 
-  private perfTick() {
-    const pf = this.perf!
-    pf.frames++
-    const now = performance.now()
-    if (now - pf.t0 < 500) return
-    const c = this.renderer.domElement
-    const tm = this.timer
-    const info = this.renderer.info.render
-    const rows = [...tm.ms].filter(([, v]) => v >= 0.05).map(([k, v]) => `${k.padEnd(8, '　')} ${v.toFixed(2).padStart(6)} ms`)
-    pf.el.textContent = [
-      `${((pf.frames * 1000) / (now - pf.t0)).toFixed(0)} fps · ${c.width}×${c.height} · 移动缩放 ${this.motionScale.toFixed(2)}`,
-      `绘制 ${info.calls} 次 · ${(info.triangles / 1000).toFixed(0)}k 三角形 · 地面重画 ${this.paint.cost.toFixed(0)} ms`,
-      ...(tm.supported ? [`GPU ${tm.total.toFixed(1)} ms`, ...rows] : ['GPU n/a']),
-    ].join('\n')
-    pf.frames = 0
-    pf.t0 = now
-  }
-
   private resize() {
-    const w = this.container.clientWidth
-    const h = this.container.clientHeight
-    // 隐藏时报 0×0：保留现有渲染目标
-    if (w === 0 || h === 0) return
-    this.renderer.setSize(w, h, false)
-    const pr = this.renderer.getPixelRatio()
-    this.post.setSize(Math.round(w * pr), Math.round(h * pr))
-    this.renderer.domElement.style.width = w + 'px'
-    this.renderer.domElement.style.height = h + 'px'
-    this.camera.aspect = w / Math.max(1, h)
-    this.camera.updateProjectionMatrix()
-    this.u.uMinNdc.value = 4 / Math.max(1, Math.round(h * pr))
+    const px = fitCanvas(this.renderer, this.camera, this.container)
+    if (!px) return
+    this.post.setSize(px.w, px.h)
+    this.u.uMinNdc.value = 4 / Math.max(1, px.h)
     this.labels.invalidate()
     this.focus.dirty = true
     this.invalidate()
@@ -1063,6 +1026,7 @@ export class TownScene {
     this.renderer.dispose()
     this.renderer.domElement.remove()
     this.labels.dispose()
+    this.perf.dispose()
     this.tourFade.remove()
   }
 }

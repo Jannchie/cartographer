@@ -5,7 +5,8 @@ import { buildDetailMask, buildMaterialMask } from './aerial/mask'
 import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMaterial'
 import { VolumetricClouds } from './aerial/volumetric'
 import { PostPipeline } from './aerial/post'
-import { GpuTimer } from './aerial/gpuTimer'
+import type { GpuTimer } from './aerial/gpuTimer'
+import { adaptMotionScale, createCanvasRenderer, fitCanvas, PerfOverlay } from './aerial/stage'
 import { CameraTour, type TourPoi } from './aerial/tour'
 import { QUALITIES, type Look, type QualityId } from './aerial/looks'
 import { Diorama } from './aerial/diorama'
@@ -109,7 +110,7 @@ export class Scene3D {
   private navFast = false
   private frame = 0
   /** 性能读数（按 P 开关）：帧率、GPU 耗时（EXT_disjoint_timer_query_webgl2） */
-  private perf: { el: HTMLDivElement; frames: number; t0: number } | null = null
+  private perf: PerfOverlay
   /** 动态分辨率：镜头移动时的渲染缩放（按 GPU 耗时调节）；lastScale 为上一帧移动时用的缩放，静止为 0 */
   private motionScale = 1
   private lastScale = 0
@@ -148,17 +149,11 @@ export class Scene3D {
   constructor(private container: HTMLElement, opts: View3DOptions) {
     this.opts = { ...opts }
     this.dl = daylight(this.opts.timeOfDay, this.opts.sunAzimuth, this.opts.sunElevation)
-    // 抗锯齿在后期管线的 MSAA 场景目标与时间累积里做，画布本身不需要
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: true })
-    // 色调映射与调色在后期管线的终合成里做
-    this.renderer.toneMapping = THREE.NoToneMapping
-    this.renderer.shadowMap.enabled = true
-    // 地形是静态的：阴影只在太阳或地形变化时重绘
-    this.renderer.shadowMap.autoUpdate = false
-    this.renderer.shadowMap.type = THREE.PCFShadowMap
-    this.renderer.setClearColor(0x000000, 0)
-    this.timer = new GpuTimer(this.renderer.getContext() as WebGL2RenderingContext)
-    container.appendChild(this.renderer.domElement)
+    // 地形是静态的：阴影只在太阳或地形变化时重绘（渲染器的配置见 aerial/stage.ts）
+    const { renderer, timer } = createCanvasRenderer(container)
+    this.renderer = renderer
+    this.timer = timer
+    this.perf = new PerfOverlay(container, timer)
 
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 6000)
     this.camera.position.set(0, 50, 60)
@@ -256,7 +251,6 @@ export class Scene3D {
       }
       this.frame++
       if (performance.now() - this.lastInteract > 1500 && this.frame % 2) return
-      const pf = this.perf
       // 没有 GPU 计时扩展时退回用帧间隔估计（包含了 CPU 与等待，偏保守）
       if (!this.timer.supported && this.lastScale > 0 && this.lastFrameAt) this.adaptScale(now - this.lastFrameAt, this.lastScale)
       this.lastFrameAt = now
@@ -269,19 +263,7 @@ export class Scene3D {
       this.updatePatch()
       this.renderFrame()
       this.timer.frameEnd()
-      if (pf) {
-        pf.frames++
-        const now = performance.now()
-        if (now - pf.t0 > 500) {
-          const fps = (pf.frames * 1000) / (now - pf.t0)
-          const c = this.renderer.domElement
-          const tm = this.timer
-          const rows = [...tm.ms].filter(([, v]) => v >= 0.05).map(([k, v]) => `${k.padEnd(8, '　')} ${v.toFixed(2).padStart(6)} ms`)
-          pf.el.textContent = [`${fps.toFixed(0)} fps · ${c.width}×${c.height} · 刷新 ${(1000 / this.refreshMs).toFixed(0)} Hz · 移动缩放 ${this.motionScale.toFixed(2)}`, ...(tm.supported ? [`GPU ${tm.total.toFixed(1)} ms`, ...rows] : ['GPU n/a'])].join('\n')
-          pf.frames = 0
-          pf.t0 = now
-        }
-      }
+      this.perf.tick(this.renderer.domElement, () => ` · 刷新 ${(1000 / this.refreshMs).toFixed(0)} Hz · 移动缩放 ${this.motionScale.toFixed(2)}`)
       this.updateLabels()
     }
     requestAnimationFrame(loop)
@@ -484,19 +466,7 @@ export class Scene3D {
   }
 
   togglePerf() {
-    if (this.perf) {
-      this.perf.el.remove()
-      this.perf = null
-      this.timer.detail = false
-      return
-    }
-    const el = document.createElement('div')
-    el.className = 'perf'
-    el.textContent = '…'
-    this.container.appendChild(el)
-    this.timer.detail = true
-    this.timer.ms.clear()
-    this.perf = { el, frames: 0, t0: performance.now() }
+    this.perf.toggle()
   }
 
   get vScale() {
@@ -543,31 +513,18 @@ export class Scene3D {
     this.refreshMs = Math.min(1000 / 30, Math.max(1000 / 240, d))
   }
 
-  /** 按一帧移动中的实测耗时调节缩放：像素数与缩放平方成正比，留 12% 余量 */
+  /** 按一帧移动中的实测耗时调节缩放，目标是显示器的刷新间隔；巡览是持续运动，以 60 fps 为目标，画面优先 */
   private adaptScale(ms: number, scale: number) {
-    // 巡览是持续运动：以 60 fps 为目标，画面优先
-    const target = (this.tour.active ? Math.max(this.refreshMs, 1000 / 60) : this.refreshMs) * 0.88
-    const want = scale * Math.sqrt(target / Math.max(ms, 0.1))
-    const min = this.quality.minScale
-    // 超时就快降，有余量时慢升，避免来回抖
-    const k = want < this.motionScale ? 0.5 : 0.15
-    this.motionScale = Math.min(1, Math.max(min, this.motionScale + (want - this.motionScale) * k))
+    const target = this.tour.active ? Math.max(this.refreshMs, 1000 / 60) : this.refreshMs
+    this.motionScale = adaptMotionScale(this.motionScale, ms, scale, target, this.quality.minScale)
   }
 
   private resize() {
-    const w = this.container.clientWidth
-    const h = this.container.clientHeight
-    // 模块隐藏（v-show）时报 0×0：保留现有渲染目标，切回来不必整套重建
-    if (w === 0 || h === 0) return
-    this.renderer.setSize(w, h, false)
-    const pr = this.renderer.getPixelRatio()
-    this.clouds?.setSize(Math.round(w * pr), Math.round(h * pr))
-    this.post.setSize(Math.round(w * pr), Math.round(h * pr))
+    const px = fitCanvas(this.renderer, this.camera, this.container)
+    if (!px) return
+    this.clouds?.setSize(px.w, px.h)
+    this.post.setSize(px.w, px.h)
     this.labelsDirty = true
-    this.renderer.domElement.style.width = w + 'px'
-    this.renderer.domElement.style.height = h + 'px'
-    this.camera.aspect = w / Math.max(1, h)
-    this.camera.updateProjectionMatrix()
   }
 
   setOptions(o: Partial<View3DOptions>) {
