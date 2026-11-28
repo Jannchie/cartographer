@@ -149,6 +149,8 @@ requires.set('sample', new Set(['classic', 'cartography']))
 
 const problems: string[] = []
 const usedExceptions = new Set<string>()
+/** 计入世界缓存版本号的插件清单与 world 层入口表：同插件的 world 层一样，只能导入 world 层、生成器与内核 */
+const WORLD_ROOTS = new Set(['src/packs/world.ts', 'src/packs/manifest.ts'])
 
 for (const [from, edges] of graph) {
   if (from.endsWith('.d.ts')) continue
@@ -157,6 +159,7 @@ for (const [from, edges] of graph) {
   for (const { to } of edges) {
     const lt = layerOf(to)
     if (!lt) continue
+    if (WORLD_ROOTS.has(from) && lt !== 'plugin-world' && !ALLOWED['plugin-world'].includes(lt)) problems.push(`分层：${from} -> ${to}（计入世界缓存版本号的文件只能导入 world 层、生成器与内核）`)
     if (lt !== lf && !ALLOWED[lf].includes(lt)) {
       const key = `${from} -> ${to}`
       if (EXCEPTIONS[key]) usedExceptions.add(key)

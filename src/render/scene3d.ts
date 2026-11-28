@@ -307,6 +307,7 @@ export class Scene3D {
     if (zoom) {
       const sph = this.navSph.setFromVector3(this.tmp.copy(cam.position).sub(target))
       sph.radius = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, sph.radius * Math.exp(zoom * 1.4 * (this.navFast ? 3 : 1) * dt)))
+      sph.phi = Math.min(this.controls.maxPolarAngle, Math.max(0.05, sph.phi))
       cam.position.setFromSpherical(sph).add(target)
     }
     cam.lookAt(target)

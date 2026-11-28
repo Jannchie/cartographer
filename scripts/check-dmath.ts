@@ -8,18 +8,28 @@ import { join } from 'node:path'
 
 const BANNED = /\bMath\.(random|sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|asinh|acosh|atanh|exp|expm1|log|log1p|log2|log10|pow|hypot|cbrt)\b/g
 const files: string[] = []
-const walk = (d: string, skip: RegExp | null = null) => {
+const walk = (d: string) => {
   for (const f of readdirSync(d)) {
     const p = join(d, f)
-    if (skip?.test(f)) continue
-    if (statSync(p).isDirectory()) walk(p, skip)
+    if (statSync(p).isDirectory()) walk(p)
     else if (p.endsWith('.ts') && !p.endsWith('dmath.ts')) files.push(p)
   }
 }
 walk('src/gen')
 walk('src/settlement')
-// 插件的 world 层与 settlement 层参与生成；沙盘（town3d）、纸图（paper）与界面（ui）层只管画，不查
-walk('src/packs', /^(town3d|paper|ui)(\.ts)?$/)
+// 插件的 world 层与 settlement 层参与生成；沙盘（town3d）、纸图（paper）与界面（ui）层只管画，不查。
+// 这三层可能嵌在文明的子目录里（classic/western/town3d/），按名字跳过；插件的 world 层（world.ts、world/）里不跳，整个都查
+const DRAW_ONLY = /^(town3d|paper|ui)(\.ts)?$/
+const walkPack = (d: string) => {
+  for (const f of readdirSync(d)) {
+    const p = join(d, f)
+    if (DRAW_ONLY.test(f)) continue
+    if (f === 'world' && statSync(p).isDirectory()) walk(p)
+    else if (statSync(p).isDirectory()) walkPack(p)
+    else if (p.endsWith('.ts')) files.push(p)
+  }
+}
+walkPack('src/packs')
 
 let bad = 0
 for (const file of files) {

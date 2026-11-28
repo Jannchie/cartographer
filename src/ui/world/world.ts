@@ -590,12 +590,22 @@ export function setMode(m: Mode) {
 // —— 生成 ——
 let jobId = 0
 let quietJob = false
+/** 生成线程载入失败或崩溃时的错误信息；之后的生成直接报这个错（线程不重建：启用清单写在线程名里，改动要重新载入页面） */
+let workerFailed: string | null = null
 /** Worker 正在算的任务：算完前不再投递（Worker 同步执行，排队的旧任务只会白算一遍） */
 let running = false
 /** 运行期间又要求的生成：当前任务结束后只算最新的一次；null 为没有。有一次非静默就按非静默 */
 let queued: boolean | null = null
 /** opened：从世界库或文件打开的整个世界——不演算，只让 Worker 补派生数据 */
 export function generate(quiet = false, opened?: World) {
+  // 生成线程已经起不来：直接报错，不再投递（否则加载层会一直挂着）
+  if (workerFailed !== null) {
+    ws.loading.stage = t('生成失败：') + workerFailed
+    if (!quiet) Object.assign(ws.loading, { show: true, frac: 0 })
+    ws.editStatus = quiet ? ws.loading.stage : null
+    flushWaiters()
+    return
+  }
   if (running && !opened) {
     queued = queued === null ? quiet : queued && quiet
     if (quiet) ws.editStatus = t('演算中…')
@@ -622,10 +632,11 @@ export function generate(quiet = false, opened?: World) {
       return
     }
     edits = sketch ? keepEdits('sketch', 'sketchRev') : {}
-    resetUndo()
     editor?.refreshEdits(edits)
     syncSketch()
   }
+  // 换了种子就是另一个世界：撤销记录（含区域视图的）都只对旧世界有意义
+  if (p.seed !== editsSize.seed) resetUndo()
   // 换了分辨率：编辑按比例重采样
   if ((p.width !== editsSize.W || p.height !== editsSize.H) && hasEdits(edits)) edits = resampleEdits(edits, editsSize.W, editsSize.H, p.width, p.height)
   editsSize = { W: p.width, H: p.height, seed: p.seed }
@@ -755,6 +766,7 @@ worker.onmessage = async (ev: MessageEvent<WorkerOut>) => {
 // 线程载入失败或崩溃：进行中的生成与定稿请求都以失败结束，不让加载层一直挂着
 worker.onerror = (e: ErrorEvent) => {
   const message = e.message || 'Worker error'
+  workerFailed = message
   console.error(e)
   for (const req of stageReqs.values()) req.reject(new Error(message))
   stageReqs.clear()
@@ -1063,6 +1075,7 @@ let stageSeq = 0
 function requestStage() {
   const id = --stageSeq
   return new Promise<{ elev: Float32Array; basins: { x: number; y: number; r: number }[] }>((resolve, reject) => {
+    if (workerFailed !== null) return reject(new Error(workerFailed))
     stageReqs.set(id, { resolve, reject })
     const msg: WorkerIn = { id, params: { ...toRaw(ws.params) }, edits: workerEdits(), want: 'stage' }
     worker.postMessage(msg)
