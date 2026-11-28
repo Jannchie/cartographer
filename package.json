@@ -35,6 +35,7 @@
     "china": "tsx scripts/china-real.ts",
     "video": "tsx video/record.ts",
     "check:dmath": "tsx scripts/check-dmath.ts",
+    "check:arch": "tsx scripts/check-arch.ts",
     "release:notes": "tsx scripts/release-notes.ts"
   },
   "dependencies": {
