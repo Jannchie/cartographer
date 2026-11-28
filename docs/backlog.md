@@ -16,6 +16,7 @@
 | 撤销栈 | 世界编辑、世界区域、聚落区域、生长四处改用 `ui/undo.ts` 的 `UndoStack`。区域撤销记录在换世界、换城时清空（此前会把上一座城的区域写进当前城的存储） |
 | 渲染层小项 | `RoadMask`、`RiverCarve` 共用 `render/aerial/maxMask.ts` 的 `MaxMask`；GLSL `hash12` 只留 `HASH12_GLSL` 一份；`rgb()` 颜色串只留 `render/palette.ts` 一份；`worksMesh` 的 `tube` 改名 `wallTube`，与 `mesh.ts` 的 `tube` 区分；删除从未调用、且释放不全的 `Scene3D.dispose` |
 | 三维舞台的共用部件 | 世界沙盘与聚落沙盘的渲染器配置、画布随容器调整、移动中渲染缩放的自适应、性能读数浮层合并到 `render/aerial/stage.ts`；两者只保留各自的目标帧时与额外读数。聚落沙盘释放时一并移走性能浮层。键盘导航的平移、转向与俯仰合并为 `keyNavStep`，推拉仍由各场景按自己的缩放方式处理 |
+| 脚本的类型检查 | `tsconfig.json` 纳入 `scripts/`，`pnpm build` 的类型检查随之覆盖离线脚本；修正随接口演进失效的类型（`grow-edit.ts` 的 `must`、`route.ts` 的 `same`、沙盘截图脚本的读数类型）与已不存在的 `Settlement.center` |
 | 所属模块检查 | `check:arch` 增加一项：本机存储、IndexedDB 与后台线程的创建只出现在各自的所属模块里 |
 | 确定性检查的范围 | `check:dmath` 覆盖插件中参与生成的代码，并禁用 `Math.random` |
 | 闭环化简 | `gen/util.ts` 的 `simplifyLine` 在首尾重合时把所有距离算作 0，闭环（例如被另一政区完全包围的飞地的边界）化简后只剩两个点、从纸图上消失；改为按到端点的距离取舍 |

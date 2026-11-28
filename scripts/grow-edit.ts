@@ -3,6 +3,7 @@
 // 路的端点接到已有的路的端头或路身上，
 // 拆地块、连地块拆路；改地形：抬高、平整、挖水（漫到的地块去掉）、填陆；挖出来的水面不架桥过不去、架桥过得去；
 // 地形的缓存：接着上一份画出来的，和从头叠一遍的逐位相同；状态过一遍 JSON 也相同。有一项不成立，退出码是 1。
+export {} // 只用动态导入：标成模块，顶层的名字不与其他脚本冲突
 const { addRoad, blankState, lotAtPoint, lotCenter, paintTerrain, place, placeAt, probeLot, removeLot, removeRoad } = await import('../src/settlement/grow')
 const { terrainOf } = await import('../src/settlement/grow/core')
 const { convexOverlap, pointInPoly } = await import('../src/settlement/geom')
@@ -15,9 +16,9 @@ const ok = (cond: boolean, what: string) => {
   console.log(`${cond ? '✓' : '✗'} ${what}`)
   if (!cond) bad++
 }
-const must = <T extends object>(r: T | { error: string }): T => {
-  if ('error' in r) throw new Error(r.error)
-  return r
+const must = <R extends object>(r: R): Exclude<R, { error: string }> => {
+  if ('error' in r) throw new Error(String(r.error))
+  return r as Exclude<R, { error: string }>
 }
 
 // 平地：没有河、海、山，起伏为 0

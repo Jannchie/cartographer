@@ -72,7 +72,6 @@ async function loadWorldClim(name: string) {
 // —— Shapefile（只读多边形）与 dbf ——
 function readDbf(path: string) {
   const b = readFileSync(path)
-  const n = b.readUInt32LE(4)
   const hl = b.readUInt16LE(8)
   const rl = b.readUInt16LE(10)
   const fields: { name: string; pos: number; len: number }[] = []

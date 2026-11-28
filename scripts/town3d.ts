@@ -193,7 +193,7 @@ interface Info {
   height: number
   pop: number
   until: number
-  ms: { history: number; build: number; scene: number; detail: number }
+  ms: { history: number; build: number; scene: number; detail: number; paint: number[] }
   tris: number
   trees: [string, number][]
   buildings: number

@@ -170,7 +170,6 @@ try {
             .slice(0, 4),
         ]),
       ),
-      center: st.center,
       heightAt: null,
       spots: spots(st),
     },

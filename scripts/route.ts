@@ -5,6 +5,7 @@
 //   - 没有路：直线；在两条互不相连的路之间：直线；
 //   - 同样的输入两次结果一样，换一个只改了地块的状态（roads 同一个数组）结果也一样；
 // 打印一次 route 的用时（第一次含建图、之后的平均）。有一项不成立，退出码是 1。
+export {} // 只用动态导入：标成模块，顶层的名字不与其他脚本冲突
 const { place, seedState, lotCenter, route } = await import('../src/settlement/grow')
 const { segDist } = await import('../src/settlement/geom')
 type GrowState = import('../src/settlement/grow').GrowState
@@ -35,7 +36,7 @@ console.log(`种子 ${seed}：${s.roads.length} 条路、${s.lots.length} 块地
 
 const onRoad = (p: GrowP) => s.roads.some((r) => r.pts.some((a, i) => i + 1 < r.pts.length && segDist(p, a, r.pts[i + 1]).d < 1))
 const len = (l: GrowP[]) => l.reduce((acc, p, i) => (i ? acc + Math.hypot(p[0] - l[i - 1][0], p[1] - l[i - 1][1]) : 0), 0)
-const same = (a: GrowP[], b: GrowP[]) => JSON.stringify(a) === JSON.stringify(b)
+const same = (a: GrowP | GrowP[], b: GrowP | GrowP[]) => JSON.stringify(a) === JSON.stringify(b)
 
 const lots = s.lots.filter((l) => l.state !== 'vacant')
 const c0 = lotCenter(lots[0])
