@@ -339,7 +339,7 @@ export async function run() {
     st = markRaw(snapshot(hist, h.until))
   } catch (err) {
     console.error(err)
-    ss.loading.stage = '生成失败：' + (err instanceof Error ? err.message : String(err))
+    ss.loading.stage = t('生成失败：') + (err instanceof Error ? err.message : String(err))
     return
   }
   cache.clear()

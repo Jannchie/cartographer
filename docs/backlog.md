@@ -15,6 +15,8 @@
 | 成长史线程客户端 | `ui/grow/planWorker.ts` 删除；聚落与生长模块共用 `ui/settlement/historyWorker.ts` 的 `historyClient`，只在"上一份没算完"的策略上不同（`supersede`、`reject`）。世界生成线程补上 `onerror` |
 | 撤销栈 | 世界编辑、世界区域、聚落区域、生长四处改用 `ui/undo.ts` 的 `UndoStack`。区域撤销记录在换世界、换城时清空（此前会把上一座城的区域写进当前城的存储） |
 | 渲染层小项 | `RoadMask`、`RiverCarve` 共用 `render/aerial/maxMask.ts` 的 `MaxMask`；GLSL `hash12` 只留 `HASH12_GLSL` 一份；`rgb()` 颜色串只留 `render/palette.ts` 一份；`worksMesh` 的 `tube` 改名 `wallTube`，与 `mesh.ts` 的 `tube` 区分；删除从未调用、且释放不全的 `Scene3D.dispose` |
+| 确定性检查的范围 | `check:dmath` 覆盖插件中参与生成的代码，并禁用 `Math.random` |
+| 界面小项 | 聚落生成失败的提示改为先翻译前缀（此前拼接后查不到词条，任何语言下都显示中文）；生长模块按 `app.module` 判断当前模块，不再自行解析地址 |
 
 ## 待办
 
@@ -22,9 +24,7 @@
 
 ### 界面层
 
-- **本地存储**：`storeGet`、`storeSet`、`storedJson` 之外，另有 5 处自行解析 JSON、两套写入防抖。
-- **状态文字的翻译**：加载层与状态栏有的存原文、有的存译文，有的存拼接后的字符串（`'生成失败：' + msg`），切换语言后不重译。
-- **地址参数编解码**：世界与聚落按默认值的类型通用编解码，生长模块逐字段手写。
+- **状态文字的翻译**：加载层与状态栏有的存原文、有的存译文；存译文的在加载过程中切换语言不会重译。统一为"键 + 参数"需要改动加载层组件的接口。
 
 ### 渲染层
 
@@ -34,6 +34,16 @@
 ### 引擎层
 
 - **两份 Douglas–Peucker**：`gen/contour.ts` 的 `simplify` 与 `gen/util.ts` 的 `simplifyLine` 在门槛与距离比较上略有不同，合并会改变输出，须逐处核对。
+
+## 已评估、不做
+
+- **本地存储的 JSON 解析**：5 处自行解析 JSON 的读取各自带不同的校验（版本号、数组、调色板 id、按原文缓存），抽出公共函数每处只省两三行。
+- **地址参数编解码**：世界、聚落、生长三份编解码各含领域专属的字段、钳制与枚举，通用部分每份不足十行；统一布尔值的写法会改变已分享链接的格式。
+- **旧存档的文明判断**（`ui/settlement/settlement.ts` 中 `saved.culture === 'eastern'`）：规整度参数引入之前存下的参数的迁移，引用的是历史数据中的 id，保留。
+
+## 插件化缺口
+
+- **园林传统**：`settlement/garden/kit.ts` 的 `GardenTradition` 是四种传统的封闭集合，园林引擎（`garden/elements.ts`、`skeletons.ts`、`parks.ts`）按传统 id 分支。新的世界观插件无法加入自己的园林传统。改为由文明提供园林参数（亭的形制、路宽、岛的数量等）需要逐项梳理分支，并保证现有文明的生成结果不变。
 
 ## 待确认
 

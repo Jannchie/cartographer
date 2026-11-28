@@ -1100,4 +1100,4 @@ export function lotRows(l: GrowLot): [string, string][] {
 }
 
 // 一进来就是这个模块：不等舞台挂上，先让后台线程把这一局的规划算起来
-if (location.hash.startsWith('#/grow')) pump()
+if (app.module === 'grow') pump()
