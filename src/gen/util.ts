@@ -201,7 +201,10 @@ export function neighbors8(W: number): { off: Int32Array; dx: Int8Array; dy: Int
   return { off, dx, dy, dist }
 }
 
-/** Ramer–Douglas–Peucker 折线简化（交替存储的坐标）：偏离弦线不超过 tol 的点去掉 */
+/**
+ * Ramer–Douglas–Peucker 折线简化（交替存储的坐标）：偏离弦线不超过 tol 的点去掉。
+ * 弦的两端重合（闭环）时按到端点的距离取舍，闭环不会塌成两个点
+ */
 export function simplifyLine(pts: number[], tol: number) {
   const n = pts.length / 2
   if (n <= 2) return pts
@@ -214,11 +217,13 @@ export function simplifyLine(pts: number[], tol: number) {
     const ay = pts[a * 2 + 1]
     const dx = pts[b * 2] - ax
     const dy = pts[b * 2 + 1] - ay
-    const len = dmath.hypot(dx, dy) || 1
+    const len = dmath.hypot(dx, dy)
     let best = -1
     let bd = tol
     for (let k = a + 1; k < b; k++) {
-      const d = Math.abs((pts[k * 2] - ax) * dy - (pts[k * 2 + 1] - ay) * dx) / len
+      const px = pts[k * 2] - ax
+      const py = pts[k * 2 + 1] - ay
+      const d = len === 0 ? dmath.hypot(px, py) : Math.abs(px * dy - py * dx) / len
       if (d > bd) ((bd = d), (best = k))
     }
     if (best >= 0) {

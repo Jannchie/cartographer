@@ -16,6 +16,7 @@
 | 撤销栈 | 世界编辑、世界区域、聚落区域、生长四处改用 `ui/undo.ts` 的 `UndoStack`。区域撤销记录在换世界、换城时清空（此前会把上一座城的区域写进当前城的存储） |
 | 渲染层小项 | `RoadMask`、`RiverCarve` 共用 `render/aerial/maxMask.ts` 的 `MaxMask`；GLSL `hash12` 只留 `HASH12_GLSL` 一份；`rgb()` 颜色串只留 `render/palette.ts` 一份；`worksMesh` 的 `tube` 改名 `wallTube`，与 `mesh.ts` 的 `tube` 区分；删除从未调用、且释放不全的 `Scene3D.dispose` |
 | 确定性检查的范围 | `check:dmath` 覆盖插件中参与生成的代码，并禁用 `Math.random` |
+| 闭环化简 | `gen/util.ts` 的 `simplifyLine` 在首尾重合时把所有距离算作 0，闭环（例如被另一政区完全包围的飞地的边界）化简后只剩两个点、从纸图上消失；改为按到端点的距离取舍 |
 | 界面小项 | 聚落生成失败的提示改为先翻译前缀（此前拼接后查不到词条，任何语言下都显示中文）；生长模块按 `app.module` 判断当前模块，不再自行解析地址 |
 
 ## 待办
@@ -33,7 +34,7 @@
 
 ### 引擎层
 
-- **两份 Douglas–Peucker**：`gen/contour.ts` 的 `simplify` 与 `gen/util.ts` 的 `simplifyLine` 在门槛与距离比较上略有不同，合并会改变输出，须逐处核对。
+- **四份 Douglas–Peucker**：`gen/contour.ts` 的 `simplify`（到弦所在直线、平方比较）、`gen/util.ts` 的 `simplifyLine`（到直线、绝对值）、`gen/earth/raster.ts` 的 `simplifyLine`（到线段）、`settlement/grow/place.ts` 的 `simplify`（到线段、点数组）。其中三份参与生成，合并会在门槛附近改变取舍，须先确认生成结果的变化可以接受。
 
 ## 已评估、不做
 
