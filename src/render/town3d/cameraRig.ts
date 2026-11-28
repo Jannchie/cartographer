@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { isTypingTarget, navKey } from '../keys'
+import { keyNavStep } from '../aerial/stage'
 import { smoother } from '../aerial/tour'
 import type { HeightField } from './heightField'
 
@@ -421,40 +422,13 @@ export class CameraRig {
     const held = this.held
     if (!held.size) return false
     if (!dt) return true
-    const cam = this.camera
-    const target = this.controls.target
-    const { a: offset, b: fwd, c: move, sph } = this.v
-    offset.copy(cam.position).sub(target)
-    const dist = offset.length()
-    const fast = this.fast ? 3 : 1
-    // 平移：前方向是镜头朝向在地面上的投影
-    fwd.set(-offset.x, 0, -offset.z).normalize()
-    move.set(0, 0, 0)
-    if (held.has('forward')) move.add(fwd)
-    if (held.has('back')) move.sub(fwd)
-    const side = +held.has('right') - +held.has('left')
-    move.x -= fwd.z * side
-    move.z += fwd.x * side
-    if (move.lengthSq()) {
-      move.normalize().multiplyScalar(dist * 0.9 * fast * dt)
-      target.add(move)
-      cam.position.add(move)
-    }
-    // 旋转、俯仰：在视点周围的球坐标里改；缩放走滑行
-    const turn = (+held.has('turnLeft') - +held.has('turnRight')) * 1.2 * fast * dt
-    const tilt = (+held.has('tiltDown') - +held.has('tiltUp')) * 0.8 * fast * dt
-    const zoom = +held.has('zoomOut') - +held.has('zoomIn')
-    if (turn || tilt) {
-      sph.setFromVector3(offset)
-      sph.theta += turn
-      sph.phi = Math.min(MAX_POLAR, Math.max(MIN_POLAR, sph.phi + tilt))
-      cam.position.setFromSpherical(sph).add(target)
-    }
+    // 平移、旋转、俯仰见 keyNavStep；缩放走滑行
+    const zoom = keyNavStep(held, this.camera, this.controls.target, dt, this.fast, [MIN_POLAR, MAX_POLAR])
     if (zoom) {
       this.zoom.anchor = null
-      this.zoom.log += zoom * 1.5 * fast * dt
+      this.zoom.log += zoom * 1.5 * (this.fast ? 3 : 1) * dt
     }
-    cam.lookAt(target)
+    this.camera.lookAt(this.controls.target)
     return true
   }
 

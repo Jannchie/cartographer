@@ -102,3 +102,38 @@ export class PerfOverlay {
     this.t0 = now
   }
 }
+
+const navTmp = { offset: new THREE.Vector3(), fwd: new THREE.Vector3(), move: new THREE.Vector3(), sph: new THREE.Spherical() }
+
+/**
+ * 键盘导航的一步（按键由 render/keys.ts 的 navKey 映射成动作，held 是按住的那些）：
+ * 前后左右沿镜头朝向在地面上的投影平移视点与镜头，速度与视距成正比；左转右转、俯仰在视点周围的球坐标里改，
+ * 俯角限制在 polar 之间。fast（按住 Shift）时三倍速。推拉不在这里做（两个场景的缩放方式不同）：
+ * 返回推拉的方向，+1 拉远、-1 推近、0 不动。不调 lookAt
+ */
+export function keyNavStep(held: ReadonlySet<string>, cam: THREE.Camera, target: THREE.Vector3, dt: number, fast: boolean, polar: readonly [number, number]): number {
+  const { offset, fwd, move, sph } = navTmp
+  offset.copy(cam.position).sub(target)
+  const k = fast ? 3 : 1
+  fwd.set(-offset.x, 0, -offset.z).normalize()
+  move.set(0, 0, 0)
+  if (held.has('forward')) move.add(fwd)
+  if (held.has('back')) move.sub(fwd)
+  const side = +held.has('right') - +held.has('left')
+  move.x -= fwd.z * side
+  move.z += fwd.x * side
+  if (move.lengthSq()) {
+    move.normalize().multiplyScalar(offset.length() * 0.9 * k * dt)
+    target.add(move)
+    cam.position.add(move)
+  }
+  const turn = (+held.has('turnLeft') - +held.has('turnRight')) * 1.2 * k * dt
+  const tilt = (+held.has('tiltDown') - +held.has('tiltUp')) * 0.8 * k * dt
+  if (turn || tilt) {
+    sph.setFromVector3(offset)
+    sph.theta += turn
+    sph.phi = Math.min(polar[1], Math.max(polar[0], sph.phi + tilt))
+    cam.position.setFromSpherical(sph).add(target)
+  }
+  return +held.has('zoomOut') - +held.has('zoomIn')
+}

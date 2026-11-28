@@ -6,7 +6,7 @@ import { createTerrainMaterial, type TerrainUniforms } from './aerial/terrainMat
 import { VolumetricClouds } from './aerial/volumetric'
 import { PostPipeline } from './aerial/post'
 import type { GpuTimer } from './aerial/gpuTimer'
-import { adaptMotionScale, createCanvasRenderer, fitCanvas, PerfOverlay } from './aerial/stage'
+import { adaptMotionScale, createCanvasRenderer, fitCanvas, keyNavStep, PerfOverlay } from './aerial/stage'
 import { CameraTour, type TourPoi } from './aerial/tour'
 import { QUALITIES, type Look, type QualityId } from './aerial/looks'
 import { Diorama } from './aerial/diorama'
@@ -297,39 +297,17 @@ export class Scene3D {
    * PageUp / PageDown 抬高、压低视角，+ / − 推近拉远。速度随镜头距离，按住 Shift 三倍
    */
   /** keyNav 每帧复用的临时量 */
-  private navTmp = { offset: new THREE.Vector3(), fwd: new THREE.Vector3(), right: new THREE.Vector3(), move: new THREE.Vector3(), sph: new THREE.Spherical() }
+  private navSph = new THREE.Spherical()
   private keyNav(dt: number) {
     const held = this.navHeld
     if (!held.size || !dt) return
     const cam = this.camera
     const target = this.controls.target
-    const { offset, fwd, right, move, sph } = this.navTmp
-    offset.copy(cam.position).sub(target)
-    const dist = offset.length()
-    const fast = this.navFast ? 3 : 1
-    // 平移：前方向是镜头朝向在地面上的投影
-    fwd.set(-offset.x, 0, -offset.z).normalize()
-    right.set(-fwd.z, 0, fwd.x)
-    move.set(0, 0, 0)
-    if (held.has('forward')) move.add(fwd)
-    if (held.has('back')) move.sub(fwd)
-    if (held.has('right')) move.add(right)
-    if (held.has('left')) move.sub(right)
-    if (move.lengthSq()) {
-      move.normalize().multiplyScalar(dist * 0.9 * fast * dt)
-      target.add(move)
-      cam.position.add(move)
-    }
-    // 旋转、俯仰、推拉：在目标周围的球坐标里改
-    sph.setFromVector3(offset)
-    const turn = (+held.has('turnLeft') - +held.has('turnRight')) * 1.2 * fast * dt
-    const tilt = (+held.has('tiltDown') - +held.has('tiltUp')) * 0.8 * fast * dt
-    const zoom = +held.has('zoomOut') - +held.has('zoomIn')
-    if (turn || tilt || zoom) {
-      sph.theta += turn
-      sph.phi = Math.min(this.controls.maxPolarAngle, Math.max(0.05, sph.phi + tilt))
-      sph.radius = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, sph.radius * Math.exp(zoom * 1.4 * fast * dt)))
-      cam.position.copy(target).add(move.setFromSpherical(sph))
+    const zoom = keyNavStep(held, cam, target, dt, this.navFast, [0.05, this.controls.maxPolarAngle])
+    if (zoom) {
+      const sph = this.navSph.setFromVector3(this.tmp.copy(cam.position).sub(target))
+      sph.radius = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, sph.radius * Math.exp(zoom * 1.4 * (this.navFast ? 3 : 1) * dt)))
+      cam.position.setFromSpherical(sph).add(target)
     }
     cam.lookAt(target)
     this.lastInteract = performance.now()
