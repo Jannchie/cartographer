@@ -1,7 +1,7 @@
 import { Biome, type Label, type World } from './types'
 import { Namer } from './naming'
 import { RNG, hashString } from './rng'
-import { contours, ringArea, simplify } from '../render/atlas/svg/contour'
+import { contours, ringArea, simplify } from './contour'
 import { blur, MinHeap, neighbors8 } from './util'
 import * as dmath from './dmath'
 

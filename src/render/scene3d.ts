@@ -16,7 +16,7 @@ import { placeName, t, worldTitle } from '../i18n'
 import { createRiverMesh, RiverCarve } from './aerial/rivers3d'
 import type { SmoothRiver } from './rivers'
 import { createRiverWaterMaterial, createWaterMaterial } from './water'
-import { isTypingTarget, navKey } from '../ui/keys'
+import { isTypingTarget, navKey } from './keys'
 import { daylight, type Daylight } from './aerial/daylight'
 import { CityLights } from './aerial/cityLights'
 

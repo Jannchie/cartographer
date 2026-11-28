@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { buildGroundVector, clearGroundTiles, type GroundVector } from '../../settlement/render'
+import { buildGroundVector, clearGroundTiles, type GroundVector } from '../settlementMap'
 import { dioramaGround, type SettleStyleId } from '../../settlement/themes'
 import type { Settlement } from '../../settlement/types'
 import { NOISE_GLSL } from '../aerial/glsl'
@@ -9,7 +9,7 @@ import { WATER_LEVEL, type TerrainMesh } from './relief'
 /**
  * 聚落沙盘的地面与水：
  * - 地形网格：见 relief.ts（在 Worker 里构建），岸线、护城河与池塘处细分并下刻。
- * - 地面贴图：二维渲染器的地面层（settlement/render.ts 的 buildGroundVector）栅格化成整幅一张，
+ * - 地面贴图：二维渲染器的地面层（render/settlementMap.ts 的 buildGroundVector）栅格化成整幅一张，
  *   镜头拉近时再在视点附近栅格化一粗一细两级高清块（各 2048 见方，纹素约等于屏幕像素），三级之间渐变衔接。
  * - 写实地景（"彩绘"地面）：贴图只给各要素的固有色，另有一张材质掩膜（材质编号与方向），
  *   着色器按材质叠加草皮、垄沟、铺石、土路的颗粒等程序化细节，各自按像素足迹淡出到平均色；

@@ -1,5 +1,5 @@
 import { bboxOf, chaikin, dist, LineIndex, pointInPoly, polylineLength, resample, segDist, segIntersect, signedArea, type P } from './geom'
-import { simplify } from '../render/atlas/svg/contour'
+import { simplify } from '../gen/contour'
 import { MinHeap } from '../gen/util'
 import { memo, rngAt, type Ctx } from './ctx'
 import type { Road, Wall } from './types'

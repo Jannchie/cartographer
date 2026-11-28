@@ -1,4 +1,4 @@
-import { contourGrid, contours, type Ring } from '../render/atlas/svg/contour'
+import { contourGrid, contours, type Ring } from '../gen/contour'
 
 /**
  * 编辑视图的专题底图：配色带、等值线、大洲区域划分。

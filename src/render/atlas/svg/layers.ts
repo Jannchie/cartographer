@@ -1,7 +1,8 @@
 import { Biome, reliefKm, type World } from '../../../gen/types'
 import { blur } from '../../../gen/util'
 import type { RGB } from '../../palette'
-import { contourGrid, contours, pathData, type ContourGrid } from './contour'
+import { contourGrid, contours, type ContourGrid } from '../../../gen/contour'
+import { pathData } from './path'
 import type { DisplayList, Fill, Stroke } from './displayList'
 
 /**

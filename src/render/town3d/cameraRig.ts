@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { isTypingTarget, navKey } from '../../ui/keys'
+import { isTypingTarget, navKey } from '../keys'
 import { smoother } from '../aerial/tour'
 import type { HeightField } from './heightField'
 

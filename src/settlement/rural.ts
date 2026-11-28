@@ -168,7 +168,7 @@ function watermills(ctx: Ctx, n: number) {
 
 /**
  * 风车：西式的磨坊风车立在城外开阔的高处（田野里的小丘、缓坡顶），塔身是一座小圆屋，
- * 风帆在地图上画成十字（见 render.ts）。
+ * 风帆在地图上画成十字（见 src/render/settlementMap.ts）。
  */
 function windmills(ctx: Ctx, n: number) {
   const { T } = ctx

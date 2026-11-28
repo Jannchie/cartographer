@@ -1,6 +1,6 @@
 import type { World } from '../../gen/types'
 import { blur } from '../../gen/util'
-import { contours, ringArea, simplify, type Ring } from '../atlas/svg/contour'
+import { contours, ringArea, simplify, type Ring } from '../../gen/contour'
 
 /**
  * 全息沙盘要用的栅格与矢量：

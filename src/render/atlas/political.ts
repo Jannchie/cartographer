@@ -1,6 +1,6 @@
 import type { County, World } from '../../gen/types'
 import { simplifyLine } from '../../gen/util'
-import { categoryBorders } from './svg/contour'
+import { categoryBorders } from '../../gen/contour'
 import type { LineLook, Theme } from './styles'
 
 /** 政区图：按国家或按文化着色，伯爵领界、中层政区界、文化界与国界 */

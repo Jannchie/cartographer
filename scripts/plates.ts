@@ -12,7 +12,7 @@ const { themeById } = await import('../src/render/atlas/styles')
 const { smoothRivers } = await import('../src/render/rivers')
 const { setLang } = await import('../src/i18n')
 const { generateSettlement } = await import('../src/settlement/generate')
-const { buildSettlementVector } = await import('../src/settlement/render')
+const { buildSettlementVector } = await import('../src/render/settlementMap')
 const { DEFAULT_SETTLEMENT } = await import('../src/settlement/types')
 const { bboxOf } = await import('../src/settlement/geom')
 

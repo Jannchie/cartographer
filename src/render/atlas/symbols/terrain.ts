@@ -10,7 +10,7 @@ import { Biome } from '../../../gen/types'
 import { blur, sampleField } from '../../../gen/util'
 import { riverThreshold } from '../../../gen/world'
 import { fnoise, hash } from '../fields'
-import { contours, ringArea, simplify } from '../svg/contour'
+import { contours, ringArea, simplify } from '../../../gen/contour'
 import { chaikin, type P } from './brush'
 
 /** 分析要读的格点场（Fields.world 的一个子集；比较图用的合成场景也按它造） */

@@ -6,7 +6,7 @@
 import { blur, sampleField } from '../../../gen/util'
 import { fnoise, hash } from '../fields'
 import type { Pen } from '../glyphBatch'
-import { contours, ringArea, simplify } from '../svg/contour'
+import { contours, ringArea, simplify } from '../../../gen/contour'
 import { addDab, addEllipse, addTaper, chaikin, mixColor, resample, rnd, type P } from './brush'
 import type { SymbolStyle } from './index'
 import type { ForestSpot, Terrain, TerrainInput, TreeKind } from './terrain'

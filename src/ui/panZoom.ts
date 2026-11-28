@@ -1,5 +1,5 @@
 // 纸图（世界、聚落）共用的平移缩放：拖动平移、滚轮以指针为中心缩放、双击适配；键盘导航（见 bindKeys）
-import { isTypingTarget } from './keys'
+import { isTypingTarget } from '../render/keys'
 
 export interface PanView {
   x: number

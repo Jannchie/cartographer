@@ -1,6 +1,6 @@
 import { RNG, hashString } from '../gen/rng'
 import { MinHeap, clamp } from '../gen/util'
-import { contours, simplify } from '../render/atlas/svg/contour'
+import { contours, simplify } from '../gen/contour'
 import { dryArea, emitArea, Corridors, Occupancy, SUB_WEIGHT, whereOf, centerDist, clipWater, placeable, hashAt, gridFrame, inCity, StreetCuts, mainCore, squareness, seedRng, wardRng, type Core, type CorridorTag, mark, type Ctx } from './ctx'
 import { FEATURE, FEATURES, featureEnv, resolveCounts, type FeatureId } from './features'
 import { placeLandmarks, zoneLots, type Lot } from './zoning'
