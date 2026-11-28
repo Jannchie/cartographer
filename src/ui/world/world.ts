@@ -307,7 +307,8 @@ export function mountWorld(e: NonNullable<typeof els>) {
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__scene = scene
   syncActive()
   bindPanZoom(e.v2, map, applyMap, { min: 0.15, max: 24, fit: fitMap })
-  window.addEventListener('resize', () => paperMode() && fitMap())
+  // 隐藏时舞台是 0×0：不在这时适配，切回来时再适配（见 start）
+  window.addEventListener('resize', () => app.module === 'world' && paperMode() && fitMap())
   e.stage.addEventListener('pointermove', (ev) => {
     cancelAnimationFrame(probeRaf)
     probeRaf = requestAnimationFrame(() => probeAt(ev.clientX, ev.clientY))
@@ -375,9 +376,12 @@ export function setHolo(patch: Partial<HoloOptions>) {
 export function resetHoloView() {
   holo?.resetView()
 }
-// 第一次进入世界模块时才生成
+// 第一次进入世界模块时才生成；已经有纸图时重新适配视图：
+// 它可能是在模块隐藏时（舞台 0×0）排的版，例如聚落模块要世界地点时在后台生成的世界
 function start() {
-  if (app.module === 'world' && els && jobId === 0) generate()
+  if (app.module !== 'world' || !els) return
+  if (jobId === 0) generate()
+  else if (paperMode()) requestAnimationFrame(fitMap)
 }
 watch(
   () => app.module,
