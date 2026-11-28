@@ -12,6 +12,7 @@ import type { CityFunction, FeatureId } from '../../settlement/features'
 import { POP_OF_SIZE } from '../../settlement/scale'
 import { DEFAULT_SETTLEMENT, LAYOUT_DEFAULT, WARD_NAMES, type Culture, type Settlement, type SettlementParams, type Ward } from '../../settlement/types'
 import { app, download, initialQuery, paramSig, registerRoute, resolveRefs, stored, storedJson, storeGet, storeSet, syncRoute, type Notice } from '../app'
+import { UndoStack } from '../undo'
 import { ensureWorld, getWorld, sameProbe } from '../world/world'
 import { mapFontsReady } from '../fonts'
 import { bindPanZoom, fitInto } from '../panZoom'
@@ -699,15 +700,21 @@ function regionEdits(): SettleRegion[] | undefined {
 function currentRegions(): SettleRegion[] {
   return regionEdits() ?? (hist ? defaultRegions(hist.st) : [])
 }
+/** 区域视图的撤销记录，只对一座城有意义（regionUndoKey）：换了城就清空，免得撤销把上一座城的区域写进这一座 */
+const regionUndo = new UndoStack<SettleRegion[]>(60)
+let regionUndoKey = ''
 function loadRegions() {
+  const k = regionKey()
+  if (k !== regionUndoKey) {
+    regionUndo.clear()
+    regionUndoKey = k
+  }
   ss.regions = structuredClone(currentRegions())
   ss.regionsEdited = !!regionEdits()
   if (ss.regionSel && !ss.regions.some((r) => r.id === ss.regionSel)) ss.regionSel = null
 }
-const regionUndo: SettleRegion[][] = []
 export function regionCheckpoint(prev?: SettleRegion[]) {
   regionUndo.push(prev ?? structuredClone(toRaw(ss.regions)))
-  if (regionUndo.length > 60) regionUndo.shift()
 }
 let regionTimer = 0
 /** 改动存起来、注记按新的区域重排（拖动过程中不调，松手时调） */
@@ -729,7 +736,7 @@ export function commitRegions(edited: SettleRegion[] | null = structuredClone(to
   }, 80)
 }
 export function undoRegions() {
-  const prev = regionUndo.pop()
+  const prev = regionUndo.undo()
   if (!prev) return
   ss.regions = prev
   if (ss.regionSel && !ss.regions.some((r) => r.id === ss.regionSel)) ss.regionSel = null

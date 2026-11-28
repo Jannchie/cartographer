@@ -22,6 +22,7 @@ import { mapFontsReady } from '../fonts'
 import { t } from '../i18n'
 import { isTypingTarget } from '../../render/keys'
 import { bindPanZoom, fitInto } from '../panZoom'
+import { UndoStack } from '../undo'
 import { syllableSeed } from '../seed'
 import { historyClient } from '../settlement/historyWorker'
 import './strings'
@@ -229,26 +230,22 @@ export function setTab(tab: GrowTab) {
 
 // —— 撤销、重做：每次手动操作（一个手势算一次）、单步、一段播放之前记一份 ——
 type Snap = { state: GrowState; driver: GrowDriver }
-const undoStack: Snap[] = []
-const redoStack: Snap[] = []
-const UNDO_MAX = 200
+const undos = new UndoStack<Snap>(200)
 const snap = (): Snap => ({ state: gs.state, driver: gs.driver })
-function checkpoint() {
-  undoStack.push(snap())
-  if (undoStack.length > UNDO_MAX) undoStack.shift()
-  redoStack.length = 0
-  gs.undoCount = undoStack.length
-  gs.redoCount = 0
+const syncCounts = () => {
+  gs.undoCount = undos.undoCount
+  gs.redoCount = undos.redoCount
 }
-function restore(from: Snap[], to: Snap[]) {
-  if (gs.loading) return
-  const u = from.pop()
-  if (!u) return
+function checkpoint() {
+  undos.push(snap())
+  syncCounts()
+}
+function restore(dir: 'undo' | 'redo') {
+  if (gs.loading || !(dir === 'undo' ? undos.undoCount : undos.redoCount)) return
   pause()
   cancelDraft()
-  to.push(snap())
-  gs.undoCount = undoStack.length
-  gs.redoCount = redoStack.length
+  const u = dir === 'undo' ? undos.undo(snap())! : undos.redo(snap())!
+  syncCounts()
   const other = !sameSetup(setupOf(u.state), setupOf(gs.state))
   commit(u.state, u.driver)
   if (other) {
@@ -257,8 +254,8 @@ function restore(from: Snap[], to: Snap[]) {
     requestAnimationFrame(fitView)
   }
 }
-export const undo = () => restore(undoStack, redoStack)
-export const redo = () => restore(redoStack, undoStack)
+export const undo = () => restore('undo')
+export const redo = () => restore('redo')
 
 /** 换上新状态：重画、存档；选中的东西没了就取消选中 */
 function commit(s: GrowState, d: GrowDriver = gs.driver) {

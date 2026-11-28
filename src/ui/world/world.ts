@@ -30,6 +30,7 @@ import type { WorkerIn, WorkerOut } from '../../worker'
 import { genWorker as worker } from './genWorker'
 import { defineStrings, lang, onLang, placeName, worldTitle } from '../../i18n'
 import { app, download, initialQuery, registerRoute, paramSig, resolveRefs, stored, storeGet, storeSet, syncRoute, type Notice } from '../app'
+import { UndoStack } from '../undo'
 import { t } from '../i18n'
 import { ensurePlugins } from '../plugins'
 import { isTypingTarget } from '../../render/keys'
@@ -249,7 +250,14 @@ let sceneStale = false
 let genEdits: WorldEdits = {}
 let sentEdits: WorldEdits = {}
 /** 撤销记录：编辑快照 + 当时的地形、聚落方案（换方案也能撤销） */
-const undoStack: { edits: WorldEdits; terrainVariant: number; placeVariant: number }[] = []
+const undoStack = new UndoStack<{ edits: WorldEdits; terrainVariant: number; placeVariant: number }>(30)
+/** 区域视图的撤销记录 */
+const areaUndo = new UndoStack<Area[]>(60)
+/** 换了一个世界（新建、打开、换种子）：两份撤销记录都只对旧世界有意义 */
+function resetUndo() {
+  undoStack.clear()
+  areaUndo.clear()
+}
 /** 上次完整重建时的地面版本与地点位置：都没变时只需换地名 */
 let lastGround = ''
 let lastPlaces = ''
@@ -434,7 +442,7 @@ export async function createWorld(src: SourceId, style = 0) {
   if (!ws.entry && hasEdits(edits) && !window.confirm(t('新建世界会丢掉当前世界的编辑（没有保存到世界库）。继续吗？'))) return
   ws.library.open = false
   edits = {}
-  undoStack.length = 0
+  resetUndo()
   editor?.select(null)
   editor?.refreshEdits(edits)
   syncSketch()
@@ -614,7 +622,7 @@ export function generate(quiet = false, opened?: World) {
       return
     }
     edits = sketch ? keepEdits('sketch', 'sketchRev') : {}
-    undoStack.length = 0
+    resetUndo()
     editor?.refreshEdits(edits)
     syncSketch()
   }
@@ -1180,7 +1188,7 @@ function loadWorldData(params: WorldParams, ed: WorldEdits, w?: World) {
   edits = ed
   if (edits.frozen) edits.frozenRev = Date.now()
   editsSize = { W: ws.params.width, H: ws.params.height, seed: ws.params.seed }
-  undoStack.length = 0
+  resetUndo()
   editor?.select(null)
   editor?.refreshEdits(edits)
   syncSketch()
@@ -1281,7 +1289,6 @@ function pushUndo(pin = true) {
     terrainVariant: ws.params.terrainVariant ?? 0,
     placeVariant: ws.params.placeVariant ?? 0,
   })
-  if (undoStack.length > 30) undoStack.shift()
   // 一开始编辑就把现有地点钉住：之后改地形、改气候重算时，城镇与地名不会整体洗牌
   if (pin && !edits.labels && world) {
     edits.labels = world.labels.map((l) => ({ ...l }))
@@ -1307,7 +1314,7 @@ function releasePlaces() {
   editor?.refreshEdits(edits)
 }
 export function undo() {
-  const prev = undoStack.pop()
+  const prev = undoStack.undo()
   if (!prev) return
   edits = prev.edits
   ws.params.terrainVariant = prev.terrainVariant
@@ -1825,11 +1832,9 @@ function loadAreas() {
   ws.areasEdited = !!edits.areas
   if (ws.areaSel && !ws.areas.some((a) => a.id === ws.areaSel)) ws.areaSel = null
 }
-const areaUndo: Area[][] = []
 /** 一次改动开始前记下原样（拖顶点、改名、新建、删除……），Ctrl+Z 撤回；prev：事先存下的原样（拖动真的动了才记） */
 export function areaCheckpoint(prev?: Area[]) {
   areaUndo.push(prev ?? structuredClone(toRaw(ws.areas)))
-  if (areaUndo.length > 60) areaUndo.shift()
 }
 /** 区域视图里的改动写进编辑，纸图注记按新的区域重排（拖动过程中不调：重排一次要几百毫秒，松手时调） */
 let areaTimer = 0
@@ -1843,7 +1848,7 @@ export function commitAreas() {
   }, 80)
 }
 export function undoAreas() {
-  const prev = areaUndo.pop()
+  const prev = areaUndo.undo()
   if (!prev) return
   ws.areas = prev
   if (ws.areaSel && !ws.areas.some((a) => a.id === ws.areaSel)) ws.areaSel = null
