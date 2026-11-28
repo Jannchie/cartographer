@@ -1,6 +1,6 @@
 import { Biome, reliefKm, type World } from '../../gen/types'
 import { blur } from '../../gen/util'
-import { riverThreshold } from '../../gen/world'
+import { riverThreshold } from '../../gen/hydrology'
 
 /**
  * 地表材质遮罩（RGBA8，每格一个像素，线性过滤后平滑过渡）：

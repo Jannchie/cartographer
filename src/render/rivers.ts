@@ -1,5 +1,5 @@
 import type { River, World } from '../gen/types'
-import { riverThreshold } from '../gen/world'
+import { riverThreshold } from '../gen/hydrology'
 import { hash } from './atlas/fields'
 
 export interface SmoothRiver {

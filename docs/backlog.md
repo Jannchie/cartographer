@@ -11,6 +11,7 @@
 | 引擎层依赖方向 | 等值线移入 `gen/contour.ts`，聚落图渲染器移入 `render/settlementMap.ts`，键盘约定移入 `render/keys.ts`（ADR 0001） |
 | 确定性写法 | 修正 13 处随引擎实现而变的数学写法；`check:dmath` 进入 CI |
 | 架构检查 | `scripts/check-arch.ts`：分层、插件依赖、world 层封闭性、运行时无环、可达性；进入 CI |
+| 运行时环 | `riverThreshold` 移入 `gen/hydrology.ts`，`signedCoastDist`、`slopeField` 移入 `gen/util.ts`；承载组合地标的片区移入 `settlement/landmarkWards.ts`；`roofFrame` 移入 `render/town3d/worksMesh.ts`。源码中不再有运行时导入环 |
 
 ## 待办
 
@@ -33,7 +34,6 @@
 
 ### 引擎层
 
-- **运行时环**（`scripts/check-arch.ts` 的 `EXCEPTIONS`）：`gen/world.ts` ↔ `gen/earth/realWorld.ts`；`settlement/history.ts` ↔ `ctx.ts` ↔ `people.ts`；`settlement/wards.ts`、`palaces.ts` 与 `compose/*`；`render/town3d/works.ts` ↔ `gates.ts`。
 - **两份 Douglas–Peucker**：`gen/contour.ts` 的 `simplify` 与 `gen/util.ts` 的 `simplifyLine` 在门槛与距离比较上略有不同，合并会改变输出，须逐处核对。
 
 ## 待确认

@@ -1,5 +1,5 @@
 import { Biome } from '../../gen/types'
-import { riverThreshold } from '../../gen/world'
+import { riverThreshold } from '../../gen/hydrology'
 import { hash, type Fields } from './fields'
 import { GlyphBatch, type Pen } from './glyphBatch'
 

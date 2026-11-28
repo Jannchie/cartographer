@@ -5,21 +5,8 @@ import { amphitheater, arenaAt, hospitalAt, pulpitAt, schoolAt, stageAt, tavernA
 import { wardsFor } from './people'
 import { isVillage, scaleOf } from './scale'
 import type { BuildingKind, Culture, Landmark, SettlementParams, SettlementSize, Ward, WardType } from './types'
-import {
-  addBuilding,
-  addGroup,
-  castle,
-  cemetery,
-  fit,
-  harbor,
-  inside,
-  magicWard,
-  noble,
-  plaza,
-  scatterTrees,
-  temple,
-  urban,
-} from './wards'
+import { addBuilding, addGroup, cemetery, fit, harbor, inside, noble, plaza, scatterTrees, urban } from './wards'
+import { castle, magicWard, temple } from './landmarkWards'
 import { park } from './parks'
 import * as dmath from '../gen/dmath'
 

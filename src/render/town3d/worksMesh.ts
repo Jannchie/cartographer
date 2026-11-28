@@ -4,7 +4,7 @@
  * 朝向一律由"朝外的方向"决定（Writer.quadOut / triN），调用处不必操心绕向。
  */
 import type { P } from '../../settlement/geom'
-import { DOWN, UP, h3, type RGB, type V3, type Writer } from './mesh'
+import { DOWN, UP, h3, type Frame, type RGB, type V3, type Writer } from './mesh'
 import type { Height } from './shared'
 
 /** 平面上的局部坐标框：原点 o，u 向与 v 向（单位向量，v 为 u 的左手法线） */
@@ -20,6 +20,9 @@ export const axOf = (o: P, angle: number): Ax => {
 export const axUV = (o: P, u: P): Ax => ({ o, u, v: [-u[1], u[0]] })
 /** 局部 (s, t) → 平面点 */
 export const lp = (f: Ax, s: number, t: number): P => [f.o[0] + f.u[0] * s + f.v[0] * t, f.o[1] + f.u[1] * s + f.v[1] * t]
+
+/** 框 → 屋顶的框（屋脊沿 f.v，即沿墙） */
+export const roofFrame = (f: Ax, s: number, t: number, a: number, b: number): Frame => ({ c: lp(f, s, t), u: f.v, v: f.u, a, b })
 /** 局部 (s, t) 与高度 y → 三维点 */
 export const l3 = (f: Ax, s: number, t: number, y: number): V3 => [f.o[0] + f.u[0] * s + f.v[0] * t, y, f.o[1] + f.u[1] * s + f.v[1] * t]
 /** 框平移到局部 (s, t) */

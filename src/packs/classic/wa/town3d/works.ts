@@ -4,8 +4,8 @@
 import { hip, irimoya, MAT, shade } from '../../../../render/town3d/mesh'
 import { hex, PLASTER, TILE_DARK, TIMBER, TIMBER_DARK } from '../../../../render/town3d/shared'
 import { leaves } from '../../../../render/town3d/gates'
-import { bastion, roofFrame, type WCtx, type WallLook } from '../../../../render/town3d/works'
-import { box, lp, sweep, type Station } from '../../../../render/town3d/worksMesh'
+import { bastion, type WCtx, type WallLook } from '../../../../render/town3d/works'
+import { box, lp, roofFrame, sweep, type Station } from '../../../../render/town3d/worksMesh'
 import type { WallKit } from '../../../../render/town3d/kits'
 
 const WA_STONE = hex('#8d8980')

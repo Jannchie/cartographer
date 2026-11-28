@@ -1,3 +1,4 @@
+import * as dmath from './dmath'
 import { MinHeap, neighbors8 } from './util'
 
 export interface FloodResult {
@@ -326,4 +327,9 @@ function topoOrder(dir: Int32Array, N: number): Int32Array {
     for (let k = start[c]; k < start[c + 1]; k++) out[n++] = donors[k]
   }
   return out.subarray(0, n)
+}
+
+/** 河流阈值：以 1024 宽为基准的汇流量 */
+export function riverThreshold(W: number) {
+  return 90 * dmath.pow(W / 1024, 2)
 }

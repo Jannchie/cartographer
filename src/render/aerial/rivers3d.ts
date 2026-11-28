@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { World } from '../../gen/types'
 import { sampleField, smoothstep } from '../../gen/util'
-import { riverThreshold } from '../../gen/world'
+import { riverThreshold } from '../../gen/hydrology'
 import type { SmoothRiver } from '../rivers'
 
 /**

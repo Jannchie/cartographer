@@ -33,7 +33,7 @@
 
 - **插件之间**：插件只能导入自己与清单（`src/packs/manifest.ts`）中 `requires` 列出的插件。
 - **world 层的封闭性**：插件的 world 层只能导入 world 层、生成器与内核。世界缓存的版本号（`vite.config.ts` 的 `gen-hash`）只按这些文件计算；world 层若导入其他代码，那些代码改动后浏览器里缓存的旧世界不会失效。
-- **运行时无环**：运行时的导入不成环；只含类型导入的环不计。现存的环登记为例外（见 `scripts/check-arch.ts` 的 `EXCEPTIONS`），只减不增。
+- **运行时无环**：运行时的导入不成环；只含类型导入的环（含 `import('…').Name` 形式的内联类型）不计。
 - **可达**：`src/` 下每个文件都须能从某个入口（组合根、`package.json` 的 `exports`、`scripts/`、`video/`）沿导入走到。尚未接入的实验代码登记在 `UNREACHABLE_OK`。
 - **确定性**：`src/gen` 与 `src/settlement` 不使用随引擎实现而变的数学函数与写法（`Math.sin`、`Math.pow`、`**`、随机比较函数的 `sort` 等），改用 `src/gen/dmath.ts`；由 `pnpm check:dmath` 检查。
 

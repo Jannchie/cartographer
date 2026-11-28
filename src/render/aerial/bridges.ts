@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Road, World } from '../../gen/types'
-import { riverThreshold } from '../../gen/world'
+import { riverThreshold } from '../../gen/hydrology'
 import type { SmoothRiver } from '../rivers'
 
 /** 桥面宽度（世界单位）：与 3D 道路遮罩里看得见的土路宽度一致 */

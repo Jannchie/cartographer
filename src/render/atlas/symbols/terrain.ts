@@ -8,7 +8,7 @@
  */
 import { Biome } from '../../../gen/types'
 import { blur, sampleField } from '../../../gen/util'
-import { riverThreshold } from '../../../gen/world'
+import { riverThreshold } from '../../../gen/hydrology'
 import { fnoise, hash } from '../fields'
 import { contours, ringArea, simplify } from '../../../gen/contour'
 import { chaikin, type P } from './brush'

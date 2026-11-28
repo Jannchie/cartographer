@@ -12,7 +12,7 @@
 import type { Fields } from '../fields'
 import { GlyphBatch, type Pen } from '../glyphBatch'
 import { flatMarks, type GlyphColors } from '../glyphs'
-import { riverThreshold } from '../../../gen/world'
+import { riverThreshold } from '../../../gen/hydrology'
 import { analyzeTerrain, type Terrain, type TerrainInput } from './terrain'
 
 export type { Terrain, TerrainInput }

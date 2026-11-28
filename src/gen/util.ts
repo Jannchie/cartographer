@@ -242,3 +242,23 @@ export function signedDistance(inside: Uint8Array, W: number, H: number) {
   for (let i = 0; i < N; i++) out[i] = inside[i] ? dOut[i] : -dIn[i]
   return out
 }
+
+/** 到海岸的有向距离（格）：陆上为正，海上为负 */
+export function signedCoastDist(elev: Float32Array, W: number, H: number) {
+  const land = new Uint8Array(W * H)
+  for (let i = 0; i < land.length; i++) land[i] = elev[i] > 0 ? 1 : 0
+  return signedDistance(land, W, H)
+}
+
+export function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number) {
+  const s = new Float32Array(W * H)
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x
+      const gx = (elev[i + 1] - elev[i - 1]) / (2 * kmPerCell)
+      const gy = (elev[i + W] - elev[i - W]) / (2 * kmPerCell)
+      s[i] = dmath.hypot(gx, gy)
+    }
+  }
+  return s
+}

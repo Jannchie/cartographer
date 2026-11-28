@@ -4,8 +4,8 @@
 import { irimoya, MAT, mixRGB, shade } from '../../../../render/town3d/mesh'
 import { hex, LACQUER, STONE_EAST, TILE_DARK } from '../../../../render/town3d/shared'
 import { archBlock, leaves } from '../../../../render/town3d/gates'
-import { battlement, outRing, roofFrame, salient, type WCtx, type WallLook } from '../../../../render/town3d/works'
-import { archRing, box, hash, l3, lp, sweep, tube, type Station } from '../../../../render/town3d/worksMesh'
+import { battlement, outRing, salient, type WCtx, type WallLook } from '../../../../render/town3d/works'
+import { archRing, box, hash, l3, lp, roofFrame, sweep, tube, type Station } from '../../../../render/town3d/worksMesh'
 import type { WallKit } from '../../../../render/town3d/kits'
 
 const BRICK_GREY = hex('#8f8f8a')

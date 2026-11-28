@@ -7,14 +7,14 @@ import { settingOf } from './setting'
 import { worldTownCulture } from './townCulture'
 import { classifyBiome, latitudeOf, pet, precipitationField, temperatureField } from './climate'
 import { coarseErosion, dropletErosion, streamPowerErosion, thermalErosion } from './erosion'
-import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, type HydroResult } from './hydrology'
+import { fillSmallDepressions, findDepressions, hydrology, priorityFlood, riverThreshold, type HydroResult } from './hydrology'
 import { Noise } from './noise'
 import { RNG, hashString } from './rng'
 import { buildEarthTerrain, buildTerrain, type TerrainResult } from './terrain'
 import { realEarthWorld } from './earth/realWorld'
 import { highlandField, isDesertBiome, isForestBiome, RANGE_HI } from './areas'
 import { Biome, EQUATOR_KM, isGlobe, isSettlement, MAP_KM, reliefKm, type County, type Label, type PoliticalLayer, type Province, type Realm, type River, type World, type WorldCulture, type WorldEdits, type WorldParams } from './types'
-import { blur, clampAngle, neighbors8, signedDistance } from './util'
+import { blur, clampAngle, neighbors8, signedCoastDist, slopeField } from './util'
 import * as dmath from './dmath'
 
 export type Progress = (stage: string, frac: number) => void
@@ -503,30 +503,6 @@ function protectedBasins(elev: Float32Array, W: number, H: number): Map<number, 
     for (const c of d.cells) m.set(c, elev[c])
   }
   return m
-}
-
-export function signedCoastDist(elev: Float32Array, W: number, H: number) {
-  const land = new Uint8Array(W * H)
-  for (let i = 0; i < land.length; i++) land[i] = elev[i] > 0 ? 1 : 0
-  return signedDistance(land, W, H)
-}
-
-export function slopeField(elev: Float32Array, W: number, H: number, kmPerCell: number) {
-  const s = new Float32Array(W * H)
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const i = y * W + x
-      const gx = (elev[i + 1] - elev[i - 1]) / (2 * kmPerCell)
-      const gy = (elev[i + W] - elev[i - W]) / (2 * kmPerCell)
-      s[i] = dmath.hypot(gx, gy)
-    }
-  }
-  return s
-}
-
-/** 河流阈值：以 1024 宽为基准的汇流量 */
-export function riverThreshold(W: number) {
-  return 90 * dmath.pow(W / 1024, 2)
 }
 
 /** 从汇流场提取河流折线：从每个源头向下游追踪，直到入海、入湖或汇入已有河道 */

@@ -47,10 +47,6 @@ const ALLOWED: Record<Layer, readonly Layer[]> = {
  */
 const EXCEPTIONS: Record<string, string> = {
   // 运行时的环（文件按"a <-> b"写，取环里字典序最小的两个文件）
-  'cycle:src/gen/earth/realWorld.ts <-> src/gen/world.ts': '待拆：地球底图与世界生成互相调用',
-  'cycle:src/settlement/ctx.ts <-> src/settlement/history.ts': '待拆：成长史与生成上下文互相调用',
-  'cycle:src/settlement/compose/castle.ts <-> src/settlement/compose/chinese.ts': '待拆：构图与片区互相调用',
-  'cycle:src/render/town3d/gates.ts <-> src/render/town3d/works.ts': '待拆：城门与城防工程互相调用',
 }
 
 /** 不要求从入口可达的文件（前缀）：原因见值 */
@@ -94,7 +90,7 @@ interface Edge {
   /** 只导入类型 */
   typeOnly: boolean
 }
-const IMPORT = /\b(import|export)\s+([^'"`;]*?)\s*from\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)|\bimport\s+['"]([^'"]+)['"]|new\s+URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url/g
+const IMPORT = /\b(import|export)\s+([^'"`;]*?)\s*from\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)(\.\s*[A-Za-z_$]+)?|\bimport\s+['"]([^'"]+)['"]|new\s+URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url/g
 const typeOnly = (clause: string) => {
   const c = clause.trim()
   if (c.startsWith('type ')) return true
@@ -106,13 +102,15 @@ function edgesOf(file: string): Edge[] {
   const code = stripComments(readFileSync(file, 'utf8'))
   const out: Edge[] = []
   for (const m of code.matchAll(IMPORT)) {
-    const spec = m[3] ?? m[4] ?? m[5] ?? m[6]
+    const spec = m[3] ?? m[4] ?? m[6] ?? m[7]
     const to = resolveSpec(file, spec)
     if (!to) {
       if (spec.startsWith('.')) unresolved.push(`${rel(file)}: ${spec}`)
       continue
     }
-    out.push({ to: rel(to), typeOnly: m[2] !== undefined && typeOnly(m[2]) })
+    // import('x').Name 是类型位置的内联导入；import('x').then(…) 才是运行时的动态导入
+    const inlineType = m[5] !== undefined && !/^\.\s*(then|catch|finally)$/.test(m[5])
+    out.push({ to: rel(to), typeOnly: inlineType || (m[2] !== undefined && typeOnly(m[2])) })
   }
   return out
 }

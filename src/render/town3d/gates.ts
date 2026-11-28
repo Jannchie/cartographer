@@ -6,8 +6,8 @@
 import type { P } from '../../settlement/geom'
 import { MAT, hip, shade, type RGB } from './mesh'
 import { TIMBER, TIMBER_DARK, hex } from './shared'
-import { archFace, archOutline, axUV, beam, box, l3, lp, placeArch, tube, vault, type ArchShape, type Ax, type Opening } from './worksMesh'
-import { roofFrame, type WCtx, type WallLook } from './works'
+import { archFace, archOutline, axUV, beam, box, l3, lp, placeArch, roofFrame, tube, vault, type ArchShape, type Ax, type Opening } from './worksMesh'
+import type { WCtx, WallLook } from './works'
 
 const IRON = hex('#2f2c2a')
 

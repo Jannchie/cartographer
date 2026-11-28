@@ -9,11 +9,11 @@
  */
 import { Biome, EQUATOR_KM, type Label, type River, type World, type WorldEdits, type WorldParams } from '../types'
 import { classifyBiome, latitudeOf, precipitationField, temperatureField } from '../climate'
-import { riverThreshold, signedCoastDist, slopeField } from '../world'
+import { riverThreshold } from '../hydrology'
 import { outline, type Area, type AreaKind } from '../areas'
 import { RNG, hashString } from '../rng'
 import * as dmath from '../dmath'
-import { clampAngle } from '../util'
+import { clampAngle, signedCoastDist, slopeField } from '../util'
 import { worldTownCulture } from '../townCulture'
 import { COVER, earthFeatures, earthFeaturesLoaded, earthGrid, type EarthPlaceKind, type EarthRes } from './real'
 import { fillRings, type LonLatGrid } from './raster'

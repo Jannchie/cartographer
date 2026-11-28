@@ -521,9 +521,6 @@ export function bastion(c: Ctx, f: Ax, hs: number, ht: number, lo: number, top: 
   if (look.parapet > 0) battlement(c, outRing(f, hs, ht), top, look)
 }
 
-/** 框 → 屋顶的框（屋脊沿 f.v，即沿墙） */
-export const roofFrame = (f: Ax, s: number, t: number, a: number, b: number): Frame => ({ c: lp(f, s, t), u: f.v, v: f.u, a, b })
-
 /**
  * 向城外凸出的方台（马面、方塔）：hs 为凸出方向的半长、ht 为沿墙的半长，top 为台面高度，batter 为台脚的收分。
  * f 的 u 朝城外、v 沿墙，原点在墙中线上；返回方台的框
